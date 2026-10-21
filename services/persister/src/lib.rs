@@ -264,6 +264,7 @@ mod tests {
             1,
             Payload::ChannelCreated(ChannelCreated {
                 r#type: ChannelType::Private as i32,
+                name: String::new(),
                 initial_member_ids: vec![1, 2],
                 members: vec![
                     MemberJoined {
