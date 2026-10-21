@@ -28,7 +28,7 @@ Every source file starts with an SPDX licence identifier; `tools/check-spdx.sh` 
 
 ## Prerequisites (local)
 
-- Rust 1.85+ and `protoc`, Elixir 1.20 / OTP 29, JDK 21 + Gradle 8.10+, Node 22.18+ (runs TypeScript tests directly), Buf
+- Rust 1.99+ and `protoc`, Elixir 1.20 / OTP 29, JDK 27 + Gradle 9.8+ (Kotlin 2.4 via the wrapper), Node 26+ (runs TypeScript tests directly), Buf
 - Docker with Compose v2, and **at least 10–12 GB of memory for the Docker VM** (Colima: `colima start --memory 12 --cpu 6`)
 
 ## Common commands

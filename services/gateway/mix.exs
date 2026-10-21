@@ -6,7 +6,7 @@ defmodule XmsgGateway.MixProject do
     [
       app: :xmsg_gateway,
       version: "0.0.0",
-      elixir: "~> 1.17",
+      elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps()

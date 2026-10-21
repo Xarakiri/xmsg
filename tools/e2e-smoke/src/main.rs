@@ -462,12 +462,11 @@ async fn read_persisted(
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut events = Vec::new();
     while events.len() < expected && Instant::now() < deadline {
-        if let Some(Ok(m)) = consumer.poll(Duration::from_millis(500)) {
-            if let Ok(e) = SequencedEvent::decode(m.payload().unwrap_or_default()) {
-                if e.channel_id == channel {
-                    events.push(e);
-                }
-            }
+        if let Some(Ok(m)) = consumer.poll(Duration::from_millis(500))
+            && let Ok(e) = SequencedEvent::decode(m.payload().unwrap_or_default())
+            && e.channel_id == channel
+        {
+            events.push(e);
         }
     }
     if events.len() < expected {
