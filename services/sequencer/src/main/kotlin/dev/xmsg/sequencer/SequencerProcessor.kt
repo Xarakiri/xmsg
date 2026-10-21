@@ -106,7 +106,17 @@ class SequencerProcessor(
             .setFanoutMode(if (initial.size >= thresholds.pullAt) FanoutMode.FANOUT_MODE_PULL else FanoutMode.FANOUT_MODE_PUSH)
             .build()
         heads.put(event.channelId, head.toByteArray())
-        emit(event, head, now) { it.setChannelCreated(created.toBuilder().clearInitialMemberIds().addAllInitialMemberIds(initial.sorted())) }
+        val members = initial.sorted().map { userId ->
+            MemberJoined.newBuilder()
+                .setUserId(userId)
+                .setRole(if (userId == event.actorId) MemberRole.MEMBER_ROLE_ADMIN else MemberRole.MEMBER_ROLE_MEMBER)
+                .build()
+        }
+        emit(event, head, now) {
+            it.setChannelCreated(
+                created.toBuilder().clearInitialMemberIds().addAllInitialMemberIds(initial.sorted()).addAllMembers(members),
+            )
+        }
         result(event, accepted = true, eventSeq = head.eventSeq)
     }
 
@@ -210,6 +220,7 @@ class SequencerProcessor(
             .setMsgSeq(if (event.payloadCase == InboundEvent.PayloadCase.SEND_MESSAGE) head.msgSeq else 0)
             .setMembershipVersion(head.membershipVersion)
             .setFanoutMode(head.fanoutMode)
+            .setChannelType(head.type)
             .setDedupeId(event.dedupeId)
             .setRequestId(event.requestId)
             .also(payload)

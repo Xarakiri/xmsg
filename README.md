@@ -4,7 +4,7 @@ A Slack-style messenger designed for 1M concurrent users, that companies can als
 
 - **Architecture:** [docs/architecture-plan.md](docs/architecture-plan.md)
 - **Decisions:** [docs/adr/](docs/adr/README.md)
-- **Status:** Phase 0 local work done; Phase 1a started. The first message already flows client → gateway → messages → Kafka → sequencer (`tools/e2e-smoke`, CI job `pipeline`). Nothing here is production-ready.
+- **Status:** Phase 0 local work done; Phase 1a started. Messages already flow client → gateway → messages → Kafka → sequencer → persister → Cassandra (`tools/e2e-smoke`, CI job `pipeline`). Nothing here is production-ready.
 
 ## Repository layout
 
@@ -16,6 +16,7 @@ A Slack-style messenger designed for 1M concurrent users, that companies can als
 | `services/sequencer/` | Sequencer (Kotlin + Kafka Streams) | AGPL-3.0-only |
 | `services/gateway/` | Realtime gateway (Elixir) | AGPL-3.0-only |
 | `services/messages/` | Messages service (Rust): NATS sends → `messages.in` | AGPL-3.0-only |
+| `services/persister/` | Persister (Rust): `messages.persisted` → Cassandra/ScyllaDB | AGPL-3.0-only |
 | `clients/core/` | Shared TypeScript client core | Apache-2.0 |
 | `ee/`, `*/ee/` | Enterprise Edition code | Commercial ([ee/LICENSE](ee/LICENSE)) |
 | `deploy/compose/` | Small-tier Docker Compose stack (also local dev) | AGPL-3.0-only |

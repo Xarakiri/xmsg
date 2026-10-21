@@ -163,13 +163,14 @@ jobs:
         run: docker compose down -v
 
   pipeline:
-    name: Pipeline (messages integration + end-to-end smoke)
+    name: Pipeline (service integration + end-to-end smoke)
     runs-on: ubuntu-latest
     needs: [rust, elixir, sequencer]
     env:
       XMSG_PARTITIONS: "16"
       XMSG_KAFKA_BOOTSTRAP: localhost:9092
       XMSG_NATS_URL: nats://localhost:4222
+      XMSG_CQL_NODES: localhost:9042
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -188,11 +189,12 @@ jobs:
       - name: Start Kafka and NATS (Small-tier compose)
         working-directory: deploy/compose
         run: |
-          docker compose up -d --wait kafka nats
+          docker compose up -d --wait kafka nats cassandra
           docker compose up kafka-init --exit-code-from kafka-init
+          docker compose up cassandra-init --exit-code-from cassandra-init
       - name: Build
         run: |
-          cargo build --release -p xmsg-messages -p xmsg-e2e-smoke
+          cargo build --release -p xmsg-messages -p xmsg-persister -p xmsg-e2e-smoke
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
       - name: Messages service integration tests (real Kafka + NATS)
@@ -200,22 +202,29 @@ jobs:
           XMSG_IT_KAFKA: localhost:9092
           XMSG_IT_NATS: nats://localhost:4222
         run: cargo test -p xmsg-messages --test integration -- --ignored --test-threads=1
+      - name: Persister integration tests (real Kafka + Cassandra 5)
+        env:
+          XMSG_IT_KAFKA: localhost:9092
+          XMSG_IT_CQL: localhost:9042
+        run: cargo test -p xmsg-persister --test integration -- --ignored --test-threads=1
       - name: Start sequencer, messages service and gateway
         run: |
           mkdir -p logs
           XMSG_STATE_DIR=$RUNNER_TEMP/seq-state XMSG_INSTANCE_ID=ci-1 \
             services/sequencer/build/install/xmsg-sequencer/bin/xmsg-sequencer > logs/sequencer.log 2>&1 &
           ./target/release/xmsg-messages > logs/messages.log 2>&1 &
+          ./target/release/xmsg-persister > logs/persister.log 2>&1 &
           (cd services/gateway && MIX_ENV=prod XMSG_DEV_AUTH=true XMSG_GATEWAY_ID=ci \
             mix run --no-halt > ../../logs/gateway.log 2>&1 &)
           for i in $(seq 1 60); do
             curl -fs http://localhost:4000/healthz >/dev/null \
               && grep -q 'messages service ready' logs/messages.log \
+              && grep -q 'persister ready' logs/persister.log \
               && grep -q 'REBALANCING to RUNNING' logs/sequencer.log && exit 0
             sleep 2
           done
           echo "services did not become ready"; tail -n 50 logs/*.log; exit 1
-      - name: End-to-end smoke (client → gateway → messages → Kafka → sequencer)
+      - name: End-to-end smoke (client → gateway → messages → Kafka → sequencer → persister)
         run: ./target/release/xmsg-e2e-smoke
       - name: Upload service logs
         if: always()

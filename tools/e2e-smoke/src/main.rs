@@ -10,8 +10,12 @@
 //!    sequenced events: consecutive msg_seq, the right authors, and a rejection
 //!    for a non-member.
 //!
+//! 4. If `XMSG_CQL_NODES` is set, checks what the persister wrote: the three
+//!    messages, the members and the channel head.
+//!
 //! Exits 0 on success, 1 on failure.
-//! Env: XMSG_GATEWAY_URL (ws://127.0.0.1:4000/ws), XMSG_KAFKA_BOOTSTRAP (127.0.0.1:9092).
+//! Env: XMSG_GATEWAY_URL (ws://127.0.0.1:4000/ws), XMSG_KAFKA_BOOTSTRAP (127.0.0.1:9092),
+//! XMSG_CQL_NODES (optional, e.g. 127.0.0.1:9042).
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -76,6 +80,7 @@ async fn run() -> Result<(), String> {
         payload: Some(inbound_event::Payload::ChannelCreated(ChannelCreated {
             r#type: ChannelType::Private as i32,
             initial_member_ids: vec![alice, bob],
+            ..Default::default()
         })),
         ..Default::default()
     };
@@ -128,7 +133,76 @@ async fn run() -> Result<(), String> {
         ));
     }
     println!("sequencer output: msg_seq {seqs:?} for {ids:?}; non-member send rejected");
+
+    if let Ok(nodes) = std::env::var("XMSG_CQL_NODES") {
+        check_store(&nodes, channel, alice, bob).await?;
+    }
     Ok(())
+}
+
+/// What the persister wrote (plan §5.7): messages, membership and the head.
+async fn check_store(nodes: &str, channel: i64, alice: i64, bob: i64) -> Result<(), String> {
+    let db = scylla::client::session_builder::SessionBuilder::new()
+        .known_nodes(nodes.split(','))
+        .build()
+        .await
+        .map_err(|e| format!("connecting to {nodes}: {e}"))?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let messages: Vec<(i64, i64)> = db
+            .query_unpaged(
+                "SELECT msg_seq, author_id FROM xmsg.messages WHERE channel_id = ? AND bucket = 0",
+                (channel,),
+            )
+            .await
+            .map_err(|e| e.to_string())?
+            .into_rows_result()
+            .map_err(|e| e.to_string())?
+            .rows::<(i64, i64)>()
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+        let members: Vec<(i64,)> = db
+            .query_unpaged(
+                "SELECT user_id FROM xmsg.members_by_channel WHERE channel_id = ?",
+                (channel,),
+            )
+            .await
+            .map_err(|e| e.to_string())?
+            .into_rows_result()
+            .map_err(|e| e.to_string())?
+            .rows::<(i64,)>()
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+        let head: Option<(i64, i64)> = db
+            .query_unpaged(
+                "SELECT event_seq, msg_seq FROM xmsg.channel_heads WHERE channel_id = ?",
+                (channel,),
+            )
+            .await
+            .map_err(|e| e.to_string())?
+            .into_rows_result()
+            .map_err(|e| e.to_string())?
+            .maybe_first_row::<(i64, i64)>()
+            .map_err(|e| e.to_string())?;
+
+        let mut member_ids: Vec<i64> = members.into_iter().map(|(u,)| u).collect();
+        member_ids.sort();
+        if messages == [(3, alice), (2, bob), (1, alice)]
+            && member_ids == [alice, bob]
+            && head == Some((4, 3))
+        {
+            println!("persister output: 3 messages, 2 members, head event_seq 4 / msg_seq 3");
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "store not as expected: messages {messages:?}, members {member_ids:?}, head {head:?} (is the persister running?)"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 async fn connect(url: &str, user: i64) -> Result<Socket, String> {
