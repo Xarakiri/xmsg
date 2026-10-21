@@ -19,7 +19,7 @@ CREATE TABLE workspaces (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Until the users service manages workspaces, every installation has one default workspace.
+-- Every installation has a default workspace; the auth service adds each new user to it.
 INSERT INTO workspaces (id, name, slug) VALUES (1, 'Default', 'default');
 
 CREATE TABLE workspace_members (
@@ -28,6 +28,17 @@ CREATE TABLE workspace_members (
     role         TEXT NOT NULL,
     joined_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (workspace_id, user_id)
+);
+-- "My workspaces" and "do these users share a workspace" go by user.
+CREATE INDEX workspace_members_user ON workspace_members (user_id);
+
+-- Invite codes (users service). Only the SHA-256 is stored; a code works until it expires.
+CREATE TABLE workspace_invites (
+    code_hash    TEXT PRIMARY KEY,
+    workspace_id BIGINT NOT NULL REFERENCES workspaces(id),
+    created_by   BIGINT NOT NULL REFERENCES users(id),
+    expires_at   TIMESTAMPTZ NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE channels (
