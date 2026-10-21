@@ -54,6 +54,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install protoc (crates/xmsg-proto compiles proto/ with prost)
+        run: sudo apt-get install -y --no-install-recommends protobuf-compiler
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

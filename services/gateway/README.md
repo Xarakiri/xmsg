@@ -7,7 +7,7 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 - **WebSockets** on `/ws` (Bandit), one BEAM process per connection, binary Protobuf frames only (`proto/xmsg/v1/client.proto`). `/healthz` for probes.
 - **Connect first:** the first frame must be `Connect` with a valid token within the auth timeout (5 s), otherwise the socket closes with code 1008. On success the client gets `Welcome` with a resume token and the installation's **partition count** (ADR-0021).
 - **Sends** go to the messages service over **NATS request/reply** (`xmsg.svc.messages.send`) as an `InboundEvent` whose `actor_id` comes from the token, never from the client. A reply produces `SendAck`; no reply means no ack, and the client retries from its outbox (ADR-0011).
-- **Delivery:** subscribes to `gw.{gateway_id}`; each `GatewayBatch` carries frames **encoded once** by fan-out, and the same binary is pushed to every recipient socket.
+- **Delivery:** subscribes to `gw.{gateway_id}`; each `GatewayBatch` carries frames **encoded once** by fan-out, and the same binary is pushed to every recipient socket. Batches are routed by partition to a pool of delivery workers (one per scheduler), so per-stream order is kept without a single-process bottleneck. Local measurements: [docs/spikes/2026-10-21-gateway-local.md](../../docs/spikes/2026-10-21-gateway-local.md).
 - **Gap detection** (ADR-0009): consecutive `seq` per stream `(partition, owner_epoch)`; `StreamHeads` on `stream_heads.{gateway_id}` catch a lost last batch; a new epoch resets tracking; on a gap, local clients get `Resync{partition}`; after a NATS resubscription, everyone gets a full `Resync`.
 - Ping/Pong.
 

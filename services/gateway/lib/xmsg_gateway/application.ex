@@ -10,7 +10,11 @@ defmodule XmsgGateway.Application do
     children =
       XmsgGateway.Config.bus().child_specs() ++
         [
-          {Registry, keys: :duplicate, name: XmsgGateway.Users},
+          {Registry,
+           keys: :duplicate, name: XmsgGateway.Users, partitions: System.schedulers_online()}
+        ] ++
+        Enum.map(0..(XmsgGateway.Delivery.worker_count() - 1), &{XmsgGateway.Delivery.Worker, &1}) ++
+        [
           XmsgGateway.Delivery,
           Supervisor.child_spec(http, id: :http)
         ]
