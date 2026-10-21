@@ -9,6 +9,7 @@ defmodule XmsgGateway.Application do
 
     children =
       XmsgGateway.Config.bus().child_specs() ++
+        XmsgGateway.Sessions.impl().child_specs() ++
         [
           {Registry,
            keys: :duplicate, name: XmsgGateway.Users, partitions: System.schedulers_online()}
@@ -16,6 +17,8 @@ defmodule XmsgGateway.Application do
         Enum.map(0..(XmsgGateway.Delivery.worker_count() - 1), &{XmsgGateway.Delivery.Worker, &1}) ++
         [
           XmsgGateway.Delivery,
+          XmsgGateway.Heartbeat,
+          XmsgGateway.Sessions.Tracker,
           Supervisor.child_spec(http, id: :http)
         ]
 

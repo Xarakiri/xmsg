@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+enum AppState {
+  APP_STATE_UNSPECIFIED = 0;
+  APP_STATE_FOREGROUND = 1;
+  APP_STATE_BACKGROUND = 2;
+}
+
+// Kafka `sessions.events`, compacted, key = conn_id. A tombstone (empty value)
+// means the connection closed. The topic is the only session registry (plan §5.1).
+message SessionEvent {
+  string conn_id = 1;
+  int64 user_id = 2;
+  string gateway_id = 3;
+  AppState app_state = 4;
+  int64 connected_at_ms = 5;
+}

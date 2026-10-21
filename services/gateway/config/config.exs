@@ -10,6 +10,8 @@ config :xmsg_gateway,
   # Development-only tokens of the form "dev:<user_id>". Real JWT validation comes with auth (Phase 1a).
   dev_auth: true,
   bus: XmsgGateway.Bus.Nats,
+  sessions: XmsgGateway.Sessions.Kafka,
+  kafka_bootstrap: "127.0.0.1:9092",
   nats: %{host: "127.0.0.1", port: 4222}
 
 config :logger, level: :info

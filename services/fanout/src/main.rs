@@ -1,0 +1,283 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+use std::process::ExitCode;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, Rebalance, StreamConsumer};
+use rdkafka::{ClientConfig, ClientContext, Message as _, Offset, TopicPartitionList};
+use tracing_subscriber::EnvFilter;
+use xmsg_fanout::config::Config;
+use xmsg_fanout::membership::Membership;
+use xmsg_fanout::sessions::SessionMap;
+use xmsg_fanout::store::Store;
+use xmsg_fanout::streams::Streams;
+use xmsg_fanout::{by_gateway, recipients};
+use xmsg_proto::Message;
+use xmsg_proto::v1::{
+    Delivery, GatewayBatch, SequencedEvent, ServerFrame, SessionEvent, server_frame,
+};
+
+const EVENTS_TOPIC: &str = "messages.persisted";
+const SESSIONS_TOPIC: &str = "sessions.events";
+
+/// Records partitions assigned in a rebalance, so their streams get a new epoch.
+struct Ctx {
+    assigned: Arc<Mutex<Vec<i32>>>,
+}
+impl ClientContext for Ctx {}
+impl ConsumerContext for Ctx {
+    fn post_rebalance(&self, _consumer: &BaseConsumer<Self>, rebalance: &Rebalance<'_>) {
+        if let Rebalance::Assign(tpl) = rebalance {
+            let mut assigned = self.assigned.lock().unwrap();
+            assigned.extend(tpl.elements().iter().map(|e| e.partition()));
+            tracing::info!(partitions = ?tpl.elements().iter().map(|e| e.partition()).collect::<Vec<_>>(), "partitions assigned");
+        }
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
+    let config = match Config::from_env() {
+        Ok(c) => c,
+        Err(e) => return fail(&e),
+    };
+
+    let store = match Store::connect(&config.cql_nodes, &config.keyspace).await {
+        Ok(s) => s,
+        Err(e) => return fail(&e),
+    };
+    let nats = match async_nats::connect(&config.nats_url).await {
+        Ok(c) => c,
+        Err(e) => return fail(&format!("connecting to NATS at {}: {e}", config.nats_url)),
+    };
+
+    // Sessions: read the whole compacted topic, then keep following it.
+    let sessions = Arc::new(RwLock::new(SessionMap::default()));
+    let caught_up = match follow_sessions(&config.kafka_bootstrap, sessions.clone()) {
+        Ok(rx) => rx,
+        Err(e) => return fail(&e),
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !*caught_up.borrow() {
+        if Instant::now() > deadline {
+            return fail("timed out reading sessions.events");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tracing::info!(
+        connections = sessions.read().unwrap().connection_count(),
+        "session map loaded"
+    );
+
+    let assigned = Arc::new(Mutex::new(Vec::new()));
+    let consumer: StreamConsumer<Ctx> = match ClientConfig::new()
+        .set("bootstrap.servers", &config.kafka_bootstrap)
+        .set("group.id", &config.group_id)
+        .set("auto.offset.reset", "latest")
+        .set("enable.auto.commit", "true")
+        .set("enable.auto.offset.store", "false")
+        .set("isolation.level", "read_committed")
+        .set("partition.assignment.strategy", "cooperative-sticky")
+        .create_with_context(Ctx {
+            assigned: assigned.clone(),
+        }) {
+        Ok(c) => c,
+        Err(e) => return fail(&format!("creating Kafka consumer: {e}")),
+    };
+    match consumer.fetch_metadata(Some(EVENTS_TOPIC), Duration::from_secs(10)) {
+        Ok(md) => match md.topics().first() {
+            Some(t) if t.error().is_none() && t.partitions().len() as i32 == config.partitions => {}
+            Some(t) if t.error().is_none() => {
+                return fail(&format!(
+                    "{EVENTS_TOPIC} has {} partitions but XMSG_PARTITIONS is {} (ADR-0021)",
+                    t.partitions().len(),
+                    config.partitions
+                ));
+            }
+            _ => return fail(&format!("topic {EVENTS_TOPIC} does not exist")),
+        },
+        Err(e) => return fail(&format!("fetching metadata: {e}")),
+    }
+    if let Err(e) = consumer.subscribe(&[EVENTS_TOPIC]) {
+        return fail(&format!("subscribing to {EVENTS_TOPIC}: {e}"));
+    }
+    let mut membership = Membership::default();
+    let mut streams = Streams::default();
+    let mut heads_tick = tokio::time::interval(Duration::from_secs(1));
+    let mut announced = false;
+
+    loop {
+        // New epochs for (re)assigned partitions. "Ready" waits for the first assignment:
+        // a new consumer group starts at the latest offset, so earlier events aren't delivered.
+        for partition in assigned.lock().unwrap().drain(..) {
+            streams.reset_partition(partition as u32, now_ms());
+            if !announced {
+                tracing::info!("fanout ready");
+                announced = true;
+            }
+        }
+        let message = tokio::select! {
+            m = consumer.recv() => m,
+            _ = heads_tick.tick() => {
+                for gateway in streams.gateways() {
+                    let heads = streams.heads_for(&gateway).encode_to_vec();
+                    let _ = nats.publish(format!("stream_heads.{gateway}"), heads.into()).await;
+                }
+                continue;
+            }
+            _ = tokio::signal::ctrl_c() => break,
+        };
+        for partition in assigned.lock().unwrap().drain(..) {
+            streams.reset_partition(partition as u32, now_ms());
+        }
+        let message = match message {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(error = %e, "Kafka receive error");
+                continue;
+            }
+        };
+        let Some(Ok(event)) = message.payload().map(SequencedEvent::decode) else {
+            let _ = consumer.store_offset_from_message(&message);
+            continue;
+        };
+
+        // Membership must be known before delivering; the store may lag by milliseconds.
+        let mut backoff = Duration::from_millis(20);
+        loop {
+            match membership.ensure_loaded(&event, &store).await {
+                Ok(()) => break,
+                Err(reason) => {
+                    if backoff >= Duration::from_secs(1) {
+                        tracing::warn!(
+                            ?reason,
+                            channel_id = event.channel_id,
+                            "waiting for membership snapshot"
+                        );
+                    }
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(5));
+                }
+            }
+        }
+        membership.apply(&event);
+        let members = membership
+            .get(event.channel_id)
+            .cloned()
+            .unwrap_or_default();
+        let to = recipients(&event, &members);
+
+        let grouped = by_gateway(&to, &sessions.read().unwrap());
+        if !grouped.is_empty() {
+            // Encoded once, the same bytes for every recipient on every gateway.
+            let frame = ServerFrame {
+                frame: Some(server_frame::Frame::Event(event.clone())),
+            }
+            .encode_to_vec();
+            let partition = message.partition() as u32;
+            for (gateway, user_ids) in grouped {
+                let (owner_epoch, seq) = streams.next(&gateway, partition, now_ms());
+                let batch = GatewayBatch {
+                    partition,
+                    owner_epoch,
+                    seq,
+                    deliveries: vec![Delivery {
+                        user_ids,
+                        server_frame: frame.clone(),
+                    }],
+                };
+                if let Err(e) = nats
+                    .publish(format!("gw.{gateway}"), batch.encode_to_vec().into())
+                    .await
+                {
+                    tracing::warn!(error = %e, %gateway, "publish failed; the gateway will see a gap and resync");
+                }
+            }
+        }
+        let _ = consumer.store_offset_from_message(&message);
+    }
+    let _ = nats.flush().await;
+    ExitCode::SUCCESS
+}
+
+/// Follows the compacted sessions topic from the beginning on a background
+/// thread. The returned flag turns true once the initial read reached the end.
+fn follow_sessions(
+    bootstrap: &str,
+    sessions: Arc<RwLock<SessionMap>>,
+) -> Result<tokio::sync::watch::Receiver<bool>, String> {
+    let consumer: BaseConsumer = ClientConfig::new()
+        .set("bootstrap.servers", bootstrap)
+        .set("group.id", "xmsg-fanout-sessions-unused")
+        .set("enable.auto.commit", "false")
+        .create()
+        .map_err(|e| format!("creating sessions consumer: {e}"))?;
+    let md = consumer
+        .fetch_metadata(Some(SESSIONS_TOPIC), Duration::from_secs(10))
+        .map_err(|e| format!("fetching {SESSIONS_TOPIC} metadata: {e}"))?;
+    let topic = md
+        .topics()
+        .first()
+        .filter(|t| t.error().is_none())
+        .ok_or(format!("topic {SESSIONS_TOPIC} does not exist"))?;
+    let mut tpl = TopicPartitionList::new();
+    let mut targets = Vec::new();
+    for p in topic.partitions() {
+        tpl.add_partition_offset(SESSIONS_TOPIC, p.id(), Offset::Beginning)
+            .map_err(|e| e.to_string())?;
+        let (_, high) = consumer
+            .fetch_watermarks(SESSIONS_TOPIC, p.id(), Duration::from_secs(10))
+            .map_err(|e| format!("watermarks: {e}"))?;
+        targets.push((p.id(), high));
+    }
+    consumer
+        .assign(&tpl)
+        .map_err(|e| format!("assigning {SESSIONS_TOPIC}: {e}"))?;
+
+    let (tx, rx) = tokio::sync::watch::channel(targets.iter().all(|(_, high)| *high == 0));
+    std::thread::spawn(move || {
+        let mut remaining: std::collections::HashMap<i32, i64> =
+            targets.into_iter().filter(|(_, h)| *h > 0).collect();
+        loop {
+            match consumer.poll(Duration::from_millis(200)) {
+                Some(Ok(m)) => {
+                    let key = m
+                        .key()
+                        .map(|k| String::from_utf8_lossy(k).into_owned())
+                        .unwrap_or_default();
+                    let event = m
+                        .payload()
+                        .filter(|p| !p.is_empty())
+                        .and_then(|p| SessionEvent::decode(p).ok());
+                    sessions.write().unwrap().apply(&key, event);
+                    if let Some(high) = remaining.get(&m.partition()) {
+                        if m.offset() + 1 >= *high {
+                            remaining.remove(&m.partition());
+                        }
+                    }
+                }
+                Some(Err(e)) => tracing::warn!(error = %e, "sessions consumer error"),
+                None => {}
+            }
+            if remaining.is_empty() && !*tx.borrow() {
+                let _ = tx.send(true);
+            }
+        }
+    });
+    Ok(rx)
+}
+
+fn fail(message: &str) -> ExitCode {
+    eprintln!("xmsg-fanout: {message}");
+    ExitCode::from(2)
+}

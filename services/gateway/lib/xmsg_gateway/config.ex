@@ -12,6 +12,9 @@ defmodule XmsgGateway.Config do
   def dev_auth?, do: get(:dev_auth)
   def bus, do: get(:bus)
   def nats, do: get(:nats)
+  def sessions, do: get(:sessions)
+  def kafka_bootstrap, do: get(:kafka_bootstrap)
+  def sessions_topic, do: "sessions.events"
 
   @doc "NATS subject carrying fan-out batches for this gateway (ADR-0009)."
   def delivery_subject, do: "gw.#{gateway_id()}"

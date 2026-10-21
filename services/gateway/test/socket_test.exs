@@ -126,4 +126,24 @@ defmodule XmsgGateway.SocketTest do
     c = WsClient.send_frame(c, %ClientFrame{frame: {:send_message, req}})
     assert {_c, :timeout} = WsClient.recv(c, 700)
   end
+
+  test "an authenticated connection is published as a session and removed when it closes", %{
+    port: port
+  } do
+    {c, _} = connect_as(port, 11)
+    Mint.HTTP.close(c.conn)
+
+    events =
+      Enum.reduce_while(1..40, [], fn _, _ ->
+        Process.sleep(50)
+        events = XmsgGateway.Sessions.Local.events()
+
+        if Enum.any?(events, &match?({:disconnected, _}, &1)),
+          do: {:halt, events},
+          else: {:cont, events}
+      end)
+
+    assert [{:connected, conn_id, 11}] = for({:connected, _, 11} = e <- events, do: e)
+    assert {:disconnected, conn_id} in events
+  end
 end
