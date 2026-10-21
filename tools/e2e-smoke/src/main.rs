@@ -16,9 +16,13 @@
 //! 5. If `XMSG_CQL_NODES` is set, checks what the persister wrote: the three
 //!    messages, the members and the channel head.
 //!
+//! With `XMSG_AUTH_URL` set, the three users sign up and log in through the auth
+//! service and connect with real access tokens (the gateway checks them against the
+//! JWKS); a forged token must be refused. Without it, development tokens are used.
+//!
 //! Exits 0 on success, 1 on failure.
 //! Env: XMSG_GATEWAY_URL (ws://127.0.0.1:4000/ws), XMSG_KAFKA_BOOTSTRAP (127.0.0.1:9092),
-//! XMSG_CQL_NODES (optional, e.g. 127.0.0.1:9042).
+//! XMSG_CQL_NODES (optional, e.g. 127.0.0.1:9042), XMSG_AUTH_URL (optional, e.g. http://127.0.0.1:8081).
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -69,11 +73,28 @@ async fn run() -> Result<(), String> {
         .unwrap()
         .as_millis() as i64;
     let channel = run_id; // unique per run
-    let (alice, bob, mallory) = (
-        1_000 + run_id % 1_000,
-        2_000 + run_id % 1_000,
-        3_000 + run_id % 1_000,
-    );
+    let users = match std::env::var("XMSG_AUTH_URL") {
+        Ok(auth) => {
+            let mut users = Vec::new();
+            for name in ["alice", "bob", "mallory"] {
+                users.push(
+                    sign_up_and_log_in(&auth, &format!("{name}-{run_id}@example.org")).await?,
+                );
+            }
+            expect_refused(&gateway, &forge(&users[0].1)).await?;
+            println!("signed up and logged in 3 users via {auth}; a forged token was refused");
+            users
+        }
+        Err(_) => [1_000, 2_000, 3_000]
+            .map(|base| {
+                (
+                    base + run_id % 1_000,
+                    format!("dev:{}", base + run_id % 1_000),
+                )
+            })
+            .to_vec(),
+    };
+    let (alice, bob) = (users[0].0, users[1].0);
 
     // 1. Create the channel (alice and bob are members).
     let producer: FutureProducer = ClientConfig::new()
@@ -107,9 +128,9 @@ async fn run() -> Result<(), String> {
 
     // 2. Users send through the gateway.
     let mut clients = [
-        connect(&gateway, alice).await?,
-        connect(&gateway, bob).await?,
-        connect(&gateway, mallory).await?,
+        connect(&gateway, &users[0].1).await?,
+        connect(&gateway, &users[1].1).await?,
+        connect(&gateway, &users[2].1).await?,
     ];
     // (socket index, client_msg_id): alice, bob, alice again, then mallory (not a member).
     for (i, id) in [(0, "a-1"), (1, "b-1"), (0, "a-2"), (2, "m-1")] {
@@ -216,13 +237,90 @@ async fn check_store(nodes: &str, channel: i64, alice: i64, bob: i64) -> Result<
     }
 }
 
-async fn connect(url: &str, user: i64) -> Result<Client, String> {
+/// Signs a user up and logs in; returns (user ID, access token).
+async fn sign_up_and_log_in(auth: &str, email: &str) -> Result<(i64, String), String> {
+    let http = reqwest::Client::new();
+    let password = "e2e smoke password";
+    let post = |path: &'static str, body: serde_json::Value| {
+        let request = http.post(format!("{auth}{path}")).json(&body);
+        async move {
+            let response = request.send().await.map_err(|e| format!("{path}: {e}"))?;
+            let status = response.status();
+            let body: serde_json::Value =
+                response.json().await.map_err(|e| format!("{path}: {e}"))?;
+            if status.is_success() {
+                Ok(body)
+            } else {
+                Err(format!("{path}: {status} {body}"))
+            }
+        }
+    };
+    post(
+        "/v1/signup",
+        serde_json::json!({"email": email, "password": password, "name": "E2E"}),
+    )
+    .await?;
+    let tokens = post(
+        "/v1/login",
+        serde_json::json!({"email": email, "password": password}),
+    )
+    .await?;
+    let user_id = tokens["user_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("login: no user_id")?;
+    let token = tokens["access_token"]
+        .as_str()
+        .ok_or("login: no access_token")?;
+    Ok((user_id, token.to_string()))
+}
+
+/// The token with one character of its claims changed: the signature no longer matches.
+fn forge(token: &str) -> String {
+    let parts: Vec<&str> = token.split('.').collect();
+    let claims = parts.get(1).copied().unwrap_or_default();
+    // Flip one character of the payload; any change must break the signature.
+    let mut tampered: Vec<char> = claims.chars().collect();
+    if let Some(c) = tampered.get_mut(10) {
+        *c = if *c == 'A' { 'B' } else { 'A' };
+    }
+    format!(
+        "{}.{}.{}",
+        parts[0],
+        tampered.into_iter().collect::<String>(),
+        parts.get(2).copied().unwrap_or_default()
+    )
+}
+
+async fn expect_refused(url: &str, token: &str) -> Result<(), String> {
     let (mut ws, _) = connect_async(url)
         .await
         .map_err(|e| format!("connecting to {url}: {e}"))?;
     let frame = ClientFrame {
         frame: Some(client_frame::Frame::Connect(Connect {
-            access_token: format!("dev:{user}"),
+            access_token: token.to_string(),
+            protocol_version: 1,
+            ..Default::default()
+        })),
+    };
+    ws.send(Ws::Binary(frame.encode_to_vec().into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+        Ok(Some(Ok(Ws::Close(Some(close))))) if close.reason == "invalid token" => Ok(()),
+        other => Err(format!(
+            "forged token: expected close \"invalid token\", got {other:?}"
+        )),
+    }
+}
+
+async fn connect(url: &str, token: &str) -> Result<Client, String> {
+    let (mut ws, _) = connect_async(url)
+        .await
+        .map_err(|e| format!("connecting to {url}: {e}"))?;
+    let frame = ClientFrame {
+        frame: Some(client_frame::Frame::Connect(Connect {
+            access_token: token.to_string(),
             protocol_version: 1,
             ..Default::default()
         })),

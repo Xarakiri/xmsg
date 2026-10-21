@@ -10,6 +10,7 @@ defmodule XmsgGateway.Config do
   def auth_timeout_ms, do: get(:auth_timeout_ms)
   def request_timeout_ms, do: get(:request_timeout_ms)
   def dev_auth?, do: get(:dev_auth)
+  def jwks_url, do: Application.get_env(:xmsg_gateway, :jwks_url)
   def bus, do: get(:bus)
   def nats, do: get(:nats)
   def sessions, do: get(:sessions)

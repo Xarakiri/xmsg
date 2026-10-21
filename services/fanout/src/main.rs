@@ -35,6 +35,20 @@ impl ConsumerContext for Ctx {
     }
 }
 
+/// Starts new stream epochs for (re)assigned partitions. "Ready" is announced on the first
+/// assignment: a new consumer group starts at the latest offset, so events produced before
+/// it aren't delivered.
+fn take_assignments(assigned: &Mutex<Vec<i32>>, streams: &mut Streams, announced: &mut bool) {
+    let partitions: Vec<i32> = assigned.lock().unwrap().drain(..).collect();
+    for partition in &partitions {
+        streams.reset_partition(*partition as u32, now_ms());
+    }
+    if !partitions.is_empty() && !*announced {
+        tracing::info!("fanout ready");
+        *announced = true;
+    }
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -117,15 +131,7 @@ async fn main() -> ExitCode {
     let mut announced = false;
 
     loop {
-        // New epochs for (re)assigned partitions. "Ready" waits for the first assignment:
-        // a new consumer group starts at the latest offset, so earlier events aren't delivered.
-        for partition in assigned.lock().unwrap().drain(..) {
-            streams.reset_partition(partition as u32, now_ms());
-            if !announced {
-                tracing::info!("fanout ready");
-                announced = true;
-            }
-        }
+        take_assignments(&assigned, &mut streams, &mut announced);
         let message = tokio::select! {
             m = consumer.recv() => m,
             _ = heads_tick.tick() => {
@@ -137,9 +143,8 @@ async fn main() -> ExitCode {
             }
             _ = tokio::signal::ctrl_c() => break,
         };
-        for partition in assigned.lock().unwrap().drain(..) {
-            streams.reset_partition(partition as u32, now_ms());
-        }
+        // Assignments arrive inside recv() (rebalance callback): take them before the message.
+        take_assignments(&assigned, &mut streams, &mut announced);
         let message = match message {
             Ok(m) => m,
             Err(e) => {

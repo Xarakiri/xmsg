@@ -43,6 +43,19 @@ defmodule XmsgGateway.SocketTest do
     assert {_c, {:close, 1008, "authentication timeout"}} = WsClient.recv(c, 2_000)
   end
 
+  test "a JWT from the auth service authenticates the connection", %{port: port} do
+    key = XmsgGateway.TestJwt.keypair()
+    previous = XmsgGateway.Auth.Jwks.keys()
+    XmsgGateway.Auth.Jwks.put_keys(%{key.kid => key.public})
+    on_exit(fn -> XmsgGateway.Auth.Jwks.put_keys(previous) end)
+
+    c = WsClient.connect(port)
+    token = XmsgGateway.TestJwt.sign(key, XmsgGateway.TestJwt.claims(77))
+    c = WsClient.send_frame(c, %ClientFrame{frame: {:connect, %Connect{access_token: token}}})
+    assert {_c, %ServerFrame{frame: {:welcome, %Welcome{}}}, _} = WsClient.recv_server_frame(c)
+    assert [{_pid, nil}] = Registry.lookup(XmsgGateway.Users, 77)
+  end
+
   test "an invalid token closes the socket", %{port: port} do
     c = WsClient.connect(port)
     c = WsClient.send_frame(c, %ClientFrame{frame: {:connect, %Connect{access_token: "nope"}}})
