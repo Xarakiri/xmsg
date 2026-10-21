@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 26
       - run: npm test
         working-directory: clients/core
 
@@ -104,7 +104,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "27"
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew test
         working-directory: services/sequencer
@@ -118,7 +118,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "27"
       - uses: gradle/actions/setup-gradle@v4
       - name: Crash/fencing, restore and startup-check tests (Testcontainers)
         run: ./gradlew integrationTest -Dxmsg.crash.kills=12
@@ -180,7 +180,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "27"
       - uses: gradle/actions/setup-gradle@v4
       - uses: erlef/setup-beam@v1
         with:

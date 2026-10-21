@@ -93,8 +93,8 @@ flowchart LR
 
 | Layer | Choice | ADR |
 |---|---|---|
-| Realtime gateway | **Elixir/OTP 27+**, Bandit WebSockets, `gnat` (NATS), `brod` (Kafka), `redix` | [0001](adr/0001-language-split.md) |
-| Sequencer | **Kotlin + Kafka Streams**, JDK 21, Generational ZGC | [0003](adr/0003-kafka-streams-sequencer.md) |
+| Realtime gateway | **Elixir 1.20 / OTP 29**, Bandit WebSockets, `gnat` (NATS), `brod` (Kafka), `redix` | [0001](adr/0001-language-split.md) |
+| Sequencer | **Kotlin + Kafka Streams**, JDK 27, Generational ZGC | [0003](adr/0003-kafka-streams-sequencer.md) |
 | Other services | **Rust**: tokio, axum, tonic/prost, `rdkafka`, `sqlx`, `scylla`, `fred`, `async-nats`, `opensearch`, `a2` | [0001](adr/0001-language-split.md) |
 | Clients | **TypeScript + React** (web), **Tauri** (desktop), **React Native** (mobile), shared TS sync core | [0011](adr/0011-two-step-sync-and-local-first-client.md) |
 | Protocols | WebSocket + Protobuf to clients; NATS request/reply gateway → services; gRPC between Rust services; Buf for schemas | [0001](adr/0001-language-split.md) |

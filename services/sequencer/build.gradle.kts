@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import java.time.Duration
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.2.0"
-    id("com.google.protobuf") version "0.9.5"
+    kotlin("jvm") version "2.4.21"
+    id("com.google.protobuf") version "0.10.0"
     application
     `jvm-test-suite`
 }
@@ -27,7 +28,13 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-kotlin { jvmToolchain(21) }
+// Built and run on JDK 27. Kotlin 2.4 emits bytecode up to Java 26, so both compilers
+// target 26 (runs unchanged on 27); raise it when Kotlin supports 27.
+kotlin {
+    jvmToolchain(27)
+    compilerOptions { jvmTarget.set(JvmTarget.JVM_26) }
+}
+tasks.withType<JavaCompile>().configureEach { options.release.set(26) }
 
 // The contracts live in the repository-level proto/ directory (Buf module).
 sourceSets { main { proto { srcDir("../../proto") } } }

@@ -173,13 +173,12 @@ async fn connection(
     // Wait for Welcome.
     let welcomed = tokio::time::timeout(Duration::from_secs(15), async {
         while let Some(Ok(msg)) = stream.next().await {
-            if let WsMessage::Binary(bytes) = msg {
-                if let Ok(ServerFrame {
+            if let WsMessage::Binary(bytes) = msg
+                && let Ok(ServerFrame {
                     frame: Some(server_frame::Frame::Welcome(_)),
                 }) = ServerFrame::decode(bytes.as_ref())
-                {
-                    return true;
-                }
+            {
+                return true;
             }
         }
         false

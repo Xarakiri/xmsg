@@ -6,6 +6,6 @@ members = ["crates/*", "services/auth", "services/fanout", "services/messages", 
 [workspace.package]
 edition = "2024"
 license = "AGPL-3.0-only"
-rust-version = "1.85"
+rust-version = "1.99"
 version = "0.0.0"
 publish = false

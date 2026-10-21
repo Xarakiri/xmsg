@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "description": "Shared client core: protocol, sync engine, partitioning",
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": { "node": ">=26" },
   "scripts": {
     "test": "node --test 'test/**/*.test.ts'"
   }

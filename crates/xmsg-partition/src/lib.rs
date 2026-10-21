@@ -13,9 +13,9 @@ pub fn murmur2(data: &[u8]) -> i32 {
     let len = data.len();
     let mut h: u32 = SEED ^ (len as u32);
 
-    let mut chunks = data.chunks_exact(4);
-    for chunk in &mut chunks {
-        let mut k = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    let (chunks, rest) = data.as_chunks::<4>();
+    for chunk in chunks {
+        let mut k = u32::from_le_bytes(*chunk);
         k = k.wrapping_mul(M);
         k ^= k >> R;
         k = k.wrapping_mul(M);
@@ -23,7 +23,6 @@ pub fn murmur2(data: &[u8]) -> i32 {
         h ^= k;
     }
 
-    let rest = chunks.remainder();
     if rest.len() == 3 {
         h ^= (rest[2] as u32) << 16;
     }

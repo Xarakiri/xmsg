@@ -265,10 +265,10 @@ fn follow_sessions(
                         .filter(|p| !p.is_empty())
                         .and_then(|p| SessionEvent::decode(p).ok());
                     sessions.write().unwrap().apply(&key, event);
-                    if let Some(high) = remaining.get(&m.partition()) {
-                        if m.offset() + 1 >= *high {
-                            remaining.remove(&m.partition());
-                        }
+                    if let Some(high) = remaining.get(&m.partition())
+                        && m.offset() + 1 >= *high
+                    {
+                        remaining.remove(&m.partition());
                     }
                 }
                 Some(Err(e)) => tracing::warn!(error = %e, "sessions consumer error"),

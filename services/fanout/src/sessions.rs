@@ -18,12 +18,12 @@ impl SessionMap {
     /// Entries are per connection, so events from different gateways in any order can't
     /// remove a live connection.
     pub fn apply(&mut self, conn_id: &str, event: Option<SessionEvent>) {
-        if let Some((user, _)) = self.conns.remove(conn_id) {
-            if let Some(set) = self.by_user.get_mut(&user) {
-                set.remove(conn_id);
-                if set.is_empty() {
-                    self.by_user.remove(&user);
-                }
+        if let Some((user, _)) = self.conns.remove(conn_id)
+            && let Some(set) = self.by_user.get_mut(&user)
+        {
+            set.remove(conn_id);
+            if set.is_empty() {
+                self.by_user.remove(&user);
             }
         }
         if let Some(e) = event {

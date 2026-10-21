@@ -6,7 +6,7 @@
 By review #3 the sequencer needed: exactly-once transactions (KIP-447), embedded RocksDB state, changelog topics with restore, standby replicas, cooperative rebalancing, windowed dedupe and per-key point lookups. Rust has no mature framework for this; we would have had to write one, and its bugs show up mainly under crashes and rebalances.
 
 ## Decision
-- The sequencer is a **Kafka Streams** application in **Kotlin** (Processor API), JDK 21 with **Generational ZGC** to keep pauses below a millisecond.
+- The sequencer is a **Kafka Streams** application in **Kotlin** (Processor API), on JDK 27 (upgraded from 21 in 2026-10) with **Generational ZGC** to keep pauses below a millisecond.
 - `processing.guarantee = exactly_once_v2`, `commit.interval.ms` = 5–10, producer `linger.ms` 0–1.
 - **Static membership** (`group.instance.id`) and warm-up replicas, so restarts don't move tasks; `num.standby.replicas = 1` for fast failover.
 - State lives in RocksDB stores backed by compacted changelogs: `channel_heads`, `members`, `threads`, `reaction_counts`, `dedupe` (windowed).
