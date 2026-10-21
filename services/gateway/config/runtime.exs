@@ -9,6 +9,7 @@ if config_env() != :test do
     port: String.to_integer(env.("XMSG_GATEWAY_PORT", "4000")),
     partition_count: String.to_integer(env.("XMSG_PARTITIONS", "16")),
     dev_auth: env.("XMSG_DEV_AUTH", "false") == "true",
+    kafka_bootstrap: env.("XMSG_KAFKA_BOOTSTRAP", "127.0.0.1:9092"),
     nats: %{
       host: env.("XMSG_NATS_HOST", "127.0.0.1"),
       port: String.to_integer(env.("XMSG_NATS_PORT", "4222"))

@@ -7,6 +7,7 @@ config :xmsg_gateway,
   partition_count: 16,
   auth_timeout_ms: 300,
   request_timeout_ms: 500,
-  bus: XmsgGateway.Bus.Local
+  bus: XmsgGateway.Bus.Local,
+  sessions: XmsgGateway.Sessions.Local
 
 config :logger, level: :warning

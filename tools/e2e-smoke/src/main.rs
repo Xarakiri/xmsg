@@ -2,6 +2,7 @@
 //! End-to-end smoke test of the message path that exists today:
 //!
 //!   client --WebSocket--> gateway --NATS--> messages --Kafka--> sequencer --> messages.persisted
+//!   messages.persisted --> persister --> Cassandra, and --> fan-out --NATS--> gateway --WebSocket--> clients
 //!
 //! 1. Creates a channel by producing `channel.created` to `messages.in`
 //!    (the channels service doesn't exist yet).
@@ -10,7 +11,9 @@
 //!    sequenced events: consecutive msg_seq, the right authors, and a rejection
 //!    for a non-member.
 //!
-//! 4. If `XMSG_CQL_NODES` is set, checks what the persister wrote: the three
+//! 4. Checks fan-out delivery: both members receive all three messages over
+//!    their WebSockets in order, and the non-member gets only their rejection.
+//! 5. If `XMSG_CQL_NODES` is set, checks what the persister wrote: the three
 //!    messages, the members and the channel head.
 //!
 //! Exits 0 on success, 1 on failure.
@@ -35,6 +38,12 @@ use xmsg_proto::v1::{
 
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// A connected user and the channel events it has received so far.
+struct Client {
+    ws: Socket,
+    events: Vec<SequencedEvent>,
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -97,16 +106,16 @@ async fn run() -> Result<(), String> {
     println!("created channel {channel} with members {alice}, {bob}");
 
     // 2. Users send through the gateway.
-    let mut sockets = [
+    let mut clients = [
         connect(&gateway, alice).await?,
         connect(&gateway, bob).await?,
         connect(&gateway, mallory).await?,
     ];
     // (socket index, client_msg_id): alice, bob, alice again, then mallory (not a member).
     for (i, id) in [(0, "a-1"), (1, "b-1"), (0, "a-2"), (2, "m-1")] {
-        send(&mut sockets[i], channel, id).await?;
+        send(&mut clients[i].ws, channel, id).await?;
         // Each must be acked (accepted into messages.in); membership is checked later.
-        expect_ack(&mut sockets[i], id).await?;
+        expect_ack(&mut clients[i], id).await?;
     }
     println!("all four sends acked by the gateway");
 
@@ -133,6 +142,8 @@ async fn run() -> Result<(), String> {
         ));
     }
     println!("sequencer output: msg_seq {seqs:?} for {ids:?}; non-member send rejected");
+
+    check_delivery(&mut clients, channel).await?;
 
     if let Ok(nodes) = std::env::var("XMSG_CQL_NODES") {
         check_store(&nodes, channel, alice, bob).await?;
@@ -205,7 +216,7 @@ async fn check_store(nodes: &str, channel: i64, alice: i64, bob: i64) -> Result<
     }
 }
 
-async fn connect(url: &str, user: i64) -> Result<Socket, String> {
+async fn connect(url: &str, user: i64) -> Result<Client, String> {
     let (mut ws, _) = connect_async(url)
         .await
         .map_err(|e| format!("connecting to {url}: {e}"))?;
@@ -219,8 +230,12 @@ async fn connect(url: &str, user: i64) -> Result<Socket, String> {
     ws.send(Ws::Binary(frame.encode_to_vec().into()))
         .await
         .map_err(|e| e.to_string())?;
-    match next_frame(&mut ws).await? {
-        server_frame::Frame::Welcome(_) => Ok(ws),
+    let mut client = Client {
+        ws,
+        events: Vec::new(),
+    };
+    match next_frame(&mut client).await? {
+        server_frame::Frame::Welcome(_) => Ok(client),
         other => Err(format!("expected Welcome, got {other:?}")),
     }
 }
@@ -238,26 +253,94 @@ async fn send(ws: &mut Socket, channel: i64, client_msg_id: &str) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
-async fn expect_ack(ws: &mut Socket, client_msg_id: &str) -> Result<(), String> {
-    match next_frame(ws).await? {
-        server_frame::Frame::Ack(ack) if ack.client_msg_id == client_msg_id => Ok(()),
-        other => Err(format!(
-            "expected SendAck for {client_msg_id}, got {other:?}"
-        )),
+/// Waits for the SendAck; channel events arriving meanwhile are kept.
+async fn expect_ack(client: &mut Client, client_msg_id: &str) -> Result<(), String> {
+    loop {
+        match next_frame(client).await? {
+            server_frame::Frame::Ack(ack) if ack.client_msg_id == client_msg_id => return Ok(()),
+            server_frame::Frame::Event(_) => {} // kept by next_frame
+            other => {
+                return Err(format!(
+                    "expected SendAck for {client_msg_id}, got {other:?}"
+                ));
+            }
+        }
     }
 }
 
-async fn next_frame(ws: &mut Socket) -> Result<server_frame::Frame, String> {
+/// Reads frames until `done` holds for the events received, or 20 s pass.
+async fn wait_events(
+    client: &mut Client,
+    done: impl Fn(&[SequencedEvent]) -> bool,
+) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !done(&client.events) {
+        if tokio::time::Instant::now() > deadline {
+            return Ok(()); // the caller reports what arrived
+        }
+        let _ = tokio::time::timeout(Duration::from_millis(500), next_frame(client)).await;
+    }
+    Ok(())
+}
+
+/// Fan-out: members receive every message in order; the non-member only its rejection.
+async fn check_delivery(clients: &mut [Client; 3], channel: i64) -> Result<(), String> {
+    let messages = |events: &[SequencedEvent]| -> Vec<(i64, String)> {
+        let mut seen = Vec::new();
+        for e in events.iter().filter(|e| e.channel_id == channel) {
+            if let Some(sequenced_event::Payload::MessageCreated(_)) = e.payload {
+                // Clients dedupe by event_seq (at-least-once delivery).
+                if !seen.iter().any(|(s, _): &(i64, String)| *s == e.msg_seq) {
+                    seen.push((e.msg_seq, e.dedupe_id.clone()));
+                }
+            }
+        }
+        seen
+    };
+    let expected: Vec<(i64, String)> =
+        vec![(1, "a-1".into()), (2, "b-1".into()), (3, "a-2".into())];
+    for (i, name) in [(0, "alice"), (1, "bob")] {
+        wait_events(&mut clients[i], |e| messages(e).len() >= 3).await?;
+        let got = messages(&clients[i].events);
+        if got != expected {
+            return Err(format!("{name} received {got:?}, expected {expected:?}"));
+        }
+    }
+    let mallory = &mut clients[2];
+    wait_events(mallory, |e| e.iter().any(|e| e.dedupe_id == "m-1")).await?;
+    let got = messages(&mallory.events);
+    let rejected = mallory.events.iter().any(|e| {
+        e.dedupe_id == "m-1"
+            && matches!(&e.payload, Some(sequenced_event::Payload::Rejected(r)) if r.reason == RejectReason::NotAMember as i32)
+    });
+    if !got.is_empty() || !rejected {
+        return Err(format!(
+            "non-member got messages {got:?}, rejection delivered: {rejected}"
+        ));
+    }
+    println!(
+        "fan-out delivered msg_seq 1..3 to both members over WebSocket; the non-member got only its rejection"
+    );
+    Ok(())
+}
+
+async fn next_frame(client: &mut Client) -> Result<server_frame::Frame, String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let msg = tokio::time::timeout_at(deadline, ws.next())
+        let msg = tokio::time::timeout_at(deadline, client.ws.next())
             .await
             .map_err(|_| "timed out waiting for a server frame".to_string())?
             .ok_or("socket closed")?
             .map_err(|e| e.to_string())?;
         if let Ws::Binary(bytes) = msg {
             let frame = ServerFrame::decode(bytes.as_ref()).map_err(|e| e.to_string())?;
-            return frame.frame.ok_or_else(|| "empty server frame".into());
+            let frame = frame
+                .frame
+                .ok_or_else(|| "empty server frame".to_string())?;
+            if let server_frame::Frame::Event(e) = &frame {
+                client.events.push(e.clone());
+            }
+            return Ok(frame);
         }
     }
 }

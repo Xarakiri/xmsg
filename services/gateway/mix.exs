@@ -27,6 +27,7 @@ defmodule XmsgGateway.MixProject do
       {:websock_adapter, "~> 0.5"},
       {:protobuf, "~> 0.14"},
       {:gnat, "~> 1.8"},
+      {:brod, "~> 4.0"},
       {:mint_web_socket, "~> 1.0", only: :test}
     ]
   end

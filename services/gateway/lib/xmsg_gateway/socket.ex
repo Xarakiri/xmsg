@@ -31,7 +31,7 @@ defmodule XmsgGateway.Socket do
   @impl true
   def init(_opts) do
     Process.send_after(self(), :auth_timeout, Config.auth_timeout_ms())
-    {:ok, %{user_id: nil}}
+    {:ok, %{user_id: nil, conn_id: nil}}
   end
 
   @impl true
@@ -62,6 +62,8 @@ defmodule XmsgGateway.Socket do
     case XmsgGateway.Auth.verify(token) do
       {:ok, user_id} ->
         {:ok, _} = Registry.register(XmsgGateway.Users, user_id, nil)
+        conn_id = XmsgGateway.Sessions.new_conn_id()
+        XmsgGateway.Sessions.Tracker.track(conn_id, user_id)
 
         welcome = %Welcome{
           resume_token: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),

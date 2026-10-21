@@ -2657,6 +2657,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmsg-fanout"
+version = "0.0.0"
+dependencies = [
+ "async-nats",
+ "futures-util",
+ "rdkafka",
+ "scylla",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "xmsg-proto",
+]
+
+[[package]]
 name = "xmsg-loadgen"
 version = "0.0.0"
 dependencies = [
