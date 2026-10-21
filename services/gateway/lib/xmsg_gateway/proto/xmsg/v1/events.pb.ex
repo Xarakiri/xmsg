@@ -50,6 +50,7 @@ defmodule Xmsg.V1.ChannelCreated do
 
   field :type, 1, type: Xmsg.V1.ChannelType, enum: true
   field :initial_member_ids, 2, repeated: true, type: :int64, json_name: "initialMemberIds"
+  field :members, 3, repeated: true, type: Xmsg.V1.MemberJoined
 end
 
 defmodule Xmsg.V1.MemberJoinRequested do
@@ -93,6 +94,7 @@ defmodule Xmsg.V1.SequencedEvent do
   field :fanout_mode, 7, type: Xmsg.V1.FanoutMode, json_name: "fanoutMode", enum: true
   field :dedupe_id, 8, type: :string, json_name: "dedupeId"
   field :request_id, 9, type: :string, json_name: "requestId"
+  field :channel_type, 16, type: Xmsg.V1.ChannelType, json_name: "channelType", enum: true
   field :message_created, 10, type: Xmsg.V1.MessageCreated, json_name: "messageCreated", oneof: 0
   field :channel_created, 11, type: Xmsg.V1.ChannelCreated, json_name: "channelCreated", oneof: 0
   field :member_joined, 12, type: Xmsg.V1.MemberJoined, json_name: "memberJoined", oneof: 0

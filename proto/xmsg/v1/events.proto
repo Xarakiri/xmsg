@@ -36,6 +36,9 @@ message SendMessage {
 message ChannelCreated {
   ChannelType type = 1;
   repeated int64 initial_member_ids = 2;
+  // Set by the sequencer on output (ignored on input): the initial members
+  // with their roles, so consumers never re-derive the rules.
+  repeated MemberJoined members = 3;
 }
 
 // The actor adds `user_id` (an invite), or joins themselves when actor_id == user_id.
@@ -63,6 +66,7 @@ message SequencedEvent {
   FanoutMode fanout_mode = 7;
   string dedupe_id = 8;
   string request_id = 9;
+  ChannelType channel_type = 16;
 
   oneof payload {
     MessageCreated message_created = 10;

@@ -8,6 +8,7 @@ import dev.xmsg.proto.v1.FanoutMode
 import dev.xmsg.proto.v1.InboundEvent
 import dev.xmsg.proto.v1.MemberJoinRequested
 import dev.xmsg.proto.v1.MemberKickRequested
+import dev.xmsg.proto.v1.MemberRole
 import dev.xmsg.proto.v1.RejectReason
 import dev.xmsg.proto.v1.SendMessage
 import dev.xmsg.proto.v1.SequencedEvent
@@ -115,6 +116,19 @@ class SequencerTopologyTest {
         // Outside the window the same ID is treated as new (the client gave up after 10 minutes, ADR-0011).
         send(base(100, alice, dedupe = "c-1").setSendMessage(SendMessage.newBuilder().setBody("hello")).build(), Duration.ofMinutes(16))
         assertEquals(1, drain().count { it.hasMessageCreated() })
+    }
+
+    @Test
+    fun `channel_created lists initial members with roles, and every event carries the channel type`() {
+        create(100, alice, ChannelType.CHANNEL_TYPE_PRIVATE, bob)
+        post(100, bob, "hi")
+        val events = drain()
+        val created = events.single { it.hasChannelCreated() }.channelCreated
+        assertEquals(
+            listOf(alice to MemberRole.MEMBER_ROLE_ADMIN, bob to MemberRole.MEMBER_ROLE_MEMBER),
+            created.membersList.map { it.userId to it.role },
+        )
+        assertTrue(events.all { it.channelType == ChannelType.CHANNEL_TYPE_PRIVATE })
     }
 
     @Test

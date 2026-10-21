@@ -355,7 +355,7 @@ CREATE TABLE thread_followers (channel_id bigint, thread_root bigint, user_id bi
 CREATE TABLE channel_heads (
   channel_id bigint PRIMARY KEY,
   event_seq bigint, msg_seq bigint, last_mention_seq bigint,
-  membership_version bigint, fanout_mode text
+  membership_version bigint, fanout_mode text, channel_type text
 );
 
 -- 30-day event log for sync; message.created and thread.reply stored as pointers only

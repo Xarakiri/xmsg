@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS thread_followers (
 CREATE TABLE IF NOT EXISTS channel_heads (
   channel_id bigint PRIMARY KEY,
   event_seq bigint, msg_seq bigint, last_mention_seq bigint,
-  membership_version bigint, fanout_mode text
+  membership_version bigint, fanout_mode text, channel_type text
 );
 
 CREATE TABLE IF NOT EXISTS channel_events (
