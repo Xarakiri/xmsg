@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 defmodule XmsgGateway.Auth do
   @moduledoc """
-  Access-token validation. Phase 0 only accepts development tokens
-  (`dev:<user_id>`) and only when `dev_auth` is on; Ed25519 JWT validation
-  against the auth service's JWKS replaces this in Phase 1a (plan §5.2).
+  Access-token validation (plan §5.2): Ed25519 (EdDSA) JWTs issued by the auth
+  service, checked locally against its JWKS (`XmsgGateway.Auth.Jwks`). No call
+  to the auth service per connect.
+
+  Development tokens (`dev:<user_id>`) are accepted only when `dev_auth` is on.
   """
+
+  alias XmsgGateway.Auth.Jwks
+
+  @issuer "xmsg"
+  @audience "xmsg"
+  @leeway_s 30
 
   @spec verify(String.t()) :: {:ok, integer()} | {:error, :invalid_token}
   def verify("dev:" <> id) do
@@ -16,5 +24,61 @@ defmodule XmsgGateway.Auth do
     end
   end
 
+  def verify(token) when is_binary(token) do
+    case verify_jwt(token, System.os_time(:second)) do
+      {:ok, %{"sub" => sub}} -> parse_user_id(sub)
+      _ -> {:error, :invalid_token}
+    end
+  end
+
   def verify(_), do: {:error, :invalid_token}
+
+  @doc "Checks signature and claims; returns the claims. `now` is Unix seconds."
+  @spec verify_jwt(String.t(), integer()) :: {:ok, map()} | {:error, atom()}
+  def verify_jwt(token, now) do
+    with [h64, c64, s64] <- String.split(token, "."),
+         {:ok, header} <- decode_json(h64),
+         %{"alg" => "EdDSA", "kid" => kid} when is_binary(kid) <- header,
+         {:ok, sig} <- Base.url_decode64(s64, padding: false),
+         {:ok, public_key} <- Jwks.key(kid),
+         true <- :crypto.verify(:eddsa, :none, h64 <> "." <> c64, sig, [public_key, :ed25519]),
+         {:ok, claims} <- decode_json(c64),
+         :ok <- check_claims(claims, now) do
+      {:ok, claims}
+    else
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      false -> {:error, :bad_signature}
+      _ -> {:error, :malformed}
+    end
+  end
+
+  defp check_claims(%{"iss" => @issuer, "aud" => aud, "exp" => exp} = claims, now)
+       when is_integer(exp) do
+    cond do
+      aud != @audience and not (is_list(aud) and @audience in aud) -> {:error, :wrong_audience}
+      exp + @leeway_s < now -> {:error, :expired}
+      is_integer(claims["nbf"]) and claims["nbf"] - @leeway_s > now -> {:error, :not_yet_valid}
+      true -> :ok
+    end
+  end
+
+  defp check_claims(_claims, _now), do: {:error, :bad_claims}
+
+  defp decode_json(part) do
+    with {:ok, bin} <- Base.url_decode64(part, padding: false),
+         {:ok, %{} = map} <- JSON.decode(bin) do
+      {:ok, map}
+    else
+      _ -> {:error, :malformed}
+    end
+  end
+
+  defp parse_user_id(sub) when is_binary(sub) do
+    case Integer.parse(sub) do
+      {user_id, ""} when user_id > 0 -> {:ok, user_id}
+      _ -> {:error, :invalid_token}
+    end
+  end
+
+  defp parse_user_id(_), do: {:error, :invalid_token}
 end

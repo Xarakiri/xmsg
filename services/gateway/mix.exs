@@ -14,7 +14,7 @@ defmodule XmsgGateway.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger], mod: {XmsgGateway.Application, []}]
+    [extra_applications: [:logger, :inets, :ssl], mod: {XmsgGateway.Application, []}]
   end
 
   defp elixirc_paths(:test), do: ["lib", "test/support"]

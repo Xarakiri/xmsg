@@ -11,6 +11,7 @@ defmodule XmsgGateway.Application do
       XmsgGateway.Config.bus().child_specs() ++
         XmsgGateway.Sessions.impl().child_specs() ++
         [
+          {XmsgGateway.Auth.Jwks, XmsgGateway.Config.jwks_url()},
           {Registry,
            keys: :duplicate, name: XmsgGateway.Users, partitions: System.schedulers_online()}
         ] ++
