@@ -19,6 +19,9 @@ CREATE TABLE workspaces (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Until the users service manages workspaces, every installation has one default workspace.
+INSERT INTO workspaces (id, name, slug) VALUES (1, 'Default', 'default');
+
 CREATE TABLE workspace_members (
     workspace_id BIGINT NOT NULL REFERENCES workspaces(id),
     user_id      BIGINT NOT NULL REFERENCES users(id),
