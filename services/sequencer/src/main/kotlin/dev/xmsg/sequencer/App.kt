@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 package dev.xmsg.sequencer
 
+import org.apache.kafka.clients.admin.Admin
+import org.apache.kafka.clients.admin.AdminClientConfig
 import org.apache.kafka.streams.KafkaStreams
 import org.apache.kafka.streams.StreamsConfig
+import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse
+import kotlin.system.exitProcess
 import java.net.InetAddress
 import java.util.Properties
 import java.util.concurrent.CountDownLatch
@@ -18,6 +22,7 @@ fun streamsConfig(env: Map<String, String> = System.getenv()): Properties = Prop
     put(StreamsConfig.REPLICATION_FACTOR_CONFIG, env["XMSG_REPLICATION_FACTOR"] ?: "1")
     put(StreamsConfig.STATE_DIR_CONFIG, env["XMSG_STATE_DIR"] ?: "/tmp/xmsg-sequencer")
     put(StreamsConfig.producerPrefix("linger.ms"), "1")
+    env["XMSG_SESSION_TIMEOUT_MS"]?.let { put(StreamsConfig.consumerPrefix("session.timeout.ms"), it) }
     // Static membership: restarts don't trigger rebalances (ADR-0003).
     put(
         StreamsConfig.consumerPrefix("group.instance.id"),
@@ -26,7 +31,17 @@ fun streamsConfig(env: Map<String, String> = System.getenv()): Properties = Prop
 }
 
 fun main() {
-    val streams = KafkaStreams(SequencerTopology.build(), streamsConfig())
+    val env = System.getenv()
+    val partitions = env["XMSG_PARTITIONS"]?.toIntOrNull()
+        ?: fail("XMSG_PARTITIONS must be set to this installation's partition count (ADR-0021)")
+    val config = streamsConfig(env)
+
+    Admin.create(mapOf(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG to config[StreamsConfig.BOOTSTRAP_SERVERS_CONFIG])).use { admin ->
+        val problems = StartupCheck(admin).problems(partitions)
+        if (problems.isNotEmpty()) fail(problems.joinToString("\n") { "  - $it" }.let { "startup check failed:\n$it" })
+    }
+
+    val streams = KafkaStreams(SequencerTopology.build(), config)
     val stopped = CountDownLatch(1)
     Runtime.getRuntime().addShutdownHook(
         Thread {
@@ -34,9 +49,12 @@ fun main() {
             stopped.countDown()
         },
     )
-    streams.setUncaughtExceptionHandler { _ ->
-        org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.REPLACE_THREAD
-    }
+    streams.setUncaughtExceptionHandler { _ -> StreamThreadExceptionResponse.REPLACE_THREAD }
     streams.start()
     stopped.await()
+}
+
+private fun fail(message: String): Nothing {
+    System.err.println("xmsg-sequencer: $message")
+    exitProcess(2)
 }
