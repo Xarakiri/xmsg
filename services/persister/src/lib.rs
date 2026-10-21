@@ -27,6 +27,8 @@ pub enum Write {
         message_id: i64,
         event_seq: i64,
         author_id: i64,
+        /// The sender's client_msg_id (the event's dedupe_id).
+        client_msg_id: String,
         body: String,
     },
     /// 30-day event log for sync. New messages are stored as pointers (their msg_seq), not bodies.
@@ -132,6 +134,7 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
                 message_id: created.message_id,
                 event_seq: event.event_seq,
                 author_id: event.actor_id,
+                client_msg_id: event.dedupe_id.clone(),
                 body: created.body.clone(),
             });
             out.push(Write::ChannelEvent {

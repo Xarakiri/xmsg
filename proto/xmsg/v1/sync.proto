@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+import "xmsg/v1/events.proto";
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// A channel's events after a client's last seen event_seq (plan §6.6, lazy step),
+// in event_seq order, exactly as they were delivered live. Rebuilt from
+// `channel_events`; message bodies come from `messages`.
+message EventPage {
+  repeated SequencedEvent events = 1;
+  // More events exist after the last one returned; ask again from there.
+  bool has_more = 2;
+  // The channel's head when the page was read.
+  int64 head_event_seq = 3;
+  // The requested position is older than the 30-day event log: the client
+  // should load the latest messages instead and show a gap.
+  bool truncated = 4;
+}

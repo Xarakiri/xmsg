@@ -10,6 +10,8 @@ USE xmsg;
 CREATE TABLE IF NOT EXISTS messages (
   channel_id bigint, bucket int,
   msg_seq bigint, event_seq bigint, message_id bigint, author_id bigint,
+  -- The sender's client_msg_id, so a client syncing history recognizes its own sends.
+  client_msg_id text,
   body text, attachments blob,
   reply_count int, last_reply_at timestamp, edited_at timestamp, deleted boolean,
   PRIMARY KEY ((channel_id, bucket), msg_seq, message_id)

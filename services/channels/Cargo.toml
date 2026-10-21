@@ -15,6 +15,8 @@ xmsg-proto = { path = "../../crates/xmsg-proto" }
 axum = "0.8.9"
 getrandom = "0.4.3"
 rdkafka = { version = "0.39.0", features = ["tokio"] }
+scylla = "1.5.0"
+futures-util = "0.3.34"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres", "macros"] }

@@ -28,7 +28,8 @@
 //! Exits 0 on success, 1 on failure.
 //! Env: XMSG_GATEWAY_URL (ws://127.0.0.1:4000/ws), XMSG_KAFKA_BOOTSTRAP (127.0.0.1:9092),
 //! XMSG_CQL_NODES (optional, e.g. 127.0.0.1:9042), XMSG_AUTH_URL (optional, e.g. http://127.0.0.1:8081),
-//! XMSG_CHANNELS_URL (optional, e.g. http://127.0.0.1:8082).
+//! XMSG_CHANNELS_URL (optional, e.g. http://127.0.0.1:8082),
+//! XMSG_MESSAGES_URL (optional, e.g. http://127.0.0.1:8083; history reads, checked after membership).
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -175,7 +176,106 @@ async fn run() -> Result<(), String> {
     }
     if let Some(url) = &channels_url {
         check_membership(url, channel, &users).await?;
+        if let Ok(messages_url) = std::env::var("XMSG_MESSAGES_URL") {
+            check_history(url, &messages_url, channel, &users).await?;
+        }
     }
+    Ok(())
+}
+
+/// Sync reads (plan §6.6): the channel list carries the head, and the events after 0
+/// are exactly what was delivered live: created, 3 messages, mallory's join and leave.
+async fn check_history(
+    channels_url: &str,
+    messages_url: &str,
+    channel: i64,
+    users: &[(i64, String)],
+) -> Result<(), String> {
+    let (alice, mallory) = (&users[0], &users[2]);
+    // The command verdicts come from the sequencer; the persister writes the head a moment later.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (status, list) = call(
+            "GET",
+            &format!("{channels_url}/v1/me/channels"),
+            &alice.1,
+            None,
+        )
+        .await?;
+        let head = list["channels"]
+            .as_array()
+            .and_then(|cs| {
+                cs.iter()
+                    .find(|c| c["channel_id"].as_str() == Some(channel.to_string().as_str()))
+            })
+            .map(|c| c["event_seq"].clone());
+        if status == 200 && head == Some(serde_json::json!("6")) {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "my channels: expected channel {channel} at event_seq 6, got {status} {list}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let events_url = format!("{messages_url}/v1/channels/{channel}/events?after=0");
+    let http = reqwest::Client::new();
+    let response = http
+        .get(&events_url)
+        .bearer_auth(&alice.1)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if response.status() != 200 {
+        return Err(format!("history: {}", response.status()));
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let page = xmsg_proto::v1::EventPage::decode(bytes.as_ref()).map_err(|e| e.to_string())?;
+    let kinds: Vec<String> = page
+        .events
+        .iter()
+        .map(|e| match &e.payload {
+            Some(sequenced_event::Payload::ChannelCreated(c)) => {
+                format!("created:{}", c.name.starts_with("e2e-"))
+            }
+            Some(sequenced_event::Payload::MessageCreated(_)) => {
+                format!("message:{}:{}", e.msg_seq, e.dedupe_id)
+            }
+            Some(sequenced_event::Payload::MemberJoined(_)) => "joined".into(),
+            Some(sequenced_event::Payload::MemberLeft(_)) => "left".into(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    let expected = [
+        "created:true",
+        "message:1:a-1",
+        "message:2:b-1",
+        "message:3:a-2",
+        "joined",
+        "left",
+    ];
+    if kinds != expected || page.has_more || page.head_event_seq != 6 {
+        return Err(format!(
+            "history: expected {expected:?}, got {kinds:?} (has_more {}, head {})",
+            page.has_more, page.head_event_seq
+        ));
+    }
+    let refused = http
+        .get(&events_url)
+        .bearer_auth(&mallory.1)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .status();
+    if refused != 404 {
+        return Err(format!(
+            "history for a member who left: expected 404, got {refused}"
+        ));
+    }
+    println!(
+        "history: my channels lists event_seq 6; events 1..6 rebuilt as delivered (with client_msg_ids); a former member is refused"
+    );
     Ok(())
 }
 

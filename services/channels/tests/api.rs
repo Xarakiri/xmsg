@@ -15,6 +15,7 @@ use xmsg_auth::keys::Keys;
 use xmsg_channels::api::{App, router};
 use xmsg_channels::commands::Pending;
 use xmsg_channels::kafka::EventLog;
+use xmsg_channels::memberships::{Memberships, MyChannel};
 use xmsg_channels::store::{Dm, NewChannel, Store, StoreError};
 use xmsg_proto::v1::{
     ChannelType, CommandResult, InboundEvent, RejectReason, inbound_event::Payload,
@@ -29,6 +30,16 @@ struct Memory {
 }
 
 impl Store for Memory {
+    async fn names(&self, ids: &[i64]) -> Result<HashMap<i64, String>, StoreError> {
+        Ok(self
+            .channels
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(c, _)| ids.contains(&c.id))
+            .filter_map(|(c, _)| c.name.clone().map(|n| (c.id, n)))
+            .collect())
+    }
     async fn create_channel(
         &self,
         c: &NewChannel,
@@ -65,6 +76,22 @@ impl Store for Memory {
     }
 }
 
+/// What the persister would have written to `channels_by_user` + `channel_heads`.
+#[derive(Default)]
+struct FakeMemberships(Mutex<HashMap<i64, Vec<MyChannel>>>);
+
+impl Memberships for FakeMemberships {
+    async fn channels_of(&self, user_id: i64) -> Result<Vec<MyChannel>, String> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .get(&user_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+}
+
 /// Plays Kafka + sequencer: records events and answers commands with `verdict`.
 struct FakeLog {
     pending: Arc<Pending>,
@@ -92,7 +119,7 @@ impl EventLog for FakeLog {
 
 struct Harness {
     app: Router,
-    state: Arc<App<Memory, FakeLog>>,
+    state: Arc<App<Memory, FakeLog, FakeMemberships>>,
     keys: Arc<Keys>,
 }
 
@@ -123,6 +150,7 @@ async fn harness() -> Harness {
             verdict: Mutex::default(),
             down: Mutex::default(),
         },
+        memberships: FakeMemberships::default(),
         pending,
         verifier: xmsg_authn::Verifier::new(url),
         command_timeout: Duration::from_millis(200),
@@ -445,5 +473,56 @@ async fn an_undecided_command_answers_pending_and_cleans_up() {
     assert!(
         h.state.pending.is_empty(),
         "a command that was never sent leaves no waiter"
+    );
+}
+
+#[tokio::test]
+async fn my_channels_lists_heads_with_names_from_postgres() {
+    let h = harness().await;
+    let (_, created) = h
+        .call(
+            "POST",
+            "/v1/channels",
+            Some(ALICE),
+            Some(serde_json::json!({"type": "public", "name": "general"})),
+        )
+        .await;
+    let id: i64 = created["channel_id"].as_str().unwrap().parse().unwrap();
+    h.state.memberships.0.lock().unwrap().insert(
+        ALICE,
+        vec![
+            MyChannel {
+                channel_id: id,
+                workspace_id: 1,
+                kind: "public".into(),
+                event_seq: 7,
+                msg_seq: 5,
+            },
+            MyChannel {
+                channel_id: 42,
+                workspace_id: 1,
+                kind: "dm".into(),
+                event_seq: 2,
+                msg_seq: 1,
+            },
+        ],
+    );
+    let (status, reply) = h.call("GET", "/v1/me/channels", Some(ALICE), None).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(
+        reply["channels"],
+        serde_json::json!([
+            {"channel_id": id.to_string(), "workspace_id": "1", "type": "public", "name": "general", "event_seq": "7", "msg_seq": "5"},
+            {"channel_id": "42", "workspace_id": "1", "type": "dm", "name": "", "event_seq": "2", "msg_seq": "1"},
+        ])
+    );
+    let (status, reply) = h.call("GET", "/v1/me/channels", Some(BOB), None).await;
+    assert_eq!(
+        (status, reply["channels"].clone()),
+        (StatusCode::OK, serde_json::json!([]))
+    );
+    assert_eq!(
+        h.call("GET", "/v1/me/channels", None, None).await.0,
+        StatusCode::UNAUTHORIZED
     );
 }

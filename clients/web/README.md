@@ -13,7 +13,7 @@ npm install
 npm run dev --workspace @xmsg/web
 ```
 
-Open http://localhost:5173. The Vite dev server is the browser's single origin and proxies `/auth` → auth (`:8081`), `/channels` → channels (`:8082`) and `/ws` → the gateway (`:4000`); override with `XMSG_AUTH_ORIGIN`, `XMSG_CHANNELS_ORIGIN`, `XMSG_GATEWAY_ORIGIN`.
+Open http://localhost:5173. The Vite dev server is the browser's single origin and proxies `/auth` → auth (`:8081`), `/channels` → channels (`:8082`), `/messages` → the messages service's reads (`:8083`) and `/ws` → the gateway (`:4000`); override with `XMSG_AUTH_ORIGIN`, `XMSG_CHANNELS_ORIGIN`, `XMSG_MESSAGES_ORIGIN`, `XMSG_GATEWAY_ORIGIN`.
 
 ## How it behaves
 
@@ -21,8 +21,10 @@ Open http://localhost:5173. The Vite dev server is the browser's single origin a
 - Messages show instantly as **sending…**, become **sent** on the gateway's ack and take their place by `msg_seq` when the sequenced event arrives. Rejections stay visible with the reason.
 - Unconfirmed messages are resent when the connection comes back; the sequencer drops repeats of the same `client_msg_id`.
 - Channels and messages are kept in `localStorage`, so a reload keeps the conversation.
+- **Sync on every (re)connect** ([plan §6.6](../../docs/architecture-plan.md)): the client lists its channels with their heads and fetches events (up to 5 pages of 200) only for channels whose head moved past what it has. History and live events are applied in any order: messages by `msg_seq`, membership only if newer than the last change seen.
 
 ## Not yet
-- **History and sync:** only events received while connected are shown; anything sent while you were away, and channels you were added to meanwhile, appear once the read/sync API exists (next step).
+- Older history on demand (scrolling up), and jumping to the latest page when a channel is far behind (today the first 1,000 missing events load).
+- Message times are when the client received them, not when they were sent.
 - People are shown by user ID (no users directory yet). Copy your ID from the top of the sidebar to share it.
 - Channel names reach members through `channel.created`; DMs are titled by the other members' IDs.

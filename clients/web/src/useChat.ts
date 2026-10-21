@@ -7,14 +7,16 @@ import {
   Connection,
   initialState,
   reduce,
+  sync,
   unsent,
   type Action,
   type ChatState,
   type ConnectionStatus,
 } from "@xmsg/client-core";
-import { gatewayUrl, safe, session } from "./session.ts";
+import { api, gatewayUrl, safe, session } from "./session.ts";
 
-const stateKey = (me: string) => `xmsg.state.${me}`;
+// Versioned: a saved state from an older client shape is dropped and re-synced.
+const stateKey = (me: string) => `xmsg.state.v2.${me}`;
 
 function load(me: string): ChatState {
   const saved = safe(() => localStorage.getItem(stateKey(me)));
@@ -25,6 +27,7 @@ function load(me: string): ChatState {
 export function useChat(me: string) {
   const [state, dispatch] = useReducer((s: ChatState, a: Action) => reduce(s, a), me, load);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  const [syncError, setSyncError] = useState(false);
   const conn = useRef<Connection | null>(null);
   const latest = useRef(state);
   latest.current = state;
@@ -38,8 +41,13 @@ export function useChat(me: string) {
       onSendRejected: (clientMsgId, reason, detail) => dispatch({ type: "sendRejected", clientMsgId, reason, detail }),
       onStatus: (s) => {
         setStatus(s);
-        // Back online: resend the outbox (the sequencer drops repeats).
-        if (s === "online") for (const m of unsent(latest.current)) connection.send(m.channelId, m.key, m.body);
+        if (s !== "online") return;
+        // Back online: resend the outbox (the sequencer drops repeats), then catch up on
+        // what happened meanwhile. Live events keep flowing during the sync.
+        for (const m of unsent(latest.current)) connection.send(m.channelId, m.key, m.body);
+        sync({ api, token: () => session.accessToken(), state: () => latest.current, dispatch })
+          .then(() => setSyncError(false))
+          .catch(() => setSyncError(true));
       },
     });
     conn.current = connection;
@@ -60,5 +68,5 @@ export function useChat(me: string) {
 
   const nameChannel = (channelId: string, name: string) => dispatch({ type: "channelNamed", channelId, name });
 
-  return { state, status, send, nameChannel };
+  return { state, status, syncError, send, nameChannel };
 }

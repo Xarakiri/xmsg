@@ -112,7 +112,7 @@ function channelTitle(c: Channel, me: string): string {
 }
 
 function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
-  const { state, status, send, nameChannel } = useChat(me);
+  const { state, status, syncError, send, nameChannel } = useChat(me);
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
 
@@ -127,7 +127,7 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
         <header className="me">
           <StatusDot status={status} />
           <div>
-            <div className="strong">You</div>
+            <div className="strong">You{syncError && <span className="muted small"> · couldn't load history</span>}</div>
             <button className="link mono" title="Copy your user ID" onClick={() => navigator.clipboard?.writeText(me)}>
               {me}
             </button>

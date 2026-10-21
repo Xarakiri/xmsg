@@ -4,7 +4,9 @@
 //! events to `messages.in`, keyed by channel. The sequencer makes the
 //! authoritative checks (membership, ordering) later (ADR-0006).
 
+pub mod cassandra;
 pub mod config;
+pub mod history;
 pub mod kafka;
 
 use xmsg_proto::Message;

@@ -20,6 +20,7 @@ use xmsg_proto::v1::{
 
 use crate::commands::Pending;
 use crate::kafka::EventLog;
+use crate::memberships::Memberships;
 use crate::store::{Dm, NewChannel, Store, StoreError};
 use crate::{channel_created, new_id, request_id};
 
@@ -29,22 +30,25 @@ pub const MAX_INITIAL_MEMBERS: usize = 500;
 pub const MAX_GROUP_DM: usize = 8;
 const DEFAULT_WORKSPACE: i64 = 1;
 
-pub struct App<S, L> {
+pub struct App<S, L, M> {
     pub store: S,
     pub log: L,
+    /// The user's channels and their heads (the wide-column store).
+    pub memberships: M,
     pub pending: Arc<Pending>,
     pub verifier: Verifier,
     pub command_timeout: Duration,
 }
 
-pub fn router<S: Store, L: EventLog>(app: Arc<App<S, L>>) -> Router {
+pub fn router<S: Store, L: EventLog, M: Memberships>(app: Arc<App<S, L, M>>) -> Router {
     Router::new()
-        .route("/v1/channels", post(create_channel::<S, L>))
-        .route("/v1/dms", post(create_dm::<S, L>))
-        .route("/v1/channels/{channel_id}/members", post(join::<S, L>))
+        .route("/v1/channels", post(create_channel::<S, L, M>))
+        .route("/v1/me/channels", get(my_channels::<S, L, M>))
+        .route("/v1/dms", post(create_dm::<S, L, M>))
+        .route("/v1/channels/{channel_id}/members", post(join::<S, L, M>))
         .route(
             "/v1/channels/{channel_id}/members/{user_id}",
-            delete(kick::<S, L>),
+            delete(kick::<S, L, M>),
         )
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
@@ -84,7 +88,7 @@ impl From<StoreError> for ApiError {
     }
 }
 
-async fn caller<S, L>(app: &App<S, L>, headers: &HeaderMap) -> Result<i64, ApiError> {
+async fn caller<S, L, M>(app: &App<S, L, M>, headers: &HeaderMap) -> Result<i64, ApiError> {
     let header = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -118,8 +122,8 @@ pub struct CreateChannel {
     member_ids: Vec<String>,
 }
 
-async fn create_channel<S: Store, L: EventLog>(
-    State(app): State<Arc<App<S, L>>>,
+async fn create_channel<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
     headers: HeaderMap,
     Json(req): Json<CreateChannel>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
@@ -178,14 +182,43 @@ async fn create_channel<S: Store, L: EventLog>(
     Ok(fast_path(&app, &event, channel.id).await)
 }
 
+/// The caller's channels with their heads (plan §6.6, cheap step): clients compare the
+/// heads with what they have and fetch events only for channels that moved.
+async fn my_channels<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let me = caller(&app, &headers).await?;
+    let channels = app.memberships.channels_of(me).await.map_err(|e| {
+        tracing::error!(error = %e, "membership read failed");
+        ApiError::Unavailable
+    })?;
+    let ids: Vec<i64> = channels.iter().map(|c| c.channel_id).collect();
+    let names = app.store.names(&ids).await?;
+    let list: Vec<Value> = channels
+        .iter()
+        .map(|c| {
+            json!({
+                "channel_id": c.channel_id.to_string(),
+                "workspace_id": c.workspace_id.to_string(),
+                "type": c.kind,
+                "name": names.get(&c.channel_id).cloned().unwrap_or_default(),
+                "event_seq": c.event_seq.to_string(),
+                "msg_seq": c.msg_seq.to_string(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "channels": list })))
+}
+
 #[derive(Deserialize)]
 pub struct CreateDm {
     user_ids: Vec<String>,
 }
 
 /// One other user: the pair's DM (created once, then returned again). More: a new group DM.
-async fn create_dm<S: Store, L: EventLog>(
-    State(app): State<Arc<App<S, L>>>,
+async fn create_dm<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
     headers: HeaderMap,
     Json(req): Json<CreateDm>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
@@ -233,8 +266,8 @@ async fn create_dm<S: Store, L: EventLog>(
 
 /// The committed creation goes straight to `messages.in`. If that fails the channel
 /// still exists (the outbox relay delivers it), so the answer is "pending", not an error.
-async fn fast_path<S, L: EventLog>(
-    app: &App<S, L>,
+async fn fast_path<S, L: EventLog, M>(
+    app: &App<S, L, M>,
     event: &InboundEvent,
     channel_id: i64,
 ) -> (StatusCode, Json<Value>) {
@@ -259,8 +292,8 @@ pub struct Join {
     user_id: Option<String>,
 }
 
-async fn join<S: Store, L: EventLog>(
-    State(app): State<Arc<App<S, L>>>,
+async fn join<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
     headers: HeaderMap,
     Path(channel_id): Path<String>,
     body: Option<Json<Join>>,
@@ -284,8 +317,8 @@ async fn join<S: Store, L: EventLog>(
 }
 
 /// Removes `user_id` (admins), or leaves when it's the caller.
-async fn kick<S: Store, L: EventLog>(
-    State(app): State<Arc<App<S, L>>>,
+async fn kick<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
     headers: HeaderMap,
     Path((channel_id, user_id)): Path<(String, String)>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
@@ -301,8 +334,8 @@ async fn kick<S: Store, L: EventLog>(
 }
 
 /// Sends a membership command and waits for the sequencer's verdict (ADR-0006).
-async fn command<S, L: EventLog>(
-    app: &App<S, L>,
+async fn command<S, L: EventLog, M>(
+    app: &App<S, L, M>,
     channel_id: i64,
     actor: i64,
     payload: inbound_event::Payload,

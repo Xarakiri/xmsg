@@ -11,6 +11,8 @@ fn main() -> std::io::Result<()> {
         .filter(|p| p.extension().is_some_and(|x| x == "proto"))
         .collect();
     files.sort();
+    // The directory too, so a newly added .proto file triggers a rebuild.
+    println!("cargo:rerun-if-changed={}", dir.display());
     for f in &files {
         println!("cargo:rerun-if-changed={}", f.display());
     }

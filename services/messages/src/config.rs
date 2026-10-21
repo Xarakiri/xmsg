@@ -9,6 +9,11 @@ pub struct Config {
     pub partitions: i32,
     /// Max time to wait for Kafka to acknowledge an append before replying "unavailable".
     pub append_timeout_ms: u64,
+    /// History reads over HTTP (plan §5.5); off unless the JWKS URL is set.
+    pub http_port: u16,
+    pub cql_nodes: Vec<String>,
+    pub keyspace: String,
+    pub jwks_url: Option<String>,
 }
 
 impl Config {
@@ -27,6 +32,15 @@ impl Config {
             append_timeout_ms: get("XMSG_APPEND_TIMEOUT_MS", "1500")
                 .parse()
                 .map_err(|_| "XMSG_APPEND_TIMEOUT_MS must be a number".to_string())?,
+            http_port: get("XMSG_MESSAGES_PORT", "8083")
+                .parse()
+                .map_err(|_| "XMSG_MESSAGES_PORT must be a port".to_string())?,
+            cql_nodes: get("XMSG_CQL_NODES", "127.0.0.1:9042")
+                .split(',')
+                .map(str::to_string)
+                .collect(),
+            keyspace: get("XMSG_CQL_KEYSPACE", "xmsg"),
+            jwks_url: std::env::var("XMSG_AUTH_JWKS_URL").ok(),
         })
     }
 }
