@@ -19,3 +19,6 @@ erl_crash.dump
 
 # Stray nested repository created outside this layout (see README)
 /xmsg/
+
+# Claude Code session lock
+.claude/scheduled_tasks.lock

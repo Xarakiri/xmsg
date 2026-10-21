@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+defmodule XmsgGateway.Application do
+  @moduledoc false
+  use Application
+
+  @impl true
+  def start(_type, _args) do
+    http = {Bandit, plug: XmsgGateway.Router, port: XmsgGateway.Config.port(), scheme: :http}
+
+    children =
+      XmsgGateway.Config.bus().child_specs() ++
+        [
+          {Registry, keys: :duplicate, name: XmsgGateway.Users},
+          XmsgGateway.Delivery,
+          Supervisor.child_spec(http, id: :http)
+        ]
+
+    Supervisor.start_link(children, strategy: :one_for_one, name: XmsgGateway.Supervisor)
+  end
+
+  @doc "The port the WebSocket server listens on (useful when configured with port 0)."
+  def port do
+    {:http, pid, _, _} =
+      XmsgGateway.Supervisor
+      |> Supervisor.which_children()
+      |> List.keyfind(:http, 0)
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+    port
+  end
+end
