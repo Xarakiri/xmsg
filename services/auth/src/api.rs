@@ -20,6 +20,8 @@ pub struct Auth<S> {
     pub keys: Keys,
     pub access_ttl_secs: i64,
     pub refresh_ttl_secs: i64,
+    /// How long a rotated refresh token may still be presented (lost reply, racing tabs).
+    pub reuse_grace_secs: i64,
 }
 
 pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
@@ -175,10 +177,22 @@ async fn refresh<S: Store>(
     let (refresh_token, new) = auth.new_refresh(now);
     match auth
         .store
-        .rotate(&token_hash(&req.refresh_token), new, now)
+        .rotate(
+            &token_hash(&req.refresh_token),
+            new,
+            now,
+            Duration::seconds(auth.reuse_grace_secs),
+        )
         .await?
     {
         Rotation::Rotated { user_id, device_id } => {
+            Ok(Json(auth.tokens(user_id, device_id, refresh_token, now)))
+        }
+        Rotation::Reissued { user_id, device_id } => {
+            tracing::info!(
+                device_id,
+                "rotated refresh token reused within grace: reissued"
+            );
             Ok(Json(auth.tokens(user_id, device_id, refresh_token, now)))
         }
         Rotation::Invalid => Err(ApiError::Unauthorized),
@@ -264,7 +278,9 @@ mod tests {
         user_id: i64,
         device_id: i64,
         expires_at: DateTime<Utc>,
-        revoked: bool,
+        revoked_at: Option<DateTime<Utc>>,
+        /// Revoked by rotation rather than logout (`replaced_by IS NOT NULL`).
+        replaced: bool,
     }
 
     #[derive(Default)]
@@ -308,7 +324,8 @@ mod tests {
                 user_id,
                 device_id,
                 expires_at: r.expires_at,
-                revoked: false,
+                revoked_at: None,
+                replaced: false,
             };
             self.tokens.lock().unwrap().insert(r.token_hash, token);
             Ok(())
@@ -318,38 +335,50 @@ mod tests {
             old: &str,
             new: NewRefresh,
             now: DateTime<Utc>,
+            grace: Duration,
         ) -> Result<Rotation, StoreError> {
             let mut tokens = self.tokens.lock().unwrap();
             let Some(t) = tokens.get_mut(old) else {
                 return Ok(Rotation::Invalid);
             };
-            if t.revoked {
-                let device_id = t.device_id;
-                tokens
-                    .values_mut()
-                    .filter(|t| t.device_id == device_id)
-                    .for_each(|t| t.revoked = true);
-                return Ok(Rotation::Reused { device_id });
-            }
-            if t.expires_at <= now {
-                return Ok(Rotation::Invalid);
-            }
-            t.revoked = true;
-            let (user_id, device_id) = (t.user_id, t.device_id);
+            let (user_id, device_id, expires_at) = (t.user_id, t.device_id, t.expires_at);
+            let rotation = match t.revoked_at {
+                Some(at) => {
+                    let in_grace = t.replaced && now < at + grace && expires_at > now;
+                    let live = tokens.values().any(|t| {
+                        t.device_id == device_id && t.revoked_at.is_none() && t.expires_at > now
+                    });
+                    if !(in_grace && live) {
+                        tokens
+                            .values_mut()
+                            .filter(|t| t.device_id == device_id && t.revoked_at.is_none())
+                            .for_each(|t| t.revoked_at = Some(now));
+                        return Ok(Rotation::Reused { device_id });
+                    }
+                    Rotation::Reissued { user_id, device_id }
+                }
+                None if expires_at <= now => return Ok(Rotation::Invalid),
+                None => {
+                    t.revoked_at = Some(now);
+                    t.replaced = true;
+                    Rotation::Rotated { user_id, device_id }
+                }
+            };
             tokens.insert(
                 new.token_hash,
                 Token {
                     user_id,
                     device_id,
                     expires_at: new.expires_at,
-                    revoked: false,
+                    revoked_at: None,
+                    replaced: false,
                 },
             );
-            Ok(Rotation::Rotated { user_id, device_id })
+            Ok(rotation)
         }
-        async fn revoke(&self, hash: &str, _now: DateTime<Utc>) -> Result<(), StoreError> {
+        async fn revoke(&self, hash: &str, now: DateTime<Utc>) -> Result<(), StoreError> {
             if let Some(t) = self.tokens.lock().unwrap().get_mut(hash) {
-                t.revoked = true;
+                t.revoked_at.get_or_insert(now);
             }
             Ok(())
         }
@@ -361,6 +390,7 @@ mod tests {
             keys: Keys::generate(),
             access_ttl_secs: 900,
             refresh_ttl_secs: 3600,
+            reuse_grace_secs: 30,
         });
         (router(auth.clone()), auth)
     }
@@ -453,9 +483,26 @@ mod tests {
         assert_eq!(wrong.0, StatusCode::UNAUTHORIZED);
     }
 
+    async fn refreshed(app: &Router, refresh_token: &str) -> (StatusCode, Option<Tokens>) {
+        let (status, body) = call(
+            app,
+            "/v1/token/refresh",
+            serde_json::json!({ "refresh_token": refresh_token }),
+        )
+        .await;
+        (status, serde_json::from_value(body).ok())
+    }
+
+    /// Moves a token's revocation into the past, as if it was rotated `secs` ago.
+    fn revoked_ago(auth: &Auth<Memory>, refresh_token: &str, secs: i64) {
+        let mut tokens = auth.store.tokens.lock().unwrap();
+        let t = tokens.get_mut(&token_hash(refresh_token)).unwrap();
+        t.revoked_at = Some(t.revoked_at.unwrap() - Duration::seconds(secs));
+    }
+
     #[tokio::test]
     async fn refresh_rotates_and_reuse_revokes_the_session() {
-        let (app, _) = app();
+        let (app, auth) = app();
         signed_up(&app).await;
         let first = logged_in(&app).await;
         let (status, body) = call(
@@ -469,7 +516,9 @@ mod tests {
         assert_ne!(second.refresh_token, first.refresh_token);
         assert_eq!(second.session_id, first.session_id);
 
-        // Replaying the old token (theft) kills the whole session, including the new token.
+        // Replaying the old token (theft) after the grace kills the whole session,
+        // including the new token.
+        revoked_ago(&auth, &first.refresh_token, 31);
         let replay = call(
             &app,
             "/v1/token/refresh",
@@ -484,6 +533,77 @@ mod tests {
         )
         .await;
         assert_eq!(after.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn reuse_within_the_grace_reissues_and_keeps_the_session() {
+        let (app, _) = app();
+        signed_up(&app).await;
+        let first = logged_in(&app).await;
+        // The reply to this refresh is lost: the client still holds `first`.
+        let (status, lost) = refreshed(&app, &first.refresh_token).await;
+        assert_eq!(status, StatusCode::OK);
+        let lost = lost.unwrap();
+
+        let (status, retry) = refreshed(&app, &first.refresh_token).await;
+        assert_eq!(status, StatusCode::OK);
+        let retry = retry.unwrap();
+        assert_eq!(retry.session_id, first.session_id);
+        assert_ne!(retry.refresh_token, lost.refresh_token);
+        // Neither successor was revoked: the chain continues from either.
+        assert_eq!(
+            refreshed(&app, &retry.refresh_token).await.0,
+            StatusCode::OK
+        );
+        assert_eq!(refreshed(&app, &lost.refresh_token).await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn reuse_after_the_grace_revokes_the_session() {
+        let (app, auth) = app();
+        signed_up(&app).await;
+        let first = logged_in(&app).await;
+        let second = refreshed(&app, &first.refresh_token).await.1.unwrap();
+        revoked_ago(&auth, &first.refresh_token, 31);
+        assert_eq!(
+            refreshed(&app, &first.refresh_token).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            refreshed(&app, &second.refresh_token).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn logged_out_tokens_get_no_grace() {
+        let (app, _) = app();
+        signed_up(&app).await;
+        let tokens = logged_in(&app).await;
+        call(
+            &app,
+            "/v1/logout",
+            serde_json::json!({"refresh_token": tokens.refresh_token}),
+        )
+        .await;
+        assert_eq!(
+            refreshed(&app, &tokens.refresh_token).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+
+        // Rotated moments ago, but its successor was logged out: the session stays dead.
+        let first = logged_in(&app).await;
+        let second = refreshed(&app, &first.refresh_token).await.1.unwrap();
+        call(
+            &app,
+            "/v1/logout",
+            serde_json::json!({"refresh_token": second.refresh_token}),
+        )
+        .await;
+        assert_eq!(
+            refreshed(&app, &first.refresh_token).await.0,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]

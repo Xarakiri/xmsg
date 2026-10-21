@@ -324,7 +324,7 @@ workspace_members(workspace_id, user_id, role, joined_at)        PK(workspace_id
 channels(id, workspace_id, type, name, topic, is_archived, created_by, created_at)
 dm_pairs(user_low, user_high, channel_id)                        PK(user_low, user_high)
 devices(id, user_id, platform, push_token, last_seen_at)
-refresh_tokens(id, user_id, device_id, token_hash, expires_at, revoked_at)
+refresh_tokens(id, user_id, device_id, token_hash, expires_at, revoked_at, replaced_by)
 outbox(id, aggregate_type, aggregate_id, event_type, payload, created_at)   -- kept 7 days
 ```
 Membership and per-membership settings are not in Postgres [ADR-0007], [ADR-0016]. The rest can be sharded by `workspace_id` later.

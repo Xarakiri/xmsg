@@ -63,7 +63,10 @@ CREATE TABLE refresh_tokens (
     device_id  BIGINT NOT NULL REFERENCES devices(id),
     token_hash TEXT NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
-    revoked_at TIMESTAMPTZ
+    revoked_at TIMESTAMPTZ,
+    -- The successor's id when revoked by rotation; NULL after logout. Lets a token rotated
+    -- moments ago be reissued (lost reply) instead of treated as theft.
+    replaced_by BIGINT
 );
 -- Refresh is a lookup by hash; uniqueness also guards against a (2^-256) collision.
 CREATE UNIQUE INDEX refresh_tokens_hash ON refresh_tokens (token_hash);

@@ -2,7 +2,7 @@
 //! Users, devices and refresh tokens (plan §7.1). Postgres in production; the trait
 //! lets the HTTP layer be tested without a database.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 
 #[derive(Debug, thiserror::Error)]
@@ -40,6 +40,10 @@ pub struct NewRefresh {
 pub enum Rotation {
     /// The old token was valid; it's revoked and the new one stored.
     Rotated { user_id: i64, device_id: i64 },
+    /// The token was rotated less than the reuse grace ago and the session is still live:
+    /// most likely the client never got the reply (or two tabs raced), so a new token is
+    /// issued and the family stays intact.
+    Reissued { user_id: i64, device_id: i64 },
     /// No such token, or it has expired.
     Invalid,
     /// The token was already revoked: someone replayed it. Every token of that device
@@ -70,11 +74,14 @@ pub trait Store: Send + Sync + 'static {
         refresh: NewRefresh,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
+    /// Replaces a refresh token with `new`. A token revoked by rotation (not by logout)
+    /// within `reuse_grace` of `now` is `Reissued` rather than treated as theft.
     fn rotate(
         &self,
         old_hash: &str,
         new: NewRefresh,
         now: DateTime<Utc>,
+        reuse_grace: Duration,
     ) -> impl Future<Output = Result<Rotation, StoreError>> + Send;
 
     /// Revokes a refresh token; unknown or already revoked tokens are fine.
@@ -85,8 +92,8 @@ pub trait Store: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 }
 
-/// user_id, device_id, expires_at, revoked_at
-type TokenRow = (i64, i64, DateTime<Utc>, Option<DateTime<Utc>>);
+/// user_id, device_id, expires_at, revoked_at, replaced_by
+type TokenRow = (i64, i64, DateTime<Utc>, Option<DateTime<Utc>>, Option<i64>);
 
 pub struct Postgres {
     pool: PgPool,
@@ -158,10 +165,11 @@ impl Store for Postgres {
         old_hash: &str,
         new: NewRefresh,
         now: DateTime<Utc>,
+        reuse_grace: Duration,
     ) -> Result<Rotation, StoreError> {
         let mut tx = self.pool.begin().await?;
         let row: Option<TokenRow> = sqlx::query_as(
-            "SELECT user_id, device_id, expires_at, revoked_at FROM refresh_tokens \
+            "SELECT user_id, device_id, expires_at, revoked_at, replaced_by FROM refresh_tokens \
              WHERE token_hash = $1 FOR UPDATE",
         )
         .bind(old_hash)
@@ -169,27 +177,32 @@ impl Store for Postgres {
         .await?;
         let rotation = match row {
             None => Rotation::Invalid,
-            Some((_, device_id, _, Some(_))) => {
-                sqlx::query("UPDATE refresh_tokens SET revoked_at = $2 WHERE device_id = $1 AND revoked_at IS NULL")
-                    .bind(device_id)
-                    .bind(now)
-                    .execute(&mut *tx)
-                    .await?;
-                Rotation::Reused { device_id }
+            Some((user_id, device_id, expires_at, Some(revoked_at), replaced_by)) => {
+                let in_grace =
+                    replaced_by.is_some() && now < revoked_at + reuse_grace && expires_at > now;
+                if in_grace && live_session(&mut tx, device_id, now).await? {
+                    issue(&mut tx, user_id, device_id, &new, now).await?;
+                    Rotation::Reissued { user_id, device_id }
+                } else {
+                    sqlx::query("UPDATE refresh_tokens SET revoked_at = $2 WHERE device_id = $1 AND revoked_at IS NULL")
+                        .bind(device_id)
+                        .bind(now)
+                        .execute(&mut *tx)
+                        .await?;
+                    Rotation::Reused { device_id }
+                }
             }
-            Some((_, _, expires_at, None)) if expires_at <= now => Rotation::Invalid,
-            Some((user_id, device_id, _, None)) => {
-                sqlx::query("UPDATE refresh_tokens SET revoked_at = $2 WHERE token_hash = $1")
-                    .bind(old_hash)
-                    .bind(now)
-                    .execute(&mut *tx)
-                    .await?;
-                insert_refresh(&mut tx, user_id, device_id, &new).await?;
-                sqlx::query("UPDATE devices SET last_seen_at = $2 WHERE id = $1")
-                    .bind(device_id)
-                    .bind(now)
-                    .execute(&mut *tx)
-                    .await?;
+            Some((_, _, expires_at, None, _)) if expires_at <= now => Rotation::Invalid,
+            Some((user_id, device_id, _, None, _)) => {
+                sqlx::query(
+                    "UPDATE refresh_tokens SET revoked_at = $2, replaced_by = $3 WHERE token_hash = $1",
+                )
+                .bind(old_hash)
+                .bind(now)
+                .bind(new.id)
+                .execute(&mut *tx)
+                .await?;
+                issue(&mut tx, user_id, device_id, &new, now).await?;
                 Rotation::Rotated { user_id, device_id }
             }
         };
@@ -205,6 +218,41 @@ impl Store for Postgres {
             .await?;
         Ok(())
     }
+}
+
+/// Stores the next token of a session and marks the device as seen.
+async fn issue(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: i64,
+    device_id: i64,
+    refresh: &NewRefresh,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    insert_refresh(tx, user_id, device_id, refresh).await?;
+    sqlx::query("UPDATE devices SET last_seen_at = $2 WHERE id = $1")
+        .bind(device_id)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Whether the device still has a usable token, so a grace reissue can't revive a session
+/// that was logged out or revoked for reuse. The row lock makes a concurrent logout wait.
+async fn live_session(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    device_id: i64,
+    now: DateTime<Utc>,
+) -> Result<bool, StoreError> {
+    let live: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM refresh_tokens WHERE device_id = $1 AND revoked_at IS NULL \
+         AND expires_at > $2 LIMIT 1 FOR UPDATE",
+    )
+    .bind(device_id)
+    .bind(now)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(live.is_some())
 }
 
 async fn insert_refresh(

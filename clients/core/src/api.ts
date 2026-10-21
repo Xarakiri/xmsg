@@ -127,16 +127,28 @@ export interface TokenStore {
   save(refreshToken: string | null): void;
 }
 
-/** Keeps a fresh access token; the refresh token rotates on every refresh (auth service). */
+/** The slice of the Web Locks API a Session uses (`navigator.locks` in browsers). */
+export interface Locks {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Keeps a fresh access token; the refresh token rotates on every refresh (auth service).
+ * Tabs share the stored refresh token, so refreshes take a cross-tab lock: a tab presenting
+ * a token another tab has just rotated would look like token theft to the server.
+ */
 export class Session {
   private access: { token: string; expiresAt: number } | undefined;
   private inflight: Promise<string> | undefined;
 
   private readonly api: Api;
   private readonly store: TokenStore;
-  constructor(api: Api, store: TokenStore) {
+  private readonly locks: Locks | null;
+  /** `locks` defaults to `navigator.locks` where there is one; null refreshes unlocked. */
+  constructor(api: Api, store: TokenStore, locks: Locks | null = globalThis.navigator?.locks ?? null) {
     this.api = api;
     this.store = store;
+    this.locks = locks;
   }
 
   userId = "";
@@ -166,7 +178,13 @@ export class Session {
     if (refresh) await this.api.logout(refresh).catch(() => undefined);
   }
 
-  private async refreshNow(): Promise<string> {
+  private refreshNow(): Promise<string> {
+    return this.locks ? this.locks.request("xmsg-refresh", () => this.refreshLocked()) : this.refreshLocked();
+  }
+
+  private async refreshLocked(): Promise<string> {
+    // Read only now, holding the lock: a tab that refreshed while we waited has stored its
+    // successor, and refreshing with that continues the chain.
     const refresh = this.store.load();
     if (!refresh) throw new ApiError(401, "not logged in");
     try {
@@ -174,7 +192,8 @@ export class Session {
       this.adopt(tokens);
       return tokens.access_token;
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) this.store.save(null);
+      // Don't drop a token another tab stored meanwhile (e.g. a fresh login).
+      if (e instanceof ApiError && e.status === 401 && this.store.load() === refresh) this.store.save(null);
       throw e;
     }
   }
