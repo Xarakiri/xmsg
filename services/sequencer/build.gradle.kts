@@ -59,7 +59,7 @@ testing {
                 implementation(project())
                 implementation("org.apache.kafka:kafka-streams:$kafkaVersion")
                 implementation("com.google.protobuf:protobuf-java:$protobufVersion")
-                implementation("org.testcontainers:kafka:1.21.0")
+                implementation("org.testcontainers:testcontainers-kafka:2.0.5")
                 implementation("org.jetbrains.kotlin:kotlin-test")
                 runtimeOnly("org.slf4j:slf4j-simple:2.0.16")
             }
