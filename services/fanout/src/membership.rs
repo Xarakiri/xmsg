@@ -70,8 +70,14 @@ impl Membership {
         event: &SequencedEvent,
         source: &impl SnapshotSource,
     ) -> Result<(), Unknown> {
-        if self.channels.contains_key(&event.channel_id)
-            || matches!(event.payload, Some(Payload::ChannelCreated(_)))
+        // Rejections (event_seq 0) go only to the actor and never need membership; they
+        // may even concern a channel that doesn't exist, which will never have a snapshot.
+        if event.event_seq <= 0
+            || matches!(
+                event.payload,
+                Some(Payload::Rejected(_)) | Some(Payload::ChannelCreated(_))
+            )
+            || self.channels.contains_key(&event.channel_id)
         {
             return Ok(());
         }
@@ -173,6 +179,22 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(m.get(7), Some(&HashSet::from([2, 3])));
+    }
+
+    #[tokio::test]
+    async fn rejections_never_wait_for_membership() {
+        // Regression: a send to a channel that doesn't exist is rejected by the sequencer;
+        // waiting for that channel's snapshot blocked the whole partition forever.
+        use xmsg_proto::v1::Rejected;
+        let mut m = Membership::default();
+        let rejected = SequencedEvent {
+            channel_id: 4242,
+            event_seq: 0,
+            payload: Some(Payload::Rejected(Rejected::default())),
+            ..Default::default()
+        };
+        assert_eq!(m.ensure_loaded(&rejected, &Fixed(None)).await, Ok(()));
+        assert!(m.get(4242).is_none());
     }
 
     #[tokio::test]

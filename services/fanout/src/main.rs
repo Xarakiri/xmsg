@@ -111,13 +111,21 @@ async fn main() -> ExitCode {
     if let Err(e) = consumer.subscribe(&[EVENTS_TOPIC]) {
         return fail(&format!("subscribing to {EVENTS_TOPIC}: {e}"));
     }
-    tracing::info!("fanout ready");
-
     let mut membership = Membership::default();
     let mut streams = Streams::default();
     let mut heads_tick = tokio::time::interval(Duration::from_secs(1));
+    let mut announced = false;
 
     loop {
+        // New epochs for (re)assigned partitions. "Ready" waits for the first assignment:
+        // a new consumer group starts at the latest offset, so earlier events aren't delivered.
+        for partition in assigned.lock().unwrap().drain(..) {
+            streams.reset_partition(partition as u32, now_ms());
+            if !announced {
+                tracing::info!("fanout ready");
+                announced = true;
+            }
+        }
         let message = tokio::select! {
             m = consumer.recv() => m,
             _ = heads_tick.tick() => {
