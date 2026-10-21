@@ -51,6 +51,7 @@ defmodule Xmsg.V1.ChannelCreated do
   field :type, 1, type: Xmsg.V1.ChannelType, enum: true
   field :initial_member_ids, 2, repeated: true, type: :int64, json_name: "initialMemberIds"
   field :members, 3, repeated: true, type: Xmsg.V1.MemberJoined
+  field :name, 4, type: :string
 end
 
 defmodule Xmsg.V1.MemberJoinRequested do

@@ -22,3 +22,6 @@ erl_crash.dump
 
 # Claude Code session lock
 .claude/scheduled_tasks.lock
+
+# Client build output
+dist/

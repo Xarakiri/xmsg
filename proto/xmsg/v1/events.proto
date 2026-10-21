@@ -39,6 +39,8 @@ message ChannelCreated {
   // Set by the sequencer on output (ignored on input): the initial members
   // with their roles, so consumers never re-derive the rules.
   repeated MemberJoined members = 3;
+  // Display name at creation (empty for DMs). Later renames are `channel.updated`.
+  string name = 4;
 }
 
 // The actor adds `user_id` (an invite), or joins themselves when actor_id == user_id.

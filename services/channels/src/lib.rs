@@ -48,6 +48,7 @@ pub fn channel_created(
     workspace_id: i64,
     creator: i64,
     channel_type: ChannelType,
+    name: &str,
     members: &[i64],
 ) -> InboundEvent {
     InboundEvent {
@@ -58,6 +59,7 @@ pub fn channel_created(
         payload: Some(inbound_event::Payload::ChannelCreated(ChannelCreated {
             r#type: channel_type as i32,
             initial_member_ids: members.to_vec(),
+            name: name.to_string(),
             ..Default::default()
         })),
         ..Default::default()
@@ -70,8 +72,8 @@ mod tests {
 
     #[test]
     fn creation_events_dedupe_by_channel() {
-        let a = channel_created(5, 1, 7, ChannelType::Private, &[8]);
-        let b = channel_created(5, 1, 7, ChannelType::Private, &[8]);
+        let a = channel_created(5, 1, 7, ChannelType::Private, "x", &[8]);
+        let b = channel_created(5, 1, 7, ChannelType::Private, "x", &[8]);
         assert_eq!(a, b);
         assert_eq!(a.dedupe_id, "create:5");
     }

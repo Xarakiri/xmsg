@@ -12,13 +12,16 @@ A Slack-style messenger designed for 1M concurrent users, that companies can als
 |---|---|---|
 | `proto/` | Protobuf contracts (Buf): client protocol, events, commands | Apache-2.0 |
 | `spec/partitioning/` | Partition function spec and shared test vectors | Apache-2.0 |
-| `crates/` | Shared Rust libraries: `xmsg-partition`, `xmsg-proto` (prost types for `proto/`) | AGPL-3.0-only |
+| `crates/` | Shared Rust libraries: `xmsg-partition`, `xmsg-proto` (prost types for `proto/`), `xmsg-authn` (access-token checks) | AGPL-3.0-only |
 | `services/sequencer/` | Sequencer (Kotlin + Kafka Streams) | AGPL-3.0-only |
 | `services/gateway/` | Realtime gateway (Elixir) | AGPL-3.0-only |
+| `services/auth/` | Auth (Rust): sign-up, login, Ed25519 JWTs, refresh tokens, JWKS | AGPL-3.0-only |
+| `services/channels/` | Channels (Rust): channels and DMs (outbox + fast path), membership commands | AGPL-3.0-only |
 | `services/messages/` | Messages service (Rust): NATS sends → `messages.in` | AGPL-3.0-only |
 | `services/persister/` | Persister (Rust): `messages.persisted` → Cassandra/ScyllaDB | AGPL-3.0-only |
 | `services/fanout/` | Fan-out (Rust): sequenced events → gateways → clients | AGPL-3.0-only |
-| `clients/core/` | Shared TypeScript client core | Apache-2.0 |
+| `clients/core/` | Shared TypeScript client core: protocol, connection, state | Apache-2.0 |
+| `clients/web/` | Minimal web client (React + Vite) | Apache-2.0 |
 | `ee/`, `*/ee/` | Enterprise Edition code | Commercial ([ee/LICENSE](ee/LICENSE)) |
 | `deploy/compose/` | Small-tier Docker Compose stack (also local dev) | AGPL-3.0-only |
 | `tools/` | Repo scripts, `tools/loadgen` (WebSocket load generator), `tools/e2e-smoke` (pipeline smoke test) | AGPL-3.0-only |
