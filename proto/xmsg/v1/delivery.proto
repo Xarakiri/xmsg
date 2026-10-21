@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// Fan-out → gateway, published on NATS subject `gw.{gateway_id}` (ADR-0009).
+message GatewayBatch {
+  // Stream identity: one stream per (fan-out partition, owner epoch).
+  // A new owner_epoch resets the gateway's gap tracking.
+  uint32 partition = 1;
+  uint64 owner_epoch = 2;
+  // Increases by one per batch on this stream; a jump means NATS dropped a batch.
+  uint64 seq = 3;
+  repeated Delivery deliveries = 4;
+}
+
+// One server frame for a set of local users. The frame is encoded once by
+// fan-out and sent unchanged to every recipient's socket (encode once).
+message Delivery {
+  repeated int64 user_ids = 1;
+  // An encoded xmsg.v1.ServerFrame.
+  bytes server_frame = 2;
+}
+
+// Sent by each fan-out instance every second on `stream_heads.{gateway_id}`:
+// the last sequence of each of its streams, so a lost last batch is noticed.
+message StreamHeads {
+  repeated StreamHead heads = 1;
+}
+
+message StreamHead {
+  uint32 partition = 1;
+  uint64 owner_epoch = 2;
+  uint64 seq = 3;
+}
