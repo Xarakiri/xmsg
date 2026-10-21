@@ -11,6 +11,8 @@ pub struct Config {
     pub jwks_url: String,
     /// How long a membership action waits for the sequencer before answering "pending".
     pub command_timeout_ms: u64,
+    pub cql_nodes: Vec<String>,
+    pub keyspace: String,
 }
 
 impl Config {
@@ -39,6 +41,11 @@ impl Config {
             command_timeout_ms: get("XMSG_COMMAND_TIMEOUT_MS", "2000")
                 .parse()
                 .map_err(|_| "XMSG_COMMAND_TIMEOUT_MS must be a number".to_string())?,
+            cql_nodes: get("XMSG_CQL_NODES", "127.0.0.1:9042")
+                .split(',')
+                .map(str::to_string)
+                .collect(),
+            keyspace: get("XMSG_CQL_KEYSPACE", "xmsg"),
         })
     }
 }

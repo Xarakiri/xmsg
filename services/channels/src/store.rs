@@ -55,6 +55,12 @@ pub trait Store: Send + Sync + 'static {
         event: &InboundEvent,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
+    /// Names of the given channels (absent: unknown; DMs have no name).
+    fn names(
+        &self,
+        ids: &[i64],
+    ) -> impl Future<Output = Result<std::collections::HashMap<i64, String>, StoreError>> + Send;
+
     /// Like `create_channel` for a 1:1 DM, unless the pair already has one.
     fn create_dm(
         &self,
@@ -119,6 +125,21 @@ async fn insert_channel(
 }
 
 impl Store for Postgres {
+    async fn names(
+        &self,
+        ids: &[i64],
+    ) -> Result<std::collections::HashMap<i64, String>, StoreError> {
+        let rows: Vec<(i64, Option<String>)> =
+            sqlx::query_as("SELECT id, name FROM channels WHERE id = ANY($1)")
+                .bind(ids)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, name)| name.map(|n| (id, n)))
+            .collect())
+    }
+
     async fn create_channel(
         &self,
         channel: &NewChannel,

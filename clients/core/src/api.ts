@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// HTTP calls to the auth and channels services. IDs are decimal strings, as on the wire.
+// HTTP calls to the auth, channels and messages services. IDs are decimal strings, as on the wire.
+
+import { fromBinary } from "@bufbuild/protobuf";
+import { EventPageSchema, type EventPage } from "./gen/xmsg/v1/sync_pb.js";
+import type { ChannelKind, ListedChannel } from "./state.ts";
 
 export interface Tokens {
   access_token: string;
@@ -13,6 +17,8 @@ export interface Endpoints {
   /** Base URL of the auth service, e.g. "/auth" behind a proxy or "http://localhost:8081". */
   auth: string;
   channels: string;
+  /** Base URL of the messages service's HTTP reads. */
+  messages: string;
 }
 
 export class ApiError extends Error {
@@ -83,6 +89,31 @@ export class Api {
       token,
       body: json(userId ? { user_id: userId } : {}),
     });
+  }
+
+  /** My channels with their heads (sync, cheap step). */
+  async myChannels(token: string): Promise<ListedChannel[]> {
+    const reply = await call<{ channels: { channel_id: string; type: string; name: string; event_seq: string }[] }>(
+      `${this.endpoints.channels}/v1/me/channels`,
+      { method: "GET", token },
+    );
+    return reply.channels.map((c) => ({
+      id: c.channel_id,
+      kind: (["public", "private", "dm", "group_dm", "broadcast"].includes(c.type) ? c.type : "unknown") as ChannelKind,
+      name: c.name,
+      eventSeq: Number(c.event_seq),
+    }));
+  }
+
+  /** A channel's events after `after` (sync, lazy step). 404: not a member (any more). */
+  async events(token: string, channelId: string, after: number, limit = 200): Promise<EventPage> {
+    const url = `${this.endpoints.messages}/v1/channels/${channelId}/events?after=${after}&limit=${limit}`;
+    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new ApiError(response.status, (body as { error?: string }).error ?? response.statusText);
+    }
+    return fromBinary(EventPageSchema, new Uint8Array(await response.arrayBuffer()));
   }
 
   /** Leave (your own ID) or remove someone (admins). */

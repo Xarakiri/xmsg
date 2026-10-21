@@ -49,6 +49,8 @@ test("channel.created brings a channel with its name and members", () => {
     name: "design",
     members: ["101", "102"],
     eventSeq: 1,
+    syncedSeq: 1,
+    membershipSeq: 1,
     left: false,
   });
 });
@@ -72,9 +74,44 @@ test("an own message goes pending → sent → confirmed in place, ordered by ms
   assert.deepEqual(unsent(s), []);
 });
 
-test("repeated and out-of-date events are ignored", () => {
+test("repeated events change nothing", () => {
   const once = apply(initialState(ME), created, message(1, 102n, "b-1", "hi"));
-  assert.equal(apply(once, message(1, 102n, "b-1", "hi"), created), once);
+  assert.deepEqual(apply(once, message(1, 102n, "b-1", "hi"), created), once);
+});
+
+test("history arriving after newer live events still fills in the older messages", () => {
+  // Live: created (1), then message 3 (event 4) while events 2-3 were missed.
+  let s = apply(initialState(ME), created, message(3, 102n, "b-3", "third"));
+  assert.equal(s.channels["7"]!.eventSeq, 4);
+  assert.equal(s.channels["7"]!.syncedSeq, 1, "a gap: only event 1 is contiguous");
+  s = reduce(s, { type: "history", channelId: "7", events: [message(1, 102n, "b-1", "first"), message(2, 101n, "c-2", "second")], through: 3, at: 2 });
+  assert.deepEqual(s.messages["7"]!.map((m) => m.body), ["first", "second", "third"]);
+  assert.equal(s.channels["7"]!.syncedSeq, 3);
+  assert.equal(s.messages["7"]![1]!.key, "c-2", "own message from history keeps its client_msg_id key");
+});
+
+test("an older membership event never undoes a newer one", () => {
+  const leave = ev({ eventSeq: 5n, payload: { case: "memberLeft", value: { userId: 103n } } });
+  const join = ev({ eventSeq: 3n, payload: { case: "memberJoined", value: { userId: 103n, role: MemberRole.MEMBER } } });
+  const s = apply(initialState(ME), created, leave, join);
+  assert.deepEqual(s.channels["7"]!.members, ["101", "102"]);
+});
+
+test("the channel list adds channels we missed, with names, and sync knows what's behind", async () => {
+  const { behind } = await import("../src/state.ts");
+  let s = apply(initialState(ME), created);
+  const listed = [
+    { id: "7", kind: "private" as const, name: "design", eventSeq: 6 },
+    { id: "9", kind: "public" as const, name: "general", eventSeq: 2 },
+  ];
+  s = reduce(s, { type: "channelList", channels: listed });
+  assert.equal(s.channels["9"]!.name, "general");
+  assert.deepEqual(behind(s, listed), [
+    { id: "7", after: 1 },
+    { id: "9", after: 0 },
+  ]);
+  s = reduce(s, { type: "lostAccess", channelId: "9" });
+  assert.equal(s.channels["9"]!.left, true);
 });
 
 test("a rejected send becomes a visible error, never silently dropped", () => {

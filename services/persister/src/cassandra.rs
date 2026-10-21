@@ -42,8 +42,8 @@ impl Store {
         let k = keyspace;
         Ok(Store {
             insert_message: prepare(format!(
-                "INSERT INTO {k}.messages (channel_id, bucket, msg_seq, message_id, event_seq, author_id, body, deleted) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, false)"
+                "INSERT INTO {k}.messages (channel_id, bucket, msg_seq, message_id, event_seq, author_id, client_msg_id, body, deleted) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)"
             ))
             .await?,
             insert_channel_event: prepare(format!(
@@ -109,12 +109,20 @@ impl Store {
                 message_id,
                 event_seq,
                 author_id,
+                client_msg_id,
                 body,
             } => {
                 s.execute_unpaged(
                     &self.insert_message,
                     (
-                        channel_id, bucket, msg_seq, message_id, event_seq, author_id, body,
+                        channel_id,
+                        bucket,
+                        msg_seq,
+                        message_id,
+                        event_seq,
+                        author_id,
+                        client_msg_id,
+                        body,
                     ),
                 )
                 .await?;

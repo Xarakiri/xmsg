@@ -8,6 +8,7 @@ use xmsg_channels::api::{App, router};
 use xmsg_channels::commands::Pending;
 use xmsg_channels::config::Config;
 use xmsg_channels::kafka::{KafkaLog, TOPIC_IN, follow_results};
+use xmsg_channels::memberships::Cassandra;
 use xmsg_channels::store::Postgres;
 
 fn fail(message: &str) -> ! {
@@ -36,6 +37,9 @@ async fn main() {
         )),
         Err(e) => fail(&e),
     }
+    let memberships = Cassandra::connect(&config.cql_nodes, &config.keyspace)
+        .await
+        .unwrap_or_else(|e| fail(&e));
     let pending = Arc::new(Pending::default());
     follow_results(&config.kafka_bootstrap, pending.clone())
         .await
@@ -43,6 +47,7 @@ async fn main() {
     let app = Arc::new(App {
         store,
         log,
+        memberships,
         pending,
         verifier: xmsg_authn::Verifier::new(config.jwks_url),
         command_timeout: Duration::from_millis(config.command_timeout_ms),

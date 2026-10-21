@@ -3913,9 +3913,11 @@ name = "xmsg-channels"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "futures-util",
  "getrandom 0.4.3",
  "http-body-util",
  "rdkafka",
+ "scylla",
  "serde",
  "serde_json",
  "sqlx",
@@ -3977,11 +3979,19 @@ name = "xmsg-messages"
 version = "0.0.0"
 dependencies = [
  "async-nats",
+ "axum",
  "futures-util",
+ "http-body-util",
  "rdkafka",
+ "scylla",
+ "serde",
+ "serde_json",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "xmsg-auth",
+ "xmsg-authn",
  "xmsg-partition",
  "xmsg-proto",
 ]

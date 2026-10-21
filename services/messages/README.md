@@ -8,10 +8,12 @@ First Phase 1a service ([plan §5.5](../../docs/architecture-plan.md)). Receives
 - **Early, best-effort checks** (the sequencer makes the authoritative ones, ADR-0006): the payload is a `send_message`; positive channel and actor IDs; a 1–128 byte `client_msg_id`; no `request_id`; a non-blank body of at most 40,000 characters.
 - **Appends** the unchanged `InboundEvent` with an idempotent producer (`acks=all`) and librdkafka's `murmur2_random` partitioner, which matches [spec/partitioning](../../spec/partitioning/README.md) (verified by an integration test).
 - **Replies** with `SendResult`: `accepted`, or a rejection with a reason. If Kafka doesn't acknowledge within `XMSG_APPEND_TIMEOUT_MS`, the reply is `UNAVAILABLE`, and the gateway stays silent so the client retries (dedupe makes the retry safe).
+- **History reads** (§6.6 lazy step), over HTTP when `XMSG_AUTH_JWKS_URL` is set: `GET /v1/channels/{id}/events?after=<event_seq>&limit=<n ≤ 500>` with a bearer token returns a protobuf `EventPage` (`application/x-protobuf`): the channel's events after `after`, rebuilt exactly as they were delivered live (from `channel_events`, with message pointers filled from `messages`, including the sender's `client_msg_id`), plus `has_more`, the head and `truncated` when the position is older than the 30-day log. Members only; anyone else gets 404, so channel IDs don't leak.
 - **Startup check:** exits with code 2 if `messages.in` is missing or its partition count differs from `XMSG_PARTITIONS` (ADR-0021).
 
 ## Not yet
-- Membership and permission pre-checks from a Redis cache, `@channel` rules, rate limits, edits/deletes/reactions, history reads and the sync API.
+- Membership and permission pre-checks from a Redis cache, `@channel` rules, rate limits, edits/deletes/reactions.
+- Reading backwards (older pages by `msg_seq`), the latest page for a channel far behind, and Redis `chan_head` with sync tokens (Phase 1b).
 
 ## Configuration
 
@@ -21,6 +23,9 @@ First Phase 1a service ([plan §5.5](../../docs/architecture-plan.md)). Receives
 | `XMSG_KAFKA_BOOTSTRAP` | `127.0.0.1:9092` | Kafka bootstrap servers |
 | `XMSG_PARTITIONS` | *(required)* | This installation's partition count |
 | `XMSG_APPEND_TIMEOUT_MS` | `1500` | Max wait for Kafka to acknowledge an append |
+| `XMSG_AUTH_JWKS_URL` | *(none)* | Auth service JWKS; enables the history HTTP API |
+| `XMSG_MESSAGES_PORT` | `8083` | History HTTP port |
+| `XMSG_CQL_NODES` / `XMSG_CQL_KEYSPACE` | `127.0.0.1:9042` / `xmsg` | Wide-column store for history |
 | `RUST_LOG` | `info` | Log filter |
 
 ## Tests

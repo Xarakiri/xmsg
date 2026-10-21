@@ -13,6 +13,7 @@ pub mod api;
 pub mod commands;
 pub mod config;
 pub mod kafka;
+pub mod memberships;
 pub mod store;
 
 use std::time::{SystemTime, UNIX_EPOCH};

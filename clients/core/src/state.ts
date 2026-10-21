@@ -12,8 +12,12 @@ export interface Channel {
   kind: ChannelKind;
   name: string;
   members: string[];
-  /** Highest event_seq applied; older or repeated events are ignored. */
+  /** Highest event_seq seen (live or from history). */
   eventSeq: number;
+  /** Every event up to here has been applied: sync fetches what comes after it. */
+  syncedSeq: number;
+  /** event_seq of the last membership change applied; older ones are ignored. */
+  membershipSeq: number;
   /** The current user was removed or left. */
   left: boolean;
 }
@@ -44,7 +48,20 @@ export type Action =
   | { type: "send"; channelId: string; clientMsgId: string; body: string; at: number }
   | { type: "ack"; clientMsgId: string }
   | { type: "sendRejected"; clientMsgId: string; reason: RejectReason; detail: string }
-  | { type: "channelNamed"; channelId: string; name: string };
+  | { type: "channelNamed"; channelId: string; name: string }
+  /** The server's list of my channels (sync, cheap step). */
+  | { type: "channelList"; channels: ListedChannel[] }
+  /** A contiguous page of a channel's events, ending at `through` (sync, lazy step). */
+  | { type: "history"; channelId: string; events: SequencedEvent[]; through: number; at: number }
+  /** The server says we're no longer a member (history refused). */
+  | { type: "lostAccess"; channelId: string };
+
+export interface ListedChannel {
+  id: string;
+  kind: ChannelKind;
+  name: string;
+  eventSeq: number;
+}
 
 export function initialState(me: string): ChatState {
   return { me, channels: {}, messages: {} };
@@ -98,7 +115,45 @@ export function reduce(state: ChatState, action: Action): ChatState {
     }
     case "event":
       return applyEvent(state, action.event, action.at);
+    case "channelList": {
+      let next = state;
+      for (const listed of action.channels) {
+        const known = next.channels[listed.id];
+        next = withChannel(next, {
+          ...(known ?? emptyChannel(listed.id, listed.kind)),
+          kind: known && known.kind !== "unknown" ? known.kind : listed.kind,
+          name: known?.name || listed.name,
+          left: false,
+        });
+      }
+      return next;
+    }
+    case "history": {
+      let next = action.events.reduce((s, e) => applyEvent(s, e, action.at), state);
+      const channel = next.channels[action.channelId];
+      if (channel && action.through > channel.syncedSeq) {
+        next = withChannel(next, { ...channel, syncedSeq: action.through, eventSeq: Math.max(channel.eventSeq, action.through) });
+      }
+      return next;
+    }
+    case "lostAccess": {
+      const channel = state.channels[action.channelId];
+      return channel ? withChannel(state, { ...channel, left: true }) : state;
+    }
   }
+}
+
+function emptyChannel(id: string, kind: ChannelKind): Channel {
+  return { id, kind, name: "", members: [], eventSeq: 0, syncedSeq: 0, membershipSeq: 0, left: false };
+}
+
+/** Records that `seq` was applied: the highest seen, and contiguous progress. */
+function seen(channel: Channel, seq: number): Channel {
+  return {
+    ...channel,
+    eventSeq: Math.max(channel.eventSeq, seq),
+    syncedSeq: seq === channel.syncedSeq + 1 ? seq : channel.syncedSeq,
+  };
 }
 
 function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState {
@@ -117,26 +172,27 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
   }
 
   const eventSeq = Number(e.eventSeq);
-  let channel = state.channels[channelId];
-  if (channel && eventSeq <= channel.eventSeq) return state; // duplicate or replay
-
-  if (payload.case === "channelCreated") {
-    const members = payload.value.members.map((m) => m.userId.toString());
-    return withChannel(state, {
-      id: channelId,
-      kind: KINDS[e.channelType] ?? "unknown",
-      name: payload.value.name,
-      members: members.length ? members : payload.value.initialMemberIds.map(String),
-      eventSeq,
-      left: false,
-    });
-  }
-
+  const kind = KINDS[e.channelType] ?? "unknown";
   // A channel we hear about first through a later event (e.g. we were invited).
-  channel ??= { id: channelId, kind: KINDS[e.channelType] ?? "unknown", name: "", members: [], eventSeq: 0, left: false };
-  channel = { ...channel, eventSeq };
+  let channel = state.channels[channelId] ?? emptyChannel(channelId, kind);
+  if (channel.kind === "unknown") channel = { ...channel, kind };
+  const membershipChange = payload.case === "channelCreated" || payload.case === "memberJoined" || payload.case === "memberLeft";
+  if (membershipChange && eventSeq <= channel.membershipSeq) {
+    // Older than the membership we already have (history arriving after live events).
+    return withChannel(state, seen(channel, eventSeq));
+  }
+  if (membershipChange) channel = { ...channel, membershipSeq: eventSeq };
+  channel = seen(channel, eventSeq);
 
   switch (payload.case) {
+    case "channelCreated": {
+      const members = payload.value.members.map((m) => m.userId.toString());
+      return withChannel(state, {
+        ...channel,
+        name: channel.name || payload.value.name,
+        members: members.length ? members : payload.value.initialMemberIds.map(String),
+      });
+    }
     case "memberJoined": {
       const user = payload.value.userId.toString();
       const members = channel.members.includes(user) ? channel.members : [...channel.members, user];
@@ -202,6 +258,14 @@ function updateOwn(state: ChatState, clientMsgId: string, f: (m: Message) => Mes
     }
   }
   return state;
+}
+
+/** Channels whose server head is past what we have, oldest gap first. */
+export function behind(state: ChatState, listed: ListedChannel[]): { id: string; after: number }[] {
+  return listed
+    .map((l) => ({ id: l.id, head: l.eventSeq, after: state.channels[l.id]?.syncedSeq ?? 0 }))
+    .filter((c) => c.head > c.after)
+    .map(({ id, after }) => ({ id, after }));
 }
 
 /** Messages still waiting for the gateway's ack, oldest first (the outbox to resend on reconnect). */

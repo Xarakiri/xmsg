@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use tracing_subscriber::EnvFilter;
+use xmsg_messages::cassandra::Cassandra;
 use xmsg_messages::config::Config;
+use xmsg_messages::history;
 use xmsg_messages::kafka::{KafkaLog, TOPIC_IN};
 use xmsg_messages::{QUEUE_GROUP, SEND_SUBJECT, handle};
 
@@ -50,6 +52,28 @@ async fn main() -> ExitCode {
         Ok(s) => s,
         Err(e) => return fail(&format!("subscribing to {SEND_SUBJECT}: {e}")),
     };
+    // History reads over HTTP (plan §5.5), when the auth service's JWKS is configured.
+    if let Some(jwks_url) = config.jwks_url.clone() {
+        let store = match Cassandra::connect(&config.cql_nodes, &config.keyspace).await {
+            Ok(s) => s,
+            Err(e) => return fail(&e),
+        };
+        let app = Arc::new(history::App {
+            store,
+            verifier: xmsg_authn::Verifier::new(jwks_url),
+        });
+        let listener = match tokio::net::TcpListener::bind(("0.0.0.0", config.http_port)).await {
+            Ok(l) => l,
+            Err(e) => return fail(&format!("bind :{}: {e}", config.http_port)),
+        };
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, history::router(app)).await {
+                tracing::error!(error = %e, "history HTTP server stopped");
+            }
+        });
+        tracing::info!(port = config.http_port, "history reads ready");
+    }
+
     tracing::info!(
         subject = SEND_SUBJECT,
         queue = QUEUE_GROUP,
