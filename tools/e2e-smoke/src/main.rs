@@ -16,13 +16,19 @@
 //! 5. If `XMSG_CQL_NODES` is set, checks what the persister wrote: the three
 //!    messages, the members and the channel head.
 //!
+//! With `XMSG_CHANNELS_URL` set (needs `XMSG_AUTH_URL`), the channel is created
+//! through the channels service, and at the end membership commands are checked
+//! against the sequencer's verdicts: a non-admin can't remove someone, an outsider
+//! can't join a private channel, an admin's invite and a member leaving are accepted.
+//!
 //! With `XMSG_AUTH_URL` set, the three users sign up and log in through the auth
 //! service and connect with real access tokens (the gateway checks them against the
 //! JWKS); a forged token must be refused. Without it, development tokens are used.
 //!
 //! Exits 0 on success, 1 on failure.
 //! Env: XMSG_GATEWAY_URL (ws://127.0.0.1:4000/ws), XMSG_KAFKA_BOOTSTRAP (127.0.0.1:9092),
-//! XMSG_CQL_NODES (optional, e.g. 127.0.0.1:9042), XMSG_AUTH_URL (optional, e.g. http://127.0.0.1:8081).
+//! XMSG_CQL_NODES (optional, e.g. 127.0.0.1:9042), XMSG_AUTH_URL (optional, e.g. http://127.0.0.1:8081),
+//! XMSG_CHANNELS_URL (optional, e.g. http://127.0.0.1:8082).
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -72,7 +78,7 @@ async fn run() -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    let channel = run_id; // unique per run
+    let channels_url = std::env::var("XMSG_CHANNELS_URL").ok();
     let users = match std::env::var("XMSG_AUTH_URL") {
         Ok(auth) => {
             let mut users = Vec::new();
@@ -97,34 +103,32 @@ async fn run() -> Result<(), String> {
     let (alice, bob) = (users[0].0, users[1].0);
 
     // 1. Create the channel (alice and bob are members).
-    let producer: FutureProducer = ClientConfig::new()
-        .set("bootstrap.servers", &bootstrap)
-        .set("partitioner", "murmur2_random")
-        .create()
-        .map_err(|e| e.to_string())?;
-    let created = InboundEvent {
-        channel_id: channel,
-        workspace_id: 1,
-        actor_id: alice,
-        dedupe_id: format!("create-{channel}"),
-        payload: Some(inbound_event::Payload::ChannelCreated(ChannelCreated {
-            r#type: ChannelType::Private as i32,
-            initial_member_ids: vec![alice, bob],
-            ..Default::default()
-        })),
-        ..Default::default()
+    let channel = match &channels_url {
+        Some(url) => {
+            let (status, reply) = call(
+                "POST",
+                &format!("{url}/v1/channels"),
+                &users[0].1,
+                Some(serde_json::json!({"type": "private", "name": format!("e2e-{run_id}"), "member_ids": [bob.to_string()]})),
+            )
+            .await?;
+            if status != 201 {
+                return Err(format!("creating the channel: {status} {reply}"));
+            }
+            let id = reply["channel_id"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .ok_or("no channel_id")?;
+            println!("created channel {id} with members {alice}, {bob} via {url}");
+            id
+        }
+        None => {
+            let channel = run_id; // unique per run
+            produce_channel_created(&bootstrap, channel, alice, bob).await?;
+            println!("created channel {channel} with members {alice}, {bob}");
+            channel
+        }
     };
-    let key = xmsg_partition::channel_key(channel);
-    producer
-        .send(
-            FutureRecord::to("messages.in")
-                .key(&key[..])
-                .payload(&created.encode_to_vec()),
-            Duration::from_secs(10),
-        )
-        .await
-        .map_err(|(e, _)| format!("producing channel.created: {e}"))?;
-    println!("created channel {channel} with members {alice}, {bob}");
 
     // 2. Users send through the gateway.
     let mut clients = [
@@ -169,6 +173,107 @@ async fn run() -> Result<(), String> {
     if let Ok(nodes) = std::env::var("XMSG_CQL_NODES") {
         check_store(&nodes, channel, alice, bob).await?;
     }
+    if let Some(url) = &channels_url {
+        check_membership(url, channel, &users).await?;
+    }
+    Ok(())
+}
+
+/// Membership commands through the channels service, decided by the sequencer (ADR-0006).
+/// The channel has 4 events so far (created + 3 messages), so the next is event_seq 5.
+async fn check_membership(url: &str, channel: i64, users: &[(i64, String)]) -> Result<(), String> {
+    let members = format!("{url}/v1/channels/{channel}/members");
+    let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
+    let expect =
+        |what: &str, got: (u16, serde_json::Value), status: u16, event_seq: Option<&str>| {
+            if got.0 != status || (event_seq.is_some() && got.1["event_seq"].as_str() != event_seq)
+            {
+                return Err(format!(
+                    "{what}: expected {status} {event_seq:?}, got {} {}",
+                    got.0, got.1
+                ));
+            }
+            Ok(())
+        };
+    let kick = call("DELETE", &format!("{members}/{}", alice.0), &bob.1, None).await?;
+    expect("bob removing alice (bob isn't an admin)", kick, 403, None)?;
+    let join = call("POST", &members, &mallory.1, None).await?;
+    expect("mallory joining a private channel", join, 403, None)?;
+    let invite = call(
+        "POST",
+        &members,
+        &alice.1,
+        Some(serde_json::json!({"user_id": mallory.0.to_string()})),
+    )
+    .await?;
+    expect("alice inviting mallory", invite, 200, Some("5"))?;
+    let leave = call(
+        "DELETE",
+        &format!("{members}/{}", mallory.0),
+        &mallory.1,
+        None,
+    )
+    .await?;
+    expect("mallory leaving", leave, 200, Some("6"))?;
+    println!(
+        "membership via channels service: forbidden kick and join refused; invite (event_seq 5) and leave (6) accepted"
+    );
+    Ok(())
+}
+
+/// An authenticated JSON call; returns the status and body.
+async fn call(
+    method: &str,
+    url: &str,
+    token: &str,
+    body: Option<serde_json::Value>,
+) -> Result<(u16, serde_json::Value), String> {
+    let http = reqwest::Client::new();
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
+    let mut request = http.request(method, url).bearer_auth(token);
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request.send().await.map_err(|e| format!("{url}: {e}"))?;
+    let status = response.status().as_u16();
+    let body = response.json().await.unwrap_or(serde_json::Value::Null);
+    Ok((status, body))
+}
+
+/// Without the channels service: produce `channel.created` straight to `messages.in`.
+async fn produce_channel_created(
+    bootstrap: &str,
+    channel: i64,
+    alice: i64,
+    bob: i64,
+) -> Result<(), String> {
+    let producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", bootstrap)
+        .set("partitioner", "murmur2_random")
+        .create()
+        .map_err(|e| e.to_string())?;
+    let created = InboundEvent {
+        channel_id: channel,
+        workspace_id: 1,
+        actor_id: alice,
+        dedupe_id: format!("create-{channel}"),
+        payload: Some(inbound_event::Payload::ChannelCreated(ChannelCreated {
+            r#type: ChannelType::Private as i32,
+            initial_member_ids: vec![alice, bob],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let key = xmsg_partition::channel_key(channel);
+    producer
+        .send(
+            FutureRecord::to("messages.in")
+                .key(&key[..])
+                .payload(&created.encode_to_vec()),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| format!("producing channel.created: {e}"))?;
     Ok(())
 }
 
