@@ -141,6 +141,7 @@ async fn sequenced_events_become_rows_and_replays_change_nothing() {
 
     let created = Payload::ChannelCreated(ChannelCreated {
         r#type: ChannelType::Private as i32,
+        name: String::new(),
         initial_member_ids: vec![1, 2],
         members: vec![
             MemberJoined {

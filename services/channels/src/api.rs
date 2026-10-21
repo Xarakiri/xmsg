@@ -166,7 +166,14 @@ async fn create_channel<S: Store, L: EventLog>(
         topic,
         created_by: creator,
     };
-    let event = channel_created(channel.id, workspace_id, creator, channel_type, &members);
+    let event = channel_created(
+        channel.id,
+        workspace_id,
+        creator,
+        channel_type,
+        name,
+        &members,
+    );
     app.store.create_channel(&channel, &members, &event).await?;
     Ok(fast_path(&app, &event, channel.id).await)
 }
@@ -208,6 +215,7 @@ async fn create_dm<S: Store, L: EventLog>(
         DEFAULT_WORKSPACE,
         creator,
         channel_type,
+        "",
         &members,
     );
     if kind == "dm" {

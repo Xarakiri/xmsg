@@ -61,15 +61,28 @@ jobs:
       - run: cargo test --workspace
 
   typescript:
-    name: TypeScript client core
+    name: TypeScript clients (core + web)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 26
-      - run: npm test
-        working-directory: clients/core
+          cache: npm
+          cache-dependency-path: clients/package-lock.json
+      - run: npm ci
+      - name: Generated protobuf modules are up to date
+        run: |
+          sudo apt-get install -y --no-install-recommends protobuf-compiler
+          ../tools/gen-ts-proto.sh
+          git diff --exit-code -- core/src/gen
+      - run: npm run typecheck --workspace @xmsg/client-core
+      - run: npm test --workspace @xmsg/client-core
+      - name: Web app typechecks and builds
+        run: npm run build --workspace @xmsg/web
 
   elixir:
     name: Elixir gateway

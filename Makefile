@@ -10,7 +10,7 @@ test-rust:
 	cargo test --workspace
 
 test-ts:
-	cd clients/core && npm test
+	cd clients && npm ci && npm test --workspace @xmsg/client-core && npm run build --workspace @xmsg/web
 
 test-elixir:
 	cd services/gateway && mix test

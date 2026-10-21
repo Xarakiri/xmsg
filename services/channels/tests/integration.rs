@@ -49,6 +49,7 @@ fn event(c: &NewChannel, members: &[i64]) -> InboundEvent {
         c.workspace_id,
         c.created_by,
         ChannelType::Private,
+        "it",
         members,
     )
 }

@@ -214,6 +214,7 @@ async fn creating_a_channel_commits_the_outbox_and_takes_the_fast_path() {
         Some(Payload::ChannelCreated(c)) => {
             assert_eq!(c.r#type, ChannelType::Private as i32);
             assert_eq!(c.initial_member_ids, vec![ALICE, BOB]);
+            assert_eq!(c.name, "design", "the name travels with the event");
         }
         other => panic!("unexpected payload {other:?}"),
     }
