@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "xmsg-e2e-smoke"
+description = "End-to-end smoke test: client -> gateway -> messages -> Kafka -> sequencer"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+xmsg-proto = { path = "../../crates/xmsg-proto" }
+xmsg-partition = { path = "../../crates/xmsg-partition" }
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time"] }
+tokio-tungstenite = "0.30.0"
+futures-util = "0.3.34"
+rdkafka = { version = "0.39.0", features = ["tokio"] }

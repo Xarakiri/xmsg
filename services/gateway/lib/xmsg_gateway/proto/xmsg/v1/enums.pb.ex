@@ -60,4 +60,5 @@ defmodule Xmsg.V1.RejectReason do
   field :REJECT_REASON_UNKNOWN_CHANNEL, 2
   field :REJECT_REASON_FORBIDDEN, 3
   field :REJECT_REASON_INVALID, 4
+  field :REJECT_REASON_UNAVAILABLE, 5
 end

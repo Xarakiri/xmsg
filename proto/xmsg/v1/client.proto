@@ -3,6 +3,7 @@ syntax = "proto3";
 
 package xmsg.v1;
 
+import "xmsg/v1/enums.proto";
 import "xmsg/v1/events.proto";
 
 option java_multiple_files = true;
@@ -42,6 +43,7 @@ message ServerFrame {
     SequencedEvent event = 3;
     Resync resync = 4;
     Pong pong = 5;
+    SendRejected send_rejected = 6;
   }
 }
 
@@ -49,6 +51,14 @@ message Welcome {
   string resume_token = 1;
   // N for this installation; clients use it for partition-scoped resync (ADR-0021).
   uint32 partition_count = 2;
+}
+
+// The send was refused before reaching the sequencer (invalid, too large...).
+// The client shows it as an error and does not retry it automatically.
+message SendRejected {
+  string client_msg_id = 1;
+  RejectReason reason = 2;
+  string detail = 3;
 }
 
 message SendAck {

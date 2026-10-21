@@ -177,3 +177,16 @@ defmodule Xmsg.V1.CommandResult do
   field :reason, 4, type: Xmsg.V1.RejectReason, enum: true
   field :event_seq, 5, type: :int64, json_name: "eventSeq"
 end
+
+defmodule Xmsg.V1.SendResult do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.SendResult",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :accepted, 1, type: :bool
+  field :reason, 2, type: Xmsg.V1.RejectReason, enum: true
+  field :detail, 3, type: :string
+end

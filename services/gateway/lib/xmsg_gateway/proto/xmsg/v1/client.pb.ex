@@ -62,6 +62,7 @@ defmodule Xmsg.V1.ServerFrame do
   field :event, 3, type: Xmsg.V1.SequencedEvent, oneof: 0
   field :resync, 4, type: Xmsg.V1.Resync, oneof: 0
   field :pong, 5, type: Xmsg.V1.Pong, oneof: 0
+  field :send_rejected, 6, type: Xmsg.V1.SendRejected, json_name: "sendRejected", oneof: 0
 end
 
 defmodule Xmsg.V1.Welcome do
@@ -71,6 +72,19 @@ defmodule Xmsg.V1.Welcome do
 
   field :resume_token, 1, type: :string, json_name: "resumeToken"
   field :partition_count, 2, type: :uint32, json_name: "partitionCount"
+end
+
+defmodule Xmsg.V1.SendRejected do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.SendRejected",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :client_msg_id, 1, type: :string, json_name: "clientMsgId"
+  field :reason, 2, type: Xmsg.V1.RejectReason, enum: true
+  field :detail, 3, type: :string
 end
 
 defmodule Xmsg.V1.SendAck do
