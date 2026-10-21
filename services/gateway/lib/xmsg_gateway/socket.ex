@@ -20,6 +20,8 @@ defmodule XmsgGateway.Socket do
     SendAck,
     SendMessage,
     SendMessageRequest,
+    SendRejected,
+    SendResult,
     ServerFrame,
     Welcome
   }
@@ -97,9 +99,25 @@ defmodule XmsgGateway.Socket do
            InboundEvent.encode(event),
            Config.request_timeout_ms()
          ) do
-      {:ok, _reply} ->
-        ack = %ServerFrame{frame: {:ack, %SendAck{client_msg_id: req.client_msg_id}}}
-        {:push, {:binary, encode(ack)}, state}
+      {:ok, reply} ->
+        case decode_result(reply) do
+          %SendResult{accepted: true} ->
+            ack = %ServerFrame{frame: {:ack, %SendAck{client_msg_id: req.client_msg_id}}}
+            {:push, {:binary, encode(ack)}, state}
+
+          # Temporarily unavailable: stay silent so the client retries from its outbox (ADR-0011).
+          %SendResult{reason: :REJECT_REASON_UNAVAILABLE} ->
+            {:ok, state}
+
+          %SendResult{reason: reason, detail: detail} ->
+            rejected = %SendRejected{
+              client_msg_id: req.client_msg_id,
+              reason: reason,
+              detail: detail
+            }
+
+            {:push, {:binary, encode(%ServerFrame{frame: {:send_rejected, rejected}})}, state}
+        end
 
       {:error, reason} ->
         # No ack: the client keeps the message in its outbox and retries (ADR-0011).
@@ -113,6 +131,12 @@ defmodule XmsgGateway.Socket do
   end
 
   defp handle_frame(_unknown, state), do: {:ok, state}
+
+  defp decode_result(reply) do
+    SendResult.decode(reply)
+  rescue
+    _ -> %SendResult{accepted: false, reason: :REJECT_REASON_UNAVAILABLE}
+  end
 
   defp decode(data) do
     {:ok, ClientFrame.decode(data)}

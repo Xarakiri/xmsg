@@ -108,3 +108,12 @@ message CommandResult {
   // event_seq of the resulting event when accepted.
   int64 event_seq = 5;
 }
+
+// Reply of the messages service to a send request (NATS `xmsg.svc.messages.send`).
+// accepted = durably written to `messages.in`; ordering and the final
+// membership check happen later in the sequencer (ADR-0006).
+message SendResult {
+  bool accepted = 1;
+  RejectReason reason = 2;
+  string detail = 3;
+}

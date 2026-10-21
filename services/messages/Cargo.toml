@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "xmsg-messages"
+description = "Messages service: validates sends from the gateway and appends them to messages.in"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+xmsg-proto = { path = "../../crates/xmsg-proto" }
+xmsg-partition = { path = "../../crates/xmsg-partition" }
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+async-nats = "0.46.0"
+futures-util = "0.3.34"
+rdkafka = { version = "0.39.0", features = ["tokio"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

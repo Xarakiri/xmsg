@@ -10,6 +10,7 @@ defmodule XmsgGateway.SocketTest do
     InboundEvent,
     Ping,
     SendMessageRequest,
+    SendResult,
     ServerFrame,
     Welcome
   }
@@ -69,7 +70,7 @@ defmodule XmsgGateway.SocketTest do
 
     Bus.Local.put_responder(fn subject, body ->
       send(test_pid, {:request, subject, InboundEvent.decode(body)})
-      {:ok, <<>>}
+      {:ok, SendResult.encode(%SendResult{accepted: true})}
     end)
 
     {c, _} = connect_as(port, 7)
@@ -89,6 +90,39 @@ defmodule XmsgGateway.SocketTest do
   test "no ack when the messages service doesn't answer; the client retries later", %{port: port} do
     {c, _} = connect_as(port, 8)
     req = %SendMessageRequest{channel_id: 100, client_msg_id: "c-2", body: "hi"}
+    c = WsClient.send_frame(c, %ClientFrame{frame: {:send_message, req}})
+    assert {_c, :timeout} = WsClient.recv(c, 700)
+  end
+
+  test "a send the service rejects is reported to the client, not acked", %{port: port} do
+    Bus.Local.put_responder(fn _subject, _body ->
+      {:ok,
+       SendResult.encode(%SendResult{
+         accepted: false,
+         reason: :REJECT_REASON_INVALID,
+         detail: "message body is empty"
+       })}
+    end)
+
+    {c, _} = connect_as(port, 9)
+    req = %SendMessageRequest{channel_id: 100, client_msg_id: "c-3", body: " "}
+    c = WsClient.send_frame(c, %ClientFrame{frame: {:send_message, req}})
+
+    assert {_c, %ServerFrame{frame: {:send_rejected, rejected}}, _} =
+             WsClient.recv_server_frame(c)
+
+    assert rejected.client_msg_id == "c-3"
+    assert rejected.reason == :REJECT_REASON_INVALID
+    assert rejected.detail == "message body is empty"
+  end
+
+  test "an unavailable service gets no ack and no rejection, so the client retries", %{port: port} do
+    Bus.Local.put_responder(fn _subject, _body ->
+      {:ok, SendResult.encode(%SendResult{accepted: false, reason: :REJECT_REASON_UNAVAILABLE})}
+    end)
+
+    {c, _} = connect_as(port, 10)
+    req = %SendMessageRequest{channel_id: 100, client_msg_id: "c-4", body: "hi"}
     c = WsClient.send_frame(c, %ClientFrame{frame: {:send_message, req}})
     assert {_c, :timeout} = WsClient.recv(c, 700)
   end
