@@ -62,6 +62,9 @@ CREATE TABLE refresh_tokens (
     expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ
 );
+-- Refresh is a lookup by hash; uniqueness also guards against a (2^-256) collision.
+CREATE UNIQUE INDEX refresh_tokens_hash ON refresh_tokens (token_hash);
+CREATE INDEX refresh_tokens_device ON refresh_tokens (device_id) WHERE revoked_at IS NULL;
 
 -- Transactional outbox (ADR-0010). Relayed by the outbox poller or Debezium; kept 7 days.
 CREATE TABLE outbox (

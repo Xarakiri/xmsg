@@ -186,10 +186,10 @@ jobs:
         with:
           otp-version: "29"
           elixir-version: "1.20"
-      - name: Start Kafka and NATS (Small-tier compose)
+      - name: Start Kafka, NATS, Cassandra and PostgreSQL (Small-tier compose)
         working-directory: deploy/compose
         run: |
-          docker compose up -d --wait kafka nats cassandra
+          docker compose up -d --wait kafka nats cassandra postgres
           docker compose up kafka-init --exit-code-from kafka-init
           docker compose up cassandra-init --exit-code-from cassandra-init
       - name: Build
@@ -207,6 +207,10 @@ jobs:
           XMSG_IT_KAFKA: localhost:9092
           XMSG_IT_CQL: localhost:9042
         run: cargo test -p xmsg-persister --test integration -- --ignored --test-threads=1
+      - name: Auth integration tests (real PostgreSQL)
+        env:
+          XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
+        run: cargo test -p xmsg-auth --test integration -- --ignored
       - name: Start sequencer, messages, persister, fan-out and gateway
         run: |
           mkdir -p logs
