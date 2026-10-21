@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+import "xmsg/v1/enums.proto";
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// Values stored in the sequencer's state stores and their changelogs.
+// These live for a long time, so every value carries a format version and
+// changes follow `buf breaking` rules (review #9).
+
+message ChannelHeadState {
+  uint32 format_version = 1;
+  int64 workspace_id = 2;
+  ChannelType type = 3;
+  int64 event_seq = 4;
+  int64 msg_seq = 5;
+  int64 membership_version = 6;
+  FanoutMode fanout_mode = 7;
+  int64 member_count = 8;
+}
+
+message MemberState {
+  uint32 format_version = 1;
+  MemberRole role = 2;
+}
+
+message PartitionState {
+  uint32 format_version = 1;
+  // Last issued Snowflake message_id for this partition.
+  int64 last_message_id = 2;
+}

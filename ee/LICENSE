@@ -1,0 +1,13 @@
+xmsg Enterprise Edition License (PLACEHOLDER)
+
+This is a placeholder pending legal review (see docs/architecture-plan.md,
+open question 9, and docs/adr/0022-open-core-licensing.md).
+
+Intended terms, to be replaced by the reviewed licence text:
+- Code in any directory named `ee/` is source-available, not open source.
+- It may be read and modified for evaluation and contribution purposes.
+- Running it in production requires a valid xmsg Enterprise subscription
+  and licence key.
+- Nothing in this file grants rights to the code outside `ee/` directories;
+  that code is licensed under AGPL-3.0-only (server) or Apache-2.0
+  (clients, SDKs, protocol schemas), as stated in each file's SPDX header.

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "xmsg-partition"
+description = "Kafka-compatible partition function for channel IDs (spec/partitioning)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]

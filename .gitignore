@@ -1,0 +1,21 @@
+# Build outputs
+target/
+build/
+.gradle/
+_build/
+deps/
+node_modules/
+*.class
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Local env and crash dumps
+.env
+erl_crash.dump
+
+# Stray nested repository created outside this layout (see README)
+/xmsg/

@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+import "xmsg/v1/events.proto";
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// WebSocket frames between clients and the gateway (first draft).
+
+message ClientFrame {
+  oneof frame {
+    Connect connect = 1;
+    SendMessageRequest send_message = 2;
+    Ping ping = 3;
+  }
+}
+
+message Connect {
+  string access_token = 1;
+  uint32 protocol_version = 2;
+  string sync_token = 3;
+  string resume_token = 4;
+}
+
+message SendMessageRequest {
+  int64 channel_id = 1;
+  string client_msg_id = 2;
+  string body = 3;
+}
+
+message Ping {
+  int64 sent_at_ms = 1;
+}
+
+message ServerFrame {
+  oneof frame {
+    Welcome welcome = 1;
+    SendAck ack = 2;
+    SequencedEvent event = 3;
+    Resync resync = 4;
+    Pong pong = 5;
+  }
+}
+
+message Welcome {
+  string resume_token = 1;
+  // N for this installation; clients use it for partition-scoped resync (ADR-0021).
+  uint32 partition_count = 2;
+}
+
+message SendAck {
+  string client_msg_id = 1;
+}
+
+// Sent by the gateway when it detects lost deliveries (ADR-0009).
+message Resync {
+  // Resync only channels in this partition; unset means everything.
+  optional uint32 partition = 1;
+}
+
+message Pong {
+  int64 sent_at_ms = 1;
+}

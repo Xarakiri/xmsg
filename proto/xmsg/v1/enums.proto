@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+enum ChannelType {
+  CHANNEL_TYPE_UNSPECIFIED = 0;
+  CHANNEL_TYPE_PUBLIC = 1;
+  CHANNEL_TYPE_PRIVATE = 2;
+  CHANNEL_TYPE_DM = 3;
+  CHANNEL_TYPE_GROUP_DM = 4;
+  CHANNEL_TYPE_BROADCAST = 5;
+}
+
+// Decided by the sequencer from member count (ADR-0008).
+enum FanoutMode {
+  FANOUT_MODE_UNSPECIFIED = 0;
+  FANOUT_MODE_PUSH = 1;
+  FANOUT_MODE_PULL = 2;
+}
+
+enum MemberRole {
+  MEMBER_ROLE_UNSPECIFIED = 0;
+  MEMBER_ROLE_MEMBER = 1;
+  MEMBER_ROLE_ADMIN = 2;
+  MEMBER_ROLE_POSTER = 3;
+}
+
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  REJECT_REASON_NOT_A_MEMBER = 1;
+  REJECT_REASON_UNKNOWN_CHANNEL = 2;
+  REJECT_REASON_FORBIDDEN = 3;
+  REJECT_REASON_INVALID = 4;
+}

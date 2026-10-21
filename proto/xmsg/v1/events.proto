@@ -1,0 +1,110 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+import "xmsg/v1/enums.proto";
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// Input to the sequencer. Topic `messages.in`, Kafka key = channel_id
+// (8-byte big-endian), partition = spec/partitioning.
+message InboundEvent {
+  int64 channel_id = 1;
+  int64 workspace_id = 2;
+  // The user performing the action.
+  int64 actor_id = 3;
+  // client_msg_id for messages, outbox event ID for outbox-originated events.
+  // The sequencer drops repeats within 15 minutes of event time.
+  string dedupe_id = 4;
+  // Set on commands whose outcome is reported on `commands.results`.
+  string request_id = 5;
+
+  oneof payload {
+    SendMessage send_message = 10;
+    ChannelCreated channel_created = 11;
+    MemberJoinRequested member_join_requested = 12;
+    MemberKickRequested member_kick_requested = 13;
+  }
+}
+
+message SendMessage {
+  string body = 1;
+}
+
+message ChannelCreated {
+  ChannelType type = 1;
+  repeated int64 initial_member_ids = 2;
+}
+
+// The actor adds `user_id` (an invite), or joins themselves when actor_id == user_id.
+message MemberJoinRequested {
+  int64 user_id = 1;
+}
+
+// The actor removes `user_id`, or leaves when actor_id == user_id.
+message MemberKickRequested {
+  int64 user_id = 1;
+}
+
+// Output of the sequencer. Topic `messages.persisted`, same key and partition.
+message SequencedEvent {
+  int64 channel_id = 1;
+  int64 workspace_id = 2;
+  int64 actor_id = 3;
+  // Increases on every channel event. 0 for rejections, which are not channel
+  // events and are delivered only to the actor.
+  int64 event_seq = 4;
+  // Increases only on new top-level messages; 0 otherwise.
+  int64 msg_seq = 5;
+  // event_seq of the channel's latest membership change (ADR-0006).
+  int64 membership_version = 6;
+  FanoutMode fanout_mode = 7;
+  string dedupe_id = 8;
+  string request_id = 9;
+
+  oneof payload {
+    MessageCreated message_created = 10;
+    ChannelCreated channel_created = 11;
+    MemberJoined member_joined = 12;
+    MemberLeft member_left = 13;
+    Rejected rejected = 14;
+    ChannelModeChanged channel_mode_changed = 15;
+  }
+}
+
+message MessageCreated {
+  // Snowflake: (ms timestamp, partition, counter), assigned by the sequencer.
+  int64 message_id = 1;
+  string body = 2;
+}
+
+message MemberJoined {
+  int64 user_id = 1;
+  MemberRole role = 2;
+}
+
+message MemberLeft {
+  int64 user_id = 1;
+}
+
+// Emitted when the channel switches between push and pull fan-out (ADR-0008).
+message ChannelModeChanged {
+  FanoutMode mode = 1;
+}
+
+message Rejected {
+  RejectReason reason = 1;
+  string detail = 2;
+}
+
+// Topic `commands.results`, key = request_id.
+message CommandResult {
+  string request_id = 1;
+  int64 channel_id = 2;
+  bool accepted = 3;
+  RejectReason reason = 4;
+  // event_seq of the resulting event when accepted.
+  int64 event_seq = 5;
+}
