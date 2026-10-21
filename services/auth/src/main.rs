@@ -29,6 +29,7 @@ async fn main() {
         keys: config.keys,
         access_ttl_secs: config.access_ttl_secs,
         refresh_ttl_secs: config.refresh_ttl_secs,
+        reuse_grace_secs: config.reuse_grace_secs,
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await

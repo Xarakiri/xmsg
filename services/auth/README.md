@@ -20,7 +20,8 @@ IDs are JSON strings (JavaScript numbers lose precision above 2^53). Errors are 
 
 - **Access token:** EdDSA (Ed25519) JWT, 15 minutes. Claims: `sub` (user ID), `sid` (session = device ID), `iat`, `exp`, `iss`/`aud` = `xmsg`; header `kid` derived from the public key.
 - **Refresh token:** 32 random bytes, 30 days; only its SHA-256 is stored. Every refresh **rotates** it (row lock, so concurrent refreshes with one token rotate once).
-- **Reuse detection:** presenting a refresh token that was already rotated or logged out revokes every token of that session, so a stolen token dies at the latest when the real client next refreshes. A client that sends two refreshes at once loses its session the same way; clients serialize refreshes.
+- **Reuse detection:** presenting a refresh token that was already rotated or logged out revokes every token of that session, so a stolen token dies at the latest when the real client next refreshes.
+- **Reuse grace:** a token revoked *by rotation* less than `XMSG_AUTH_REUSE_GRACE_SECS` (30 s) ago is rotated again instead: a new refresh token for the same session, nothing revoked. This covers a reply lost in flight (tab closed, network drop) and two tabs refreshing with one stored token. Rotation records the successor in `refresh_tokens.replaced_by`; logout leaves it NULL, so logged-out tokens never get grace, and neither does a session with no live token left (logged out or already revoked for reuse). The trade-off: a thief replaying a token within those seconds gets a session too, until the next reuse outside the window. Clients still serialize refreshes (the web client across tabs with a Web Lock).
 - **Passwords:** Argon2id (crate defaults), 10 to 256 characters; hashing runs on the blocking pool. Unknown emails are checked against a dummy hash, so "no such user" and "wrong password" look and time the same. Emails are trimmed and lower-cased.
 
 ## Not yet
@@ -38,6 +39,7 @@ IDs are JSON strings (JavaScript numbers lose precision above 2^53). Errors are 
 | `XMSG_DATABASE_URL` | `postgres://xmsg:xmsg-dev-only@127.0.0.1:5432/xmsg` | PostgreSQL with the [Small-tier schema](../../deploy/compose/init/postgres/001_schema.sql) |
 | `XMSG_AUTH_ACCESS_TTL_SECS` | `900` | access-token lifetime |
 | `XMSG_AUTH_REFRESH_TTL_SECS` | `2592000` | refresh-token lifetime (30 days) |
+| `XMSG_AUTH_REUSE_GRACE_SECS` | `30` | how long a rotated refresh token may still be presented; `0` disables the grace |
 
 ## Tests
 
@@ -49,4 +51,10 @@ Integration tests against real PostgreSQL (schema applied first):
 
 ```bash
 XMSG_IT_PG=postgres://xmsg:xmsg-dev-only@127.0.0.1:5432/xmsg cargo test -p xmsg-auth --test integration -- --ignored
+```
+
+A database created before `refresh_tokens.replaced_by` existed needs the column first:
+
+```sql
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS replaced_by BIGINT;
 ```
