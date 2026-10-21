@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-.PHONY: test test-rust test-ts test-elixir test-kotlin lint proto-lint vectors-check up down ps
+.PHONY: test test-rust test-ts test-elixir test-kotlin test-integration lint proto-lint vectors-check up down ps
 
 JAVA_HOME ?= $(shell /usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21)
 export JAVA_HOME
@@ -17,6 +17,11 @@ test-elixir:
 
 test-kotlin:
 	cd services/sequencer && ./gradlew test
+
+# Needs Docker (Testcontainers starts a real Kafka). KILLS sets crash-test intensity.
+KILLS ?= 12
+test-integration:
+	cd services/sequencer && ./gradlew integrationTest -Dxmsg.crash.kills=$(KILLS)
 
 lint: proto-lint vectors-check
 	cargo fmt --check

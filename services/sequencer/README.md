@@ -18,7 +18,24 @@ Reads `messages.in`, writes `messages.persisted` and `commands.results`, with `e
 - Threads, reactions, admin deletes, `last_mention_seq`.
 - Interactive Queries membership endpoint.
 - Recovery mode after Kafka disaster recovery (ADR-0014).
-- Integration tests against real Kafka: crash/fencing test, upgrade test (version N → N+1), commit-latency benchmark.
+- Commit-latency benchmark at scale (cloud spike), and running "version N" from a previous release artifact in the upgrade test once releases exist.
+
+## Startup check
+Before starting Kafka Streams, the app refuses to run (exit code 2) if:
+- `messages.in`, `messages.persisted` or `commands.results` is missing,
+- the channel topics' partition count differs from `XMSG_PARTITIONS` (ADR-0021),
+- the sequencer has committed offsets but any state changelog is missing, or `channel-heads` is empty (ADR-0003).
+
+## Integration tests (real Kafka, needs Docker)
+`./gradlew integrationTest` starts a single-node Kafka with Testcontainers and runs the sequencer as separate JVM processes:
+
+| Test | What it proves |
+|---|---|
+| `CrashFencingIT` | Two sequencers share 4 partitions while 3,000 messages (plus retries) stream in; one is SIGKILLed repeatedly, sometimes restarted at once (fencing) and sometimes after the session timeout (rebalance and restore). Every message appears exactly once, `msg_seq` and `event_seq` have no gaps or repeats, IDs are unique. `-Dxmsg.crash.kills=N` sets the number of kills (12 by default). |
+| `RestoreUpgradeIT` | A new instance on an empty state directory (a new version on a new host) restores counters, membership and the dedupe window from changelogs; changelog names are unchanged. |
+| `StartupCheckIT` | Missing topics, a wrong partition count, and processed data without changelogs are all refused; the process exits with code 2. |
+
+Process logs go to `build/it-logs/`.
 
 ## Run tests
 
