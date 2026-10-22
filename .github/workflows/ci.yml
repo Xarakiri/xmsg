@@ -285,3 +285,55 @@ jobs:
         if: always()
         working-directory: deploy/compose
         run: docker compose down -v
+
+  chaos:
+    name: Chaos (Phase 1a exit criteria)
+    runs-on: ubuntu-latest
+    needs: [rust, elixir, sequencer]
+    timeout-minutes: 25
+    env:
+      XMSG_PARTITIONS: "16"
+      XMSG_KAFKA_BOOTSTRAP: localhost:9092
+      XMSG_NATS_URL: nats://localhost:4222
+      XMSG_CQL_NODES: localhost:9042
+      XMSG_DATABASE_URL: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "27"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          elixir-version: "1.20"
+      - name: Start Kafka, NATS, Cassandra and PostgreSQL (Small-tier compose)
+        working-directory: deploy/compose
+        run: |
+          docker compose up -d --wait kafka nats cassandra postgres
+          docker compose up kafka-init --exit-code-from kafka-init
+          docker compose up cassandra-init --exit-code-from cassandra-init
+      - name: Build
+        run: |
+          cargo build --release -p xmsg-auth -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-chaos
+          (cd services/sequencer && ./gradlew installDist --console=plain)
+          (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
+      # The tool starts the services itself so it can kill and restart them.
+      - name: Chat under load while the sequencer, fan-out, persister and messages service are killed and restarted
+        run: ./target/release/xmsg-chaos --duration 120 --users 12 --channels 4 --senders 6 --rate 4
+      - name: Upload service logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-logs
+          path: target/chaos/*.log
+          if-no-files-found: ignore
+      - name: Stop
+        if: always()
+        working-directory: deploy/compose
+        run: docker compose down -v

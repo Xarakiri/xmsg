@@ -61,10 +61,12 @@ async fn main() -> ExitCode {
     }
     tracing::info!(topic = %config.topic, keyspace = %config.keyspace, "persister ready");
 
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
     loop {
         let message = tokio::select! {
             m = consumer.recv() => m,
-            _ = tokio::signal::ctrl_c() => break,
+            _ = &mut shutdown => break,
         };
         let message = match message {
             Ok(m) => m,
@@ -106,4 +108,15 @@ async fn main() -> ExitCode {
 fn fail(message: &str) -> ExitCode {
     eprintln!("xmsg-persister: {message}");
     ExitCode::from(2)
+}
+
+/// SIGINT or SIGTERM. Kubernetes and systemd stop services with SIGTERM; without a
+/// handler the process dies on the spot and skips the clean shutdown below.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("installing the SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
 }

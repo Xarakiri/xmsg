@@ -3933,6 +3933,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmsg-chaos"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "clap",
+ "futures-util",
+ "libc",
+ "rdkafka",
+ "reqwest",
+ "scylla",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "xmsg-proto",
+]
+
+[[package]]
 name = "xmsg-e2e-smoke"
 version = "0.0.0"
 dependencies = [
