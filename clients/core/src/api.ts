@@ -3,7 +3,7 @@
 
 import { fromBinary } from "@bufbuild/protobuf";
 import { EventPageSchema, type EventPage } from "./gen/xmsg/v1/sync_pb.js";
-import type { ChannelKind, ListedChannel } from "./state.ts";
+import type { ChannelKind, ListedChannel, NotifyLevel } from "./state.ts";
 
 export interface Tokens {
   access_token: string;
@@ -125,6 +125,24 @@ export class Api {
       eventSeq: Number(c.event_seq),
       msgSeq: Number(c.msg_seq),
     }));
+  }
+
+  /** My personal channel settings (ADR-0016). */
+  async settings(token: string): Promise<{ channelId: string; muted: boolean; notifyLevel: NotifyLevel }[]> {
+    const reply = await call<{ settings: { channel_id: string; muted: boolean; notify_level: NotifyLevel }[] }>(
+      `${this.endpoints.channels}/v1/me/settings`,
+      { method: "GET", token },
+    );
+    return reply.settings.map((s) => ({ channelId: s.channel_id, muted: s.muted, notifyLevel: s.notify_level }));
+  }
+
+  /** Sets them (absolute values; stored by the settings-writer a moment later). */
+  async putSettings(token: string, channelId: string, muted: boolean, notifyLevel: NotifyLevel): Promise<void> {
+    await call(`${this.endpoints.channels}/v1/channels/${channelId}/settings`, {
+      method: "PUT",
+      token,
+      body: json({ muted, notify_level: notifyLevel }),
+    });
   }
 
   /** My read positions (`readstate`, ADR-0012). */

@@ -119,9 +119,30 @@ impl Store for Memory {
 
 /// What the persister would have written to `channels_by_user` + `channel_heads`.
 #[derive(Default)]
-struct FakeMemberships(Mutex<HashMap<i64, Vec<MyChannel>>>);
+struct FakeMemberships(
+    Mutex<HashMap<i64, Vec<MyChannel>>>,
+    /// `member_settings` rows (what the settings-writer stored).
+    Mutex<Vec<xmsg_proto::v1::MemberSettings>>,
+);
 
 impl Memberships for FakeMemberships {
+    async fn settings_of(
+        &self,
+        user_id: i64,
+    ) -> Result<Vec<xmsg_proto::v1::MemberSettings>, String> {
+        Ok(self
+            .1
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.user_id == user_id)
+            .cloned()
+            .collect())
+    }
+    async fn save_settings(&self, settings: &xmsg_proto::v1::MemberSettings) -> Result<(), String> {
+        self.1.lock().unwrap().push(*settings);
+        Ok(())
+    }
     async fn channels_of(&self, user_id: i64) -> Result<Vec<MyChannel>, String> {
         Ok(self
             .0
@@ -139,9 +160,18 @@ struct FakeLog {
     sent: Mutex<Vec<InboundEvent>>,
     verdict: Mutex<Option<CommandResult>>,
     down: Mutex<bool>,
+    /// What went to `member.settings`.
+    settings: Mutex<Vec<xmsg_proto::v1::MemberSettings>>,
 }
 
 impl EventLog for FakeLog {
+    async fn publish_settings(
+        &self,
+        settings: &xmsg_proto::v1::MemberSettings,
+    ) -> Result<(), String> {
+        self.settings.lock().unwrap().push(*settings);
+        Ok(())
+    }
     async fn append(&self, event: &InboundEvent) -> Result<(), String> {
         if *self.down.lock().unwrap() {
             return Err("broker down".into());
@@ -193,6 +223,7 @@ async fn harness() -> Harness {
             sent: Mutex::default(),
             verdict: Mutex::default(),
             down: Mutex::default(),
+            settings: Mutex::default(),
         },
         memberships: FakeMemberships::default(),
         pending,
@@ -797,5 +828,90 @@ async fn channels_the_user_already_left_are_skipped() {
         h.state.store.workspace_events.lock().unwrap().len(),
         1,
         "still completes"
+    );
+}
+
+#[tokio::test]
+async fn settings_are_validated_published_and_listed_for_member_channels_only() {
+    use xmsg_proto::v1::{MemberSettings, NotifyLevel};
+    let h = harness().await;
+    h.state.memberships.0.lock().unwrap().insert(
+        BOB,
+        vec![MyChannel {
+            channel_id: 21,
+            workspace_id: 1,
+            kind: "public".into(),
+            event_seq: 3,
+            msg_seq: 1,
+        }],
+    );
+    let put = |channel: i64, body: serde_json::Value| {
+        let h = &h;
+        async move {
+            h.call(
+                "PUT",
+                &format!("/v1/channels/{channel}/settings"),
+                Some(BOB),
+                Some(body),
+            )
+            .await
+            .0
+        }
+    };
+    assert_eq!(
+        put(
+            21,
+            serde_json::json!({"notify_level": "mentions", "muted": true})
+        )
+        .await,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        put(
+            21,
+            serde_json::json!({"notify_level": "loud", "muted": true})
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        put(
+            99,
+            serde_json::json!({"notify_level": "all", "muted": false})
+        )
+        .await,
+        StatusCode::NOT_FOUND,
+        "not a member"
+    );
+
+    let published = h.state.log.settings.lock().unwrap().clone();
+    assert_eq!(published.len(), 1);
+    assert_eq!(
+        (
+            published[0].user_id,
+            published[0].channel_id,
+            published[0].notify_level,
+            published[0].muted
+        ),
+        (BOB, 21, NotifyLevel::Mentions as i32, true)
+    );
+
+    // The settings-writer stored it, plus an orphan row of a channel BOB has left.
+    h.state.memberships.1.lock().unwrap().extend([
+        published[0],
+        MemberSettings {
+            user_id: BOB,
+            channel_id: 99,
+            notify_level: NotifyLevel::Nothing as i32,
+            muted: true,
+            updated_at_ms: 1,
+        },
+    ]);
+    let (status, body) = h.call("GET", "/v1/me/settings", Some(BOB), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["settings"],
+        serde_json::json!([{"channel_id": "21", "notify_level": "mentions", "muted": true}]),
+        "orphans are left out"
     );
 }

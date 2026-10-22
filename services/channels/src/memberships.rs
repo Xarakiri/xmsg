@@ -6,6 +6,8 @@ use scylla::client::session::Session;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::statement::Consistency;
 use scylla::statement::prepared::PreparedStatement;
+use scylla::value::CqlTimestamp;
+use xmsg_proto::v1::{MemberSettings, NotifyLevel};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MyChannel {
@@ -22,12 +24,42 @@ pub trait Memberships: Send + Sync + 'static {
         &self,
         user_id: i64,
     ) -> impl Future<Output = Result<Vec<MyChannel>, String>> + Send;
+
+    /// The user's `member_settings` rows (including orphans; callers filter by membership).
+    fn settings_of(
+        &self,
+        user_id: i64,
+    ) -> impl Future<Output = Result<Vec<MemberSettings>, String>> + Send;
+
+    /// Only the settings-writer calls this (ADR-0016: one writer).
+    fn save_settings(
+        &self,
+        settings: &MemberSettings,
+    ) -> impl Future<Output = Result<(), String>> + Send;
 }
 
 pub struct Cassandra {
     session: Session,
     by_user: PreparedStatement,
     head: PreparedStatement,
+    settings_by_user: PreparedStatement,
+    save_settings: PreparedStatement,
+}
+
+fn notify_name(level: i32) -> &'static str {
+    match NotifyLevel::try_from(level) {
+        Ok(NotifyLevel::Mentions) => "mentions",
+        Ok(NotifyLevel::Nothing) => "nothing",
+        _ => "all",
+    }
+}
+
+fn notify_level(name: &str) -> NotifyLevel {
+    match name {
+        "mentions" => NotifyLevel::Mentions,
+        "nothing" => NotifyLevel::Nothing,
+        _ => NotifyLevel::All,
+    }
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -54,12 +86,59 @@ impl Cassandra {
             by_user: prepare(format!("SELECT workspace_id, channel_id, channel_type FROM {k}.channels_by_user WHERE user_id = ?"))
                 .await?,
             head: prepare(format!("SELECT event_seq, msg_seq FROM {k}.channel_heads WHERE channel_id = ?")).await?,
+            settings_by_user: prepare(format!(
+                "SELECT channel_id, notify_level, muted, updated_at FROM {k}.member_settings WHERE user_id = ?"
+            ))
+            .await?,
+            save_settings: prepare(format!(
+                "INSERT INTO {k}.member_settings (user_id, channel_id, notify_level, muted, updated_at) VALUES (?, ?, ?, ?, ?)"
+            ))
+            .await?,
             session,
         })
     }
 }
 
 impl Memberships for Cassandra {
+    async fn settings_of(&self, user_id: i64) -> Result<Vec<MemberSettings>, String> {
+        self.session
+            .execute_unpaged(&self.settings_by_user, (user_id,))
+            .await
+            .map_err(err)?
+            .into_rows_result()
+            .map_err(err)?
+            .rows::<(i64, Option<String>, Option<bool>, Option<CqlTimestamp>)>()
+            .map_err(err)?
+            .map(|r| {
+                r.map(|(channel_id, level, muted, at)| MemberSettings {
+                    user_id,
+                    channel_id,
+                    notify_level: notify_level(level.as_deref().unwrap_or("all")) as i32,
+                    muted: muted.unwrap_or(false),
+                    updated_at_ms: at.map(|t| t.0).unwrap_or(0),
+                })
+                .map_err(err)
+            })
+            .collect()
+    }
+
+    async fn save_settings(&self, s: &MemberSettings) -> Result<(), String> {
+        self.session
+            .execute_unpaged(
+                &self.save_settings,
+                (
+                    s.user_id,
+                    s.channel_id,
+                    notify_name(s.notify_level),
+                    s.muted,
+                    CqlTimestamp(s.updated_at_ms),
+                ),
+            )
+            .await
+            .map_err(err)?;
+        Ok(())
+    }
+
     async fn channels_of(&self, user_id: i64) -> Result<Vec<MyChannel>, String> {
         let rows: Vec<(i64, i64, Option<String>)> = self
             .session

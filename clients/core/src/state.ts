@@ -5,6 +5,8 @@
 import type { SequencedEvent } from "./gen/xmsg/v1/events_pb.js";
 import { ChannelType, RejectReason } from "./gen/xmsg/v1/enums_pb.js";
 
+export type NotifyLevel = "all" | "mentions" | "nothing";
+
 export type ChannelKind = "public" | "private" | "dm" | "group_dm" | "broadcast" | "unknown";
 
 export interface Channel {
@@ -22,6 +24,9 @@ export interface Channel {
   msgSeq: number;
   /** Read up to here (ADR-0012); unread = msgSeq - readSeq. */
   readSeq: number;
+  /** Personal settings (ADR-0016). Muted channels show no count. */
+  muted: boolean;
+  notifyLevel: NotifyLevel;
   /** The current user was removed or left. */
   left: boolean;
 }
@@ -57,6 +62,8 @@ export type Action =
   | { type: "channelList"; channels: ListedChannel[] }
   /** Read positions from the server (sync); merged with max, like heads (plan §6.6). */
   | { type: "readPositions"; positions: { channelId: string; msgSeq: number }[] }
+  /** Personal settings from the server, or one just changed (shown at once). */
+  | { type: "settings"; settings: { channelId: string; muted: boolean; notifyLevel: NotifyLevel }[] }
   /** The user read the channel up to here (shown at once; the server applies it shortly). */
   | { type: "markRead"; channelId: string; msgSeq: number }
   /** A contiguous page of a channel's events, ending at `through` (sync, lazy step). */
@@ -74,6 +81,21 @@ export interface ListedChannel {
 
 export function initialState(me: string): ChatState {
   return { me, channels: {}, messages: {} };
+}
+
+/**
+ * A state saved by an older client, brought up to date: channel fields added since get
+ * their defaults (so a saved channel never lacks, say, `notifyLevel`). Anything that
+ * isn't this user's state starts fresh.
+ */
+export function restore(saved: unknown, me: string): ChatState {
+  const s = saved as Partial<ChatState> | null;
+  if (!s || s.me !== me || typeof s.channels !== "object" || s.channels === null) return initialState(me);
+  const channels: Record<string, Channel> = {};
+  for (const [id, c] of Object.entries(s.channels)) {
+    channels[id] = { ...emptyChannel(id, c.kind ?? "unknown"), ...c };
+  }
+  return { me, channels, messages: s.messages ?? {} };
 }
 
 const KINDS: Record<number, ChannelKind> = {
@@ -154,6 +176,14 @@ export function reduce(state: ChatState, action: Action): ChatState {
       }
       return next;
     }
+    case "settings": {
+      let next = state;
+      for (const s of action.settings) {
+        const channel = next.channels[s.channelId];
+        if (channel) next = withChannel(next, { ...channel, muted: s.muted, notifyLevel: s.notifyLevel });
+      }
+      return next;
+    }
     case "markRead": {
       const channel = state.channels[action.channelId];
       if (!channel || action.msgSeq <= channel.readSeq) return state;
@@ -167,7 +197,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
 }
 
 function emptyChannel(id: string, kind: ChannelKind): Channel {
-  return { id, kind, name: "", members: [], eventSeq: 0, syncedSeq: 0, membershipSeq: 0, msgSeq: 0, readSeq: 0, left: false };
+  return { id, kind, name: "", members: [], eventSeq: 0, syncedSeq: 0, membershipSeq: 0, msgSeq: 0, readSeq: 0, muted: false, notifyLevel: "all", left: false };
 }
 
 /** Records that `seq` was applied: the highest seen, and contiguous progress. */

@@ -5,6 +5,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import {
   BACKGROUND_SYNC_MS,
+  restore,
   Connection,
   SyncScheduler,
   inPartition,
@@ -23,8 +24,7 @@ const stateKey = (me: string) => `xmsg.state.v3.${me}`;
 
 function load(me: string): ChatState {
   const saved = safe(() => localStorage.getItem(stateKey(me)));
-  const parsed = saved ? safe(() => JSON.parse(saved) as ChatState) : undefined;
-  return parsed?.me === me ? parsed : initialState(me);
+  return restore(saved ? safe(() => JSON.parse(saved)) : null, me);
 }
 
 export function useChat(me: string) {
@@ -102,5 +102,17 @@ export function useChat(me: string) {
       .catch(() => undefined); // the next sync brings the server's position back; harmless
   };
 
-  return { state, status, syncError, send, nameChannel, markRead };
+  // Personal settings (ADR-0016): shown at once, stored by the settings-writer shortly.
+  const setMuted = (channelId: string, muted: boolean) => {
+    const channel = latest.current.channels[channelId];
+    if (!channel) return;
+    const notifyLevel = channel.notifyLevel ?? "all";
+    dispatch({ type: "settings", settings: [{ channelId, muted, notifyLevel }] });
+    void session
+      .accessToken()
+      .then((token) => api.putSettings(token, channelId, muted, notifyLevel))
+      .catch(() => dispatch({ type: "settings", settings: [{ channelId, muted: !muted, notifyLevel }] }));
+  };
+
+  return { state, status, syncError, send, nameChannel, markRead, setMuted };
 }

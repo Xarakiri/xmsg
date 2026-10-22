@@ -53,6 +53,8 @@ test("channel.created brings a channel with its name and members", () => {
     membershipSeq: 1,
     msgSeq: 0,
     readSeq: 0,
+    muted: false,
+    notifyLevel: "all",
     left: false,
   });
 });
@@ -176,4 +178,24 @@ test("unread counts: others' messages count, own sends and joins don't, position
   });
   bob = apply(bob, ev({ channelId: 9n, eventSeq: 11n, payload: { case: "memberJoined", value: { userId: 102n, role: MemberRole.MEMBER } } }));
   assert.equal(unread(bob.channels["9"]!), 0);
+});
+
+test("settings apply to known channels", () => {
+  let s = apply(initialState(ME), created);
+  s = reduce(s, { type: "settings", settings: [{ channelId: "7", muted: true, notifyLevel: "mentions" }, { channelId: "404", muted: true, notifyLevel: "all" }] });
+  assert.equal(s.channels["7"]!.muted, true);
+  assert.equal(s.channels["7"]!.notifyLevel, "mentions");
+  assert.equal(s.channels["404"], undefined, "settings never create channels");
+});
+
+test("a state saved by an older client gets the newer fields' defaults", async () => {
+  const { restore } = await import("../src/state.ts");
+  const old = { me: ME, channels: { "7": { id: "7", kind: "private", name: "design", members: ["101"], eventSeq: 4, left: false } }, messages: {} };
+  const s = restore(JSON.parse(JSON.stringify(old)), ME);
+  assert.equal(s.channels["7"]!.notifyLevel, "all");
+  assert.equal(s.channels["7"]!.muted, false);
+  assert.equal(s.channels["7"]!.readSeq, 0);
+  assert.equal(s.channels["7"]!.eventSeq, 4, "saved values are kept");
+  assert.deepEqual(restore({ me: "someone else", channels: {} }, ME), initialState(ME));
+  assert.deepEqual(restore(null, ME), initialState(ME));
 });

@@ -44,6 +44,11 @@ pub fn router<S: Store, L: EventLog, M: Memberships>(app: Arc<App<S, L, M>>) -> 
     Router::new()
         .route("/v1/channels", post(create_channel::<S, L, M>))
         .route("/v1/me/channels", get(my_channels::<S, L, M>))
+        .route("/v1/me/settings", get(my_settings::<S, L, M>))
+        .route(
+            "/v1/channels/{channel_id}/settings",
+            axum::routing::put(put_settings::<S, L, M>),
+        )
         .route("/v1/dms", post(create_dm::<S, L, M>))
         .route("/v1/channels/{channel_id}/members", post(join::<S, L, M>))
         .route(
@@ -229,6 +234,104 @@ async fn check_workspace<S: Store, L, M>(
         return Err(ApiError::BadRequest("user is not in the workspace"));
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct Settings {
+    /// `all`, `mentions` or `nothing`.
+    notify_level: String,
+    muted: bool,
+}
+
+/// Sets the caller's settings for a channel (ADR-0016): validated here, then produced to
+/// `member.settings` with absolute values; the settings-writer stores them. 202: shown at
+/// once by the client, stored a moment later. Only members can have settings.
+async fn put_settings<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
+    headers: HeaderMap,
+    Path(channel_id): Path<String>,
+    Json(req): Json<Settings>,
+) -> Result<StatusCode, ApiError> {
+    use xmsg_proto::v1::{MemberSettings, NotifyLevel};
+    let me = caller(&app, &headers).await?;
+    let channel_id = parse_id(&channel_id)?;
+    let notify_level = match req.notify_level.as_str() {
+        "all" => NotifyLevel::All,
+        "mentions" => NotifyLevel::Mentions,
+        "nothing" => NotifyLevel::Nothing,
+        _ => {
+            return Err(ApiError::BadRequest(
+                "notify_level must be all, mentions or nothing",
+            ));
+        }
+    };
+    let member = app
+        .memberships
+        .channels_of(me)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "membership read failed");
+            ApiError::Unavailable
+        })?
+        .iter()
+        .any(|c| c.channel_id == channel_id);
+    if !member {
+        return Err(ApiError::NotFound("not a member"));
+    }
+    let settings = MemberSettings {
+        user_id: me,
+        channel_id,
+        notify_level: notify_level as i32,
+        muted: req.muted,
+        updated_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64,
+    };
+    app.log.publish_settings(&settings).await.map_err(|e| {
+        tracing::warn!(error = %e, "settings not published");
+        ApiError::Unavailable
+    })?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// `{settings: [{channel_id, notify_level, muted}]}` for the caller's channels; rows of
+/// channels they're no longer in (orphans, ADR-0016) are left out.
+async fn my_settings<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    use xmsg_proto::v1::NotifyLevel;
+    let me = caller(&app, &headers).await?;
+    let unavailable = |e: String| {
+        tracing::error!(error = %e, "settings read failed");
+        ApiError::Unavailable
+    };
+    let mine: std::collections::HashSet<i64> = app
+        .memberships
+        .channels_of(me)
+        .await
+        .map_err(unavailable)?
+        .iter()
+        .map(|c| c.channel_id)
+        .collect();
+    let settings: Vec<Value> = app
+        .memberships
+        .settings_of(me)
+        .await
+        .map_err(unavailable)?
+        .into_iter()
+        .filter(|s| mine.contains(&s.channel_id))
+        .map(|s| {
+            let level = match NotifyLevel::try_from(s.notify_level) {
+                Ok(NotifyLevel::Mentions) => "mentions",
+                Ok(NotifyLevel::Nothing) => "nothing",
+                _ => "all",
+            };
+            json!({ "channel_id": s.channel_id.to_string(), "notify_level": level, "muted": s.muted })
+        })
+        .collect();
+    Ok(Json(json!({ "settings": settings })))
 }
 
 #[derive(Deserialize)]

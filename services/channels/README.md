@@ -10,6 +10,8 @@ Every request needs `Authorization: Bearer <access token>` from the auth service
 | Method | Path | Body | Reply |
 |---|---|---|---|
 | POST | `/v1/channels` | `{type: public\|private\|broadcast, name, topic?, member_ids?, workspace_id?}` | 201 `{channel_id, status: "created"}`; 202 `status: "pending"` (see below); 400 |
+| PUT | `/v1/channels/{id}/settings` | `{notify_level: all\|mentions\|nothing, muted}` | 202 (stored a moment later); 404 not a member |
+| GET | `/v1/me/settings` | | `{settings: [{channel_id, notify_level, muted}]}` for channels you're in |
 | GET | `/v1/me/channels` | | `{channels: [{channel_id, workspace_id, type, name, event_seq, msg_seq}]}`: my channels with their heads (sync's cheap step) |
 | POST | `/v1/dms` | `{user_ids, workspace_id?}` | one other user: the pair's DM, 201 the first time, then 200 `status: "exists"`; 2–8 others: a new group DM |
 | POST | `/v1/channels/{id}/members` | `{user_id?}` | join yourself (public channels), or invite `user_id` (any member, not in DMs) |
@@ -30,10 +32,15 @@ Membership replies: 200 `{status: "accepted", event_seq}`, 403 forbidden, 404 un
   - Then it records `workspace.member_removal_completed` in the outbox.
   - **Idempotent:** dedupe ID `wsremove:{workspace}:{user}:{removed_at}:{channel}`. "Not a member" counts as done, and offsets are committed after completion, so a crash re-runs the removal harmlessly.
   - **Stale removals:** if the user was invited back since, no channel is left, but the completion is still recorded so fan-out lifts its deny entry.
+- **Personal settings** ([ADR-0016](../../docs/adr/0016-member-settings-kafka-first.md)), Kafka first:
+  - A change is validated (your own settings, allowed values, you're a member), then produced with absolute values to the compacted `member.settings`.
+  - The key is `user_id:channel_id`, so compaction keeps the latest per membership. The partition is chosen explicitly from `user_id` with the shared partition function.
+  - The **settings-writer** (consumer group `xmsg-channels-settings-writer`) is the only writer of `member_settings`. It applies each user's changes in order, so a replay ends in the same state.
+  - Reads leave out rows of channels you're no longer in (orphans).
 - **Startup check:** exits with code 2 if `messages.in` is missing or its partition count differs from `XMSG_PARTITIONS` (ADR-0021).
 
 ## Not yet
-- Channel reads and lists, rename/topic/archive (`channel.updated` via `meta-relay`), pins, personal settings (`member.settings`, ADR-0016).
+- Channel reads and lists, rename/topic/archive (`channel.updated` via `meta-relay`), pins; the orphan-settings cleanup job; `push_subscribers` (with push).
 
 ## Configuration
 

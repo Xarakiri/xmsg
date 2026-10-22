@@ -191,6 +191,7 @@ async fn run() -> Result<(), String> {
         if let Ok(readstate_url) = std::env::var("XMSG_READSTATE_URL") {
             check_readstate(&readstate_url, channel, &users).await?;
         }
+        check_settings(url, channel, &users).await?;
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
@@ -484,6 +485,62 @@ async fn check_workspace_removal(
     println!(
         "workspace removal: the removed member got nothing of the workspace's channel; the job took her out of it in {} ms",
         left_after.as_millis()
+    );
+    Ok(())
+}
+
+/// Personal settings (ADR-0016): a change goes to `member.settings` and the
+/// settings-writer stores it; a non-member can't set any.
+async fn check_settings(url: &str, channel: i64, users: &[(i64, String)]) -> Result<(), String> {
+    let (bob, mallory) = (&users[1], &users[2]);
+    let settings = format!("{url}/v1/channels/{channel}/settings");
+    let (status, body) = call(
+        "PUT",
+        &settings,
+        &bob.1,
+        Some(serde_json::json!({"notify_level": "mentions", "muted": true})),
+    )
+    .await?;
+    if status != 202 {
+        return Err(format!("bob muting the channel: {status} {body}"));
+    }
+    let (status, _) = call(
+        "PUT",
+        &settings,
+        &mallory.1,
+        Some(serde_json::json!({"notify_level": "all", "muted": true})),
+    )
+    .await?;
+    if status != 404 {
+        return Err(format!(
+            "a former member setting settings: expected 404, got {status}"
+        ));
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let (status, body) = call("GET", &format!("{url}/v1/me/settings"), &bob.1, None).await?;
+        let stored = body["settings"].as_array().and_then(|ss| {
+            ss.iter()
+                .find(|s| s["channel_id"].as_str() == Some(channel.to_string().as_str()))
+                .cloned()
+        });
+        if status == 200
+            && stored
+                == Some(
+                    serde_json::json!({"channel_id": channel.to_string(), "notify_level": "mentions", "muted": true}),
+                )
+        {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "bob's settings not stored within 20 s: {status} {body}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    println!(
+        "settings: bob's mute went through member.settings and the settings-writer; a non-member is refused"
     );
     Ok(())
 }

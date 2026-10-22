@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+enum NotifyLevel {
+  NOTIFY_LEVEL_UNSPECIFIED = 0;
+  NOTIFY_LEVEL_ALL = 1;
+  NOTIFY_LEVEL_MENTIONS = 2;
+  NOTIFY_LEVEL_NOTHING = 3;
+}
+
+// One member's personal settings for one channel (ADR-0016), with absolute values:
+// the latest event is the whole state. Topic `member.settings` (compacted), key
+// "user_id:channel_id", partition chosen by user_id (ADR-0004's function), so one
+// settings-writer applies each user's changes in order.
+message MemberSettings {
+  int64 user_id = 1;
+  int64 channel_id = 2;
+  NotifyLevel notify_level = 3;
+  bool muted = 4;
+  int64 updated_at_ms = 5;
+}
