@@ -26,6 +26,8 @@ struct Memory {
     /// (workspace, user) → role
     members: Mutex<HashMap<(i64, i64), String>>,
     invites: Mutex<Vec<NewInvite>>,
+    /// What the Postgres store writes to the outbox (`workspace.member_removed`).
+    outbox: Mutex<Vec<Vec<u8>>>,
 }
 
 impl Memory {
@@ -107,6 +109,23 @@ impl Store for Memory {
         list.sort_by_key(|w| w.id);
         Ok(list)
     }
+    async fn remove_member(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        event: &[u8],
+    ) -> Result<bool, StoreError> {
+        let removed = self
+            .members
+            .lock()
+            .unwrap()
+            .remove(&(workspace_id, user_id))
+            .is_some();
+        if removed {
+            self.outbox.lock().unwrap().push(event.to_vec());
+        }
+        Ok(removed)
+    }
     async fn role(&self, workspace_id: i64, user_id: i64) -> Result<Option<String>, StoreError> {
         Ok(self
             .members
@@ -178,6 +197,8 @@ struct Harness {
     app: Router,
     state: Arc<App<Memory>>,
     keys: Arc<Keys>,
+    /// The NATS fast path (`AuthEvent`s), as published after commit.
+    removed: std::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>>,
 }
 
 async fn harness() -> Harness {
@@ -222,14 +243,17 @@ async fn harness() -> Harness {
             .unwrap()
             .insert((1, user), "member".into());
     }
+    let (removals, removed_rx) = tokio::sync::mpsc::unbounded_channel();
     let state = Arc::new(App {
         store,
         verifier: xmsg_authn::Verifier::new(url),
+        removals: Some(removals),
     });
     Harness {
         app: router(state.clone()),
         state,
         keys,
+        removed: std::sync::Mutex::new(removed_rx),
     }
 }
 
@@ -518,4 +542,125 @@ async fn expired_invites_are_refused() {
         .call("POST", "/v1/invites/old/accept", Some(BOB), None)
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+fn removed_event(bytes: &[u8]) -> xmsg_proto::v1::WorkspaceMemberRemoved {
+    use xmsg_proto::Message;
+    match xmsg_proto::v1::UsersEvent::decode(bytes).unwrap().event {
+        Some(xmsg_proto::v1::users_event::Event::MemberRemoved(r)) => r,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn removing_a_member_commits_an_outbox_event_and_takes_the_fast_path() {
+    use xmsg_proto::Message;
+    let h = harness().await;
+    h.state
+        .store
+        .members
+        .lock()
+        .unwrap()
+        .insert((1, ALICE), "owner".into());
+    let (status, _) = h
+        .call(
+            "DELETE",
+            &format!("/v1/workspaces/1/members/{BOB}"),
+            Some(ALICE),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        h.state
+            .store
+            .members
+            .lock()
+            .unwrap()
+            .get(&(1, BOB))
+            .is_none()
+    );
+
+    let outbox = h.state.store.outbox.lock().unwrap().clone();
+    assert_eq!(outbox.len(), 1);
+    let r = removed_event(&outbox[0]);
+    assert_eq!((r.workspace_id, r.user_id, r.removed_by), (1, BOB, ALICE));
+    let fast =
+        xmsg_proto::v1::AuthEvent::decode(h.removed.lock().unwrap().try_recv().unwrap().as_slice())
+            .unwrap();
+    assert!(
+        matches!(fast.event, Some(xmsg_proto::v1::auth_event::Event::WorkspaceMemberRemoved(f)) if f == r)
+    );
+
+    // Removing again: not a member any more, nothing emitted.
+    let (status, _) = h
+        .call(
+            "DELETE",
+            &format!("/v1/workspaces/1/members/{BOB}"),
+            Some(ALICE),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(h.state.store.outbox.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn who_may_remove_whom() {
+    let h = harness().await;
+    h.state
+        .store
+        .members
+        .lock()
+        .unwrap()
+        .insert((1, ALICE), "owner".into());
+    h.state
+        .store
+        .members
+        .lock()
+        .unwrap()
+        .insert((1, BOB), "admin".into());
+    let del = |by: i64, who: i64| {
+        let h = &h;
+        async move {
+            h.call(
+                "DELETE",
+                &format!("/v1/workspaces/1/members/{who}"),
+                Some(by),
+                None,
+            )
+            .await
+            .0
+        }
+    };
+    assert_eq!(
+        del(CAROL, BOB).await,
+        StatusCode::FORBIDDEN,
+        "a member can't remove an admin"
+    );
+    assert_eq!(
+        del(BOB, ALICE).await,
+        StatusCode::FORBIDDEN,
+        "nobody removes the owner"
+    );
+    assert_eq!(
+        del(ALICE, ALICE).await,
+        StatusCode::FORBIDDEN,
+        "the owner can't leave"
+    );
+    assert_eq!(
+        del(CAROL, CAROL).await,
+        StatusCode::NO_CONTENT,
+        "a member can leave"
+    );
+    assert_eq!(
+        del(ALICE, BOB).await,
+        StatusCode::NO_CONTENT,
+        "the owner removes an admin"
+    );
+    assert_eq!(
+        del(BOB, CAROL).await,
+        StatusCode::NOT_FOUND,
+        "a removed admin is an outsider now (404, like every outsider)"
+    );
 }

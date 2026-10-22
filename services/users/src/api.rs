@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use chrono::{Duration, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer};
@@ -26,6 +26,9 @@ const MAX_INVITE_HOURS: i64 = 30 * 24;
 pub struct App<S> {
     pub store: S,
     pub verifier: Verifier,
+    /// Fast path for workspace removals (NATS `auth.revocations`, plan §6.5), fed after
+    /// commit with encoded `AuthEvent`s; `None` leaves them to the outbox.
+    pub removals: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
 }
 
 pub fn router<S: Store>(app: Arc<App<S>>) -> Router {
@@ -36,6 +39,10 @@ pub fn router<S: Store>(app: Arc<App<S>>) -> Router {
         .route("/v1/me/workspaces", get(my_workspaces::<S>))
         .route("/v1/workspaces/{id}/members", get(members::<S>))
         .route("/v1/workspaces/{id}/invites", post(create_invite::<S>))
+        .route(
+            "/v1/workspaces/{id}/members/{user_id}",
+            delete(remove_member::<S>),
+        )
         .route("/v1/invites/{code}/accept", post(accept_invite::<S>))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
@@ -314,6 +321,61 @@ async fn members<S: Store>(
 #[derive(Deserialize, Default)]
 pub struct CreateInvite {
     ttl_hours: Option<i64>,
+}
+
+/// Removes `user_id` from the workspace (plan §6.5): owners remove anyone but the owner,
+/// admins remove members, and anyone but the owner can leave. The removal commits with a
+/// `workspace.member_removed` outbox event; fan-out stops delivering the workspace to
+/// them at once, and a job takes them out of its channels.
+async fn remove_member<S: Store>(
+    State(app): State<Arc<App<S>>>,
+    headers: HeaderMap,
+    Path((id, user_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    use xmsg_proto::Message;
+    use xmsg_proto::v1::{AuthEvent, UsersEvent, WorkspaceMemberRemoved, auth_event, users_event};
+
+    let me = caller(&app, &headers).await?;
+    let (workspace_id, user_id) = (parse_id(&id)?, parse_id(&user_id)?);
+    let mine = require_member(&app, workspace_id, me).await?;
+    let theirs = app
+        .store
+        .role(workspace_id, user_id)
+        .await?
+        .ok_or(ApiError::NotFound("not a member of this workspace"))?;
+    let allowed = match (mine.as_str(), theirs.as_str()) {
+        // The owner can't leave (nor be removed): the workspace would have nobody in charge.
+        (_, "owner") => false,
+        _ if user_id == me => true,
+        ("owner", _) => true,
+        ("admin", "member") => true,
+        _ => false,
+    };
+    if !allowed {
+        return Err(ApiError::Forbidden("not allowed to remove this member"));
+    }
+    let removed = WorkspaceMemberRemoved {
+        workspace_id,
+        user_id,
+        removed_by: me,
+        removed_at_ms: Utc::now().timestamp_millis(),
+    };
+    let event = UsersEvent {
+        event: Some(users_event::Event::MemberRemoved(removed)),
+    };
+    if app
+        .store
+        .remove_member(workspace_id, user_id, &event.encode_to_vec())
+        .await?
+        && let Some(tx) = &app.removals
+    {
+        let fast = AuthEvent {
+            event: Some(auth_event::Event::WorkspaceMemberRemoved(removed)),
+        };
+        let _ = tx.send(fast.encode_to_vec());
+    }
+    tracing::info!(workspace_id, user_id, by = me, "workspace member removed");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn create_invite<S: Store>(

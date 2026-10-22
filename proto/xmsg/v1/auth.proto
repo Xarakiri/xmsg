@@ -3,15 +3,19 @@ syntax = "proto3";
 
 package xmsg.v1;
 
+import "xmsg/v1/users.proto";
+
 option java_multiple_files = true;
 option java_package = "dev.xmsg.proto.v1";
 
-// Events of the auth service (topic `auth.events`, and NATS `auth.revocations` for
-// revocations). Written to the outbox with the change; revocations also go to NATS
-// straight after commit (fast path, ADR-0010). Consumers dedupe: every event is absolute.
+// Events of the auth service (topic `auth.events`), and what NATS `auth.revocations`
+// carries: revocations, written to the outbox with the change and also published
+// straight after commit (fast path, ADR-0010), plus workspace removals from the users
+// service (plan §6.5). Consumers dedupe: every event is absolute.
 message AuthEvent {
   oneof event {
     SessionRevoked session_revoked = 1;
+    WorkspaceMemberRemoved workspace_member_removed = 2;
   }
 }
 

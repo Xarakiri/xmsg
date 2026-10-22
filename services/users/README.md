@@ -17,12 +17,19 @@ Every request needs `Authorization: Bearer <access token>` (checked locally agai
 | GET | `/v1/workspaces/{id}/members?after=&limit=` | | `{members: [{user_id, name, avatar_url, role}], next}`; 404 for non-members |
 | POST | `/v1/workspaces/{id}/invites` | `{ttl_hours?}` (default 168, max 720) | 201 `{code, workspace_id, expires_at}`; owners and admins only (403) |
 | POST | `/v1/invites/{code}/accept` | | `{workspace_id, status: "joined" \| "already_member"}`; 404 invalid or expired |
+| DELETE | `/v1/workspaces/{id}/members/{user_id}` | | 204: removed (or left, when it's you); 403 not allowed; 404 not a member |
 | GET | `/healthz` | | `ok` |
+
+**Removing a member** (plan §6.5): owners can remove anyone but the owner, admins can remove members, and anyone but the owner can leave. The owner can't leave, or the workspace would have nobody in charge.
+- The membership row is deleted together with a `workspace.member_removed` outbox event (`UsersEvent`, aggregate `workspace`, to `users.events`).
+- Then the same removal goes to NATS `auth.revocations` as the fast path (`XMSG_NATS_URL`).
+- Fan-out stops delivering the workspace to the user at once. The channels service's removal job then takes them out of each of the workspace's channels and records `workspace.member_removal_completed`.
+- A login spans all of a user's workspaces, so their sockets stay open for the others.
 
 Invite codes are 16 random bytes (base64url); only their SHA-256 is stored, and a code works for anyone until it expires.
 
 ## Not yet
-- Profile cache in Redis and `users.events`; workspace removal (§6.5); role changes; invite revocation.
+- Profile cache in Redis; role changes and ownership transfer; invite revocation.
 
 ## Configuration
 

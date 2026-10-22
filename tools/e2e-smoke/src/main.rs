@@ -189,7 +189,20 @@ async fn run() -> Result<(), String> {
             check_history(url, &messages_url, channel, &users).await?;
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
-            check_workspaces(&users_url, url, &users, run_id).await?;
+            let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
+            if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
+                let messages_url = std::env::var("XMSG_MESSAGES_URL")
+                    .map_err(|_| "XMSG_EXPECT_WORKSPACE_REMOVAL needs XMSG_MESSAGES_URL")?;
+                check_workspace_removal(
+                    &users_url,
+                    &messages_url,
+                    &gateway,
+                    &users,
+                    &workspace,
+                    &ws_channel,
+                )
+                .await?;
+            }
         }
         if std::env::var("XMSG_EXPECT_OUTBOX_RELAY").as_deref() == Ok("true") {
             check_outbox_copy(&bootstrap, channel)?;
@@ -251,7 +264,7 @@ async fn check_workspaces(
     channels_url: &str,
     users: &[(i64, String)],
     run_id: i64,
-) -> Result<(), String> {
+) -> Result<(String, String), String> {
     let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
     let fail =
         |what: &str, got: &(u16, serde_json::Value)| format!("{what}: got {} {}", got.0, got.1);
@@ -366,6 +379,108 @@ async fn check_workspaces(
     }
     println!(
         "users: a co-member sees the new name; an outsider can't join a workspace's channel (403) until invited, then can"
+    );
+    Ok((workspace, channel_id.to_string()))
+}
+
+/// Workspace removal (plan §6.5), continuing from `check_workspaces`: mallory is in the
+/// new workspace and its channel. Once alice removes her, nothing of the channel reaches
+/// her socket any more (fan-out's deny list, immediately), and the removal job takes her
+/// out of the channel (history refuses her; the channel's history shows her leaving).
+async fn check_workspace_removal(
+    users_url: &str,
+    messages_url: &str,
+    gateway: &str,
+    users: &[(i64, String)],
+    workspace: &str,
+    channel: &str,
+) -> Result<(), String> {
+    let (alice, mallory) = (&users[0], &users[2]);
+    let channel_id: i64 = channel.parse().map_err(|_| "bad channel id")?;
+    let mut alice_ws = connect(gateway, &alice.1).await?;
+    let mut mallory_ws = connect(gateway, &mallory.1).await?;
+
+    let removed = call(
+        "DELETE",
+        &format!(
+            "{users_url}/v1/workspaces/{workspace}/members/{}",
+            mallory.0
+        ),
+        &alice.1,
+        None,
+    )
+    .await?;
+    if removed.0 != 204 {
+        return Err(format!(
+            "removing mallory from the workspace: {} {}",
+            removed.0, removed.1
+        ));
+    }
+    let started = Instant::now();
+    send(&mut alice_ws.ws, channel_id, "after-removal").await?;
+    expect_ack(&mut alice_ws, "after-removal").await?;
+    wait_events(&mut alice_ws, |e| {
+        e.iter().any(|e| e.dedupe_id == "after-removal")
+    })
+    .await?;
+    // Whatever mallory's socket receives for the next 3 s must contain nothing of the channel.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        let _ = tokio::time::timeout(Duration::from_millis(300), next_frame(&mut mallory_ws)).await;
+    }
+    if let Some(leak) = mallory_ws
+        .events
+        .iter()
+        .find(|e| e.channel_id == channel_id)
+    {
+        return Err(format!(
+            "removed member received {:?} of the workspace's channel",
+            leak.payload
+        ));
+    }
+
+    // The job takes her out of the channel: history refuses her, and shows her leaving.
+    let http = reqwest::Client::new();
+    let history = format!("{messages_url}/v1/channels/{channel_id}/events?after=0");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let status = http
+            .get(&history)
+            .bearer_auth(&mallory.1)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .status();
+        if status == 404 {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "30 s after the removal mallory still reads the channel's history ({status})"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let left_after = started.elapsed();
+    let bytes = http
+        .get(&history)
+        .bearer_auth(&alice.1)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+    let page = xmsg_proto::v1::EventPage::decode(bytes.as_ref()).map_err(|e| e.to_string())?;
+    let left = page.events.iter().any(|e| {
+        matches!(&e.payload, Some(sequenced_event::Payload::MemberLeft(l)) if l.user_id == mallory.0)
+    });
+    if !left {
+        return Err("the channel's history doesn't show mallory leaving".into());
+    }
+    println!(
+        "workspace removal: the removed member got nothing of the workspace's channel; the job took her out of it in {} ms",
+        left_after.as_millis()
     );
     Ok(())
 }

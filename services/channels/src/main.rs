@@ -54,6 +54,11 @@ async fn main() {
             .unwrap_or_else(|e| fail(&e)),
         command_timeout: Duration::from_millis(config.command_timeout_ms),
     });
+    // The workspace-removal job (plan §6.5) runs alongside the API, sharing its clients.
+    tokio::spawn(xmsg_channels::removals::run(
+        app.clone(),
+        config.kafka_bootstrap.clone(),
+    ));
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await
         .unwrap_or_else(|e| fail(&format!("bind :{}: {e}", config.port)));

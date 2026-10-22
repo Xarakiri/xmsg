@@ -129,6 +129,16 @@ pub trait Store: Send + Sync + 'static {
         invite: &NewInvite,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
+    /// Removes the user from the workspace and writes `event` (an encoded
+    /// `UsersEvent{member_removed}`) to the outbox, in one transaction. `false`: they
+    /// weren't a member (nothing written).
+    fn remove_member(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        event: &[u8],
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
     /// Adds the user to the invite's workspace as a `member`.
     fn accept_invite(
         &self,
@@ -238,6 +248,35 @@ impl Store for Postgres {
         .bind(user_id)
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    async fn remove_member(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        event: &[u8],
+    ) -> Result<bool, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let removed =
+            sqlx::query("DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2")
+                .bind(workspace_id)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                > 0;
+        if removed {
+            sqlx::query(
+                "INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload) \
+                 VALUES ('workspace', $1, 'workspace.member_removed', $2)",
+            )
+            .bind(workspace_id)
+            .bind(event)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(removed)
     }
 
     async fn role(&self, workspace_id: i64, user_id: i64) -> Result<Option<String>, StoreError> {

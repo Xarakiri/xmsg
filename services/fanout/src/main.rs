@@ -7,6 +7,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, Rebalance, Stre
 use rdkafka::{ClientConfig, ClientContext, Message as _, Offset, TopicPartitionList};
 use tracing_subscriber::EnvFilter;
 use xmsg_fanout::config::Config;
+use xmsg_fanout::denylist::DenyList;
 use xmsg_fanout::membership::Membership;
 use xmsg_fanout::sessions::SessionMap;
 use xmsg_fanout::store::Store;
@@ -19,6 +20,7 @@ use xmsg_proto::v1::{
 
 const EVENTS_TOPIC: &str = "messages.persisted";
 const SESSIONS_TOPIC: &str = "sessions.events";
+const USERS_EVENTS_TOPIC: &str = "users.events";
 
 /// Records partitions assigned in a rebalance, so their streams get a new epoch.
 struct Ctx {
@@ -77,14 +79,55 @@ async fn main() -> ExitCode {
 
     // Sessions: read the whole compacted topic, then keep following it.
     let sessions = Arc::new(RwLock::new(SessionMap::default()));
-    let caught_up = match follow_sessions(&config.kafka_bootstrap, sessions.clone()) {
+    let tracked = sessions.clone();
+    let sessions_caught_up = match follow(
+        &config.kafka_bootstrap,
+        SESSIONS_TOPIC,
+        move |key, payload| {
+            let key = key
+                .map(|k| String::from_utf8_lossy(k).into_owned())
+                .unwrap_or_default();
+            let event = payload
+                .filter(|p| !p.is_empty())
+                .and_then(|p| SessionEvent::decode(p).ok());
+            tracked.write().unwrap().apply(&key, event);
+        },
+    ) {
         Ok(rx) => rx,
         Err(e) => return fail(&e),
     };
+    // Workspace removals (plan §6.5): the outbox copy, from the start of its 7-day
+    // retention, plus the users service's fast path on NATS.
+    let deny = Arc::new(DenyList::default());
+    let from_outbox = deny.clone();
+    let removals_caught_up = match follow(
+        &config.kafka_bootstrap,
+        USERS_EVENTS_TOPIC,
+        move |_, payload| {
+            from_outbox.apply_users_event(payload.unwrap_or_default());
+        },
+    ) {
+        Ok(rx) => rx,
+        Err(e) => return fail(&e),
+    };
+    match nats.subscribe("auth.revocations").await {
+        Ok(mut sub) => {
+            let fast = deny.clone();
+            tokio::spawn(async move {
+                use futures_util::StreamExt;
+                while let Some(msg) = sub.next().await {
+                    fast.apply_auth_event(&msg.payload);
+                }
+            });
+        }
+        Err(e) => return fail(&format!("subscribing to auth.revocations: {e}")),
+    }
+    // Nothing is delivered before both are loaded: a restarted fan-out must not leak a
+    // removed workspace's events to its former member.
     let deadline = Instant::now() + Duration::from_secs(60);
-    while !*caught_up.borrow() {
+    while !*sessions_caught_up.borrow() || !*removals_caught_up.borrow() {
         if Instant::now() > deadline {
-            return fail("timed out reading sessions.events");
+            return fail("timed out reading sessions.events / users.events");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -182,7 +225,8 @@ async fn main() -> ExitCode {
             .get(event.channel_id)
             .cloned()
             .unwrap_or_default();
-        let to = recipients(&event, &members);
+        let mut to = recipients(&event, &members);
+        deny.filter(event.workspace_id, &mut to);
 
         let grouped = by_gateway(&to, &sessions.read().unwrap());
         if !grouped.is_empty() {
@@ -217,39 +261,41 @@ async fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Follows the compacted sessions topic from the beginning on a background
-/// thread. The returned flag turns true once the initial read reached the end.
-fn follow_sessions(
+/// Follows `topic` from the beginning on a background thread, calling `apply(key, payload)`
+/// for every record. The returned flag turns true once the initial read reached the end.
+fn follow(
     bootstrap: &str,
-    sessions: Arc<RwLock<SessionMap>>,
+    topic_name: &'static str,
+    apply: impl Fn(Option<&[u8]>, Option<&[u8]>) + Send + 'static,
 ) -> Result<tokio::sync::watch::Receiver<bool>, String> {
     let consumer: BaseConsumer = ClientConfig::new()
         .set("bootstrap.servers", bootstrap)
-        .set("group.id", "xmsg-fanout-sessions-unused")
+        .set("group.id", "xmsg-fanout-follow-unused")
         .set("enable.auto.commit", "false")
         .create()
-        .map_err(|e| format!("creating sessions consumer: {e}"))?;
+        .map_err(|e| format!("creating {topic_name} consumer: {e}"))?;
     let md = consumer
-        .fetch_metadata(Some(SESSIONS_TOPIC), Duration::from_secs(10))
-        .map_err(|e| format!("fetching {SESSIONS_TOPIC} metadata: {e}"))?;
+        .fetch_metadata(Some(topic_name), Duration::from_secs(10))
+        .map_err(|e| format!("fetching {topic_name} metadata: {e}"))?;
     let topic = md
         .topics()
         .first()
         .filter(|t| t.error().is_none())
-        .ok_or(format!("topic {SESSIONS_TOPIC} does not exist"))?;
+        .ok_or(format!("topic {topic_name} does not exist"))?;
     let mut tpl = TopicPartitionList::new();
     let mut targets = Vec::new();
     for p in topic.partitions() {
-        tpl.add_partition_offset(SESSIONS_TOPIC, p.id(), Offset::Beginning)
+        tpl.add_partition_offset(topic_name, p.id(), Offset::Beginning)
             .map_err(|e| e.to_string())?;
-        let (_, high) = consumer
-            .fetch_watermarks(SESSIONS_TOPIC, p.id(), Duration::from_secs(10))
+        let (low, high) = consumer
+            .fetch_watermarks(topic_name, p.id(), Duration::from_secs(10))
             .map_err(|e| format!("watermarks: {e}"))?;
-        targets.push((p.id(), high));
+        // Retention may have removed everything below `low`: then there is nothing to read.
+        targets.push((p.id(), if high > low { high } else { 0 }));
     }
     consumer
         .assign(&tpl)
-        .map_err(|e| format!("assigning {SESSIONS_TOPIC}: {e}"))?;
+        .map_err(|e| format!("assigning {topic_name}: {e}"))?;
 
     let (tx, rx) = tokio::sync::watch::channel(targets.iter().all(|(_, high)| *high == 0));
     std::thread::spawn(move || {
@@ -258,22 +304,14 @@ fn follow_sessions(
         loop {
             match consumer.poll(Duration::from_millis(200)) {
                 Some(Ok(m)) => {
-                    let key = m
-                        .key()
-                        .map(|k| String::from_utf8_lossy(k).into_owned())
-                        .unwrap_or_default();
-                    let event = m
-                        .payload()
-                        .filter(|p| !p.is_empty())
-                        .and_then(|p| SessionEvent::decode(p).ok());
-                    sessions.write().unwrap().apply(&key, event);
+                    apply(m.key(), m.payload());
                     if let Some(high) = remaining.get(&m.partition())
                         && m.offset() + 1 >= *high
                     {
                         remaining.remove(&m.partition());
                     }
                 }
-                Some(Err(e)) => tracing::warn!(error = %e, "sessions consumer error"),
+                Some(Err(e)) => tracing::warn!(error = %e, topic = topic_name, "consumer error"),
                 None => {}
             }
             if remaining.is_empty() && !*tx.borrow() {
