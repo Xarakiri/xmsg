@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ApiError, type Channel, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
+import { ApiError, unread, type Channel, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 import { useChat } from "./useChat.ts";
 import { useNames } from "./useNames.ts";
@@ -118,7 +118,7 @@ function memberList(members: string[], me: string, names: Directory, shown = 5):
 }
 
 function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel } = useChat(me);
+  const { state, status, syncError, send, nameChannel, markRead } = useChat(me);
   const names = useNames(me);
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
@@ -127,6 +127,22 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
   const rooms = channels.filter((c) => c.kind !== "dm" && c.kind !== "group_dm");
   const dms = channels.filter((c) => c.kind === "dm" || c.kind === "group_dm");
   const current = selected ? state.channels[selected] : undefined;
+
+  // The open channel is read while the tab is visible (debounced, so a burst of
+  // messages costs one update; also when the tab comes back).
+  const pendingUnread = current ? unread(current) : 0;
+  useEffect(() => {
+    if (!current || pendingUnread === 0) return;
+    const id = setTimeout(() => {
+      if (document.visibilityState === "visible") markRead(current.id);
+    }, 400);
+    const onVisible = () => document.visibilityState === "visible" && markRead(current.id);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [current?.id, pendingUnread]);
 
   return (
     <div className="app">
@@ -147,12 +163,12 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
         </header>
         <Section title="Channels" onAdd={() => setPanel("channel")}>
           {rooms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} />
+            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} />
           ))}
         </Section>
         <Section title="Direct messages" onAdd={() => setPanel("dm")}>
           {dms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} />
+            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} />
           ))}
         </Section>
         <footer>
@@ -212,11 +228,13 @@ function Section({ title, onAdd, children }: { title: string; onAdd: () => void;
   );
 }
 
-function Item({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function Item({ label, active, unread, onClick }: { label: string; active: boolean; unread: number; onClick: () => void }) {
+  const classes = ["item", active && "active", unread > 0 && !active && "unread"].filter(Boolean).join(" ");
   return (
     <li>
-      <button className={active ? "item active" : "item"} onClick={onClick}>
-        {label}
+      <button className={classes} onClick={onClick} aria-label={unread > 0 ? `${label}, ${unread} unread` : label}>
+        <span className="label">{label}</span>
+        {unread > 0 && !active && <span className="badge">{unread > 99 ? "99+" : unread}</span>}
       </button>
     </li>
   );

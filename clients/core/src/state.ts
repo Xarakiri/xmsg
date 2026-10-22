@@ -18,6 +18,10 @@ export interface Channel {
   syncedSeq: number;
   /** event_seq of the last membership change applied; older ones are ignored. */
   membershipSeq: number;
+  /** The channel's latest message (msg_seq) known to this client. */
+  msgSeq: number;
+  /** Read up to here (ADR-0012); unread = msgSeq - readSeq. */
+  readSeq: number;
   /** The current user was removed or left. */
   left: boolean;
 }
@@ -51,6 +55,10 @@ export type Action =
   | { type: "channelNamed"; channelId: string; name: string }
   /** The server's list of my channels (sync, cheap step). */
   | { type: "channelList"; channels: ListedChannel[] }
+  /** Read positions from the server (sync); merged with max, like heads (plan §6.6). */
+  | { type: "readPositions"; positions: { channelId: string; msgSeq: number }[] }
+  /** The user read the channel up to here (shown at once; the server applies it shortly). */
+  | { type: "markRead"; channelId: string; msgSeq: number }
   /** A contiguous page of a channel's events, ending at `through` (sync, lazy step). */
   | { type: "history"; channelId: string; events: SequencedEvent[]; through: number; at: number }
   /** The server says we're no longer a member (history refused). */
@@ -61,6 +69,7 @@ export interface ListedChannel {
   kind: ChannelKind;
   name: string;
   eventSeq: number;
+  msgSeq: number;
 }
 
 export function initialState(me: string): ChatState {
@@ -123,6 +132,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
           ...(known ?? emptyChannel(listed.id, listed.kind)),
           kind: known && known.kind !== "unknown" ? known.kind : listed.kind,
           name: known?.name || listed.name,
+          msgSeq: Math.max(known?.msgSeq ?? 0, listed.msgSeq),
           left: false,
         });
       }
@@ -136,6 +146,19 @@ export function reduce(state: ChatState, action: Action): ChatState {
       }
       return next;
     }
+    case "readPositions": {
+      let next = state;
+      for (const p of action.positions) {
+        const channel = next.channels[p.channelId];
+        if (channel && p.msgSeq > channel.readSeq) next = withChannel(next, { ...channel, readSeq: p.msgSeq });
+      }
+      return next;
+    }
+    case "markRead": {
+      const channel = state.channels[action.channelId];
+      if (!channel || action.msgSeq <= channel.readSeq) return state;
+      return withChannel(state, { ...channel, readSeq: action.msgSeq });
+    }
     case "lostAccess": {
       const channel = state.channels[action.channelId];
       return channel ? withChannel(state, { ...channel, left: true }) : state;
@@ -144,7 +167,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
 }
 
 function emptyChannel(id: string, kind: ChannelKind): Channel {
-  return { id, kind, name: "", members: [], eventSeq: 0, syncedSeq: 0, membershipSeq: 0, left: false };
+  return { id, kind, name: "", members: [], eventSeq: 0, syncedSeq: 0, membershipSeq: 0, msgSeq: 0, readSeq: 0, left: false };
 }
 
 /** Records that `seq` was applied: the highest seen, and contiguous progress. */
@@ -195,6 +218,8 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
     }
     case "memberJoined": {
       const user = payload.value.userId.toString();
+      // Joining: what came before isn't unread.
+      if (user === state.me) channel = { ...channel, readSeq: Math.max(channel.readSeq, channel.msgSeq) };
       const members = channel.members.includes(user) ? channel.members : [...channel.members, user];
       return withChannel(state, { ...channel, members, left: user === state.me ? false : channel.left });
     }
@@ -218,7 +243,12 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
         status: "confirmed",
         at,
       };
-      const next = withChannel(state, channel);
+      // Own messages count as read (the server's feeder does the same, ADR-0012).
+      const next = withChannel(state, {
+        ...channel,
+        msgSeq: Math.max(channel.msgSeq, msgSeq),
+        readSeq: actor === state.me ? Math.max(channel.readSeq, msgSeq) : channel.readSeq,
+      });
       return withMessages(next, channelId, (list) => {
         const rest = list.filter((m) => m.key !== incoming.key && !(m.msgSeq !== 0 && m.msgSeq === msgSeq));
         const mine = list.find((m) => m.key === incoming.key);
@@ -266,6 +296,11 @@ export function behind(state: ChatState, listed: ListedChannel[]): { id: string;
     .map((l) => ({ id: l.id, head: l.eventSeq, after: state.channels[l.id]?.syncedSeq ?? 0 }))
     .filter((c) => c.head > c.after)
     .map(({ id, after }) => ({ id, after }));
+}
+
+/** Unread messages in a channel (ADR-0012: the head minus the read position). */
+export function unread(channel: Channel): number {
+  return Math.max(0, channel.msgSeq - channel.readSeq);
 }
 
 /** Messages still waiting for the gateway's ack, oldest first (the outbox to resend on reconnect). */

@@ -67,6 +67,10 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .sidebar .item { width: 100%; text-align: left; background: none; border: 0; color: inherit; padding: 6px 8px; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar .item:hover { background: var(--sidebar-active); }
 .sidebar .item.active { background: var(--accent); color: var(--accent-fg); }
+.sidebar .item { display: flex; align-items: center; gap: 8px; }
+.sidebar .item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.sidebar .item.unread { color: #fff; font-weight: 600; }
+.sidebar .badge { flex: none; min-width: 20px; padding: 1px 6px; border-radius: 10px; background: #e03131; color: #fff; font-size: 11px; font-weight: 700; text-align: center; }
 .sidebar footer { margin-top: auto; padding: 0 6px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: #f59f00; }
 .dot.online { background: #37b24d; }

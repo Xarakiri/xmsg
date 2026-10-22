@@ -20,6 +20,7 @@ A Slack-style messenger designed for 1M concurrent users, that companies can als
 | `services/messages/` | Messages service (Rust): NATS sends → `messages.in` | AGPL-3.0-only |
 | `services/persister/` | Persister (Rust): `messages.persisted` → Cassandra/ScyllaDB | AGPL-3.0-only |
 | `services/outbox/` | Outbox poller (Postgres → Kafka) and meta-relay (`channels.meta` → `messages.in`) (Rust) | AGPL-3.0-only |
+| `services/readstate/` | Read state (Rust): read positions and unread counts, one writer per user | AGPL-3.0-only |
 | `services/fanout/` | Fan-out (Rust): sequenced events → gateways → clients | AGPL-3.0-only |
 | `clients/core/` | Shared TypeScript client core: protocol, connection, state | Apache-2.0 |
 | `clients/web/` | Minimal web client (React + Vite) | Apache-2.0 |

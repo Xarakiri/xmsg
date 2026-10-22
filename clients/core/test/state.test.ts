@@ -51,6 +51,8 @@ test("channel.created brings a channel with its name and members", () => {
     eventSeq: 1,
     syncedSeq: 1,
     membershipSeq: 1,
+    msgSeq: 0,
+    readSeq: 0,
     left: false,
   });
 });
@@ -101,8 +103,8 @@ test("the channel list adds channels we missed, with names, and sync knows what'
   const { behind } = await import("../src/state.ts");
   let s = apply(initialState(ME), created);
   const listed = [
-    { id: "7", kind: "private" as const, name: "design", eventSeq: 6 },
-    { id: "9", kind: "public" as const, name: "general", eventSeq: 2 },
+    { id: "7", kind: "private" as const, name: "design", eventSeq: 6, msgSeq: 3 },
+    { id: "9", kind: "public" as const, name: "general", eventSeq: 2, msgSeq: 1 },
   ];
   s = reduce(s, { type: "channelList", channels: listed });
   assert.equal(s.channels["9"]!.name, "general");
@@ -152,4 +154,26 @@ test("an invite to a channel we never saw creates it from the join", () => {
 test("state survives a JSON round trip (saved between page loads)", () => {
   const s = apply(initialState(ME), created, message(1, 102n, "b-1", "hi"));
   assert.deepEqual(JSON.parse(JSON.stringify(s)), s);
+});
+
+test("unread counts: others' messages count, own sends and joins don't, positions only rise", async () => {
+  const { unread } = await import("../src/state.ts");
+  let s = apply(initialState(ME), created, message(1, 102n, "b-1", "hi"), message(2, 102n, "b-2", "there"));
+  assert.equal(unread(s.channels["7"]!), 2);
+  s = apply(s, message(3, 101n, "c-1", "mine"));
+  assert.equal(unread(s.channels["7"]!), 0, "sending reads the channel up to my message");
+  s = apply(s, message(4, 102n, "b-3", "more"));
+  assert.equal(unread(s.channels["7"]!), 1);
+  s = reduce(s, { type: "readPositions", positions: [{ channelId: "7", msgSeq: 2 }] });
+  assert.equal(unread(s.channels["7"]!), 1, "an older server position doesn't undo local progress");
+  s = reduce(s, { type: "markRead", channelId: "7", msgSeq: 4 });
+  assert.equal(unread(s.channels["7"]!), 0);
+
+  // Joining a channel with history: nothing before the join is unread.
+  let bob = reduce(initialState(BOB), {
+    type: "channelList",
+    channels: [{ id: "9", kind: "public", name: "general", eventSeq: 10, msgSeq: 8 }],
+  });
+  bob = apply(bob, ev({ channelId: 9n, eventSeq: 11n, payload: { case: "memberJoined", value: { userId: 102n, role: MemberRole.MEMBER } } }));
+  assert.equal(unread(bob.channels["9"]!), 0);
 });
