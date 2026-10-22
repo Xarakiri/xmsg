@@ -150,8 +150,9 @@ impl Store for Postgres {
         users: &[i64],
     ) -> Result<Vec<i64>, StoreError> {
         Ok(sqlx::query_scalar(
-            "SELECT u FROM unnest($2::BIGINT[]) AS u WHERE NOT EXISTS ( \
-                SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = u)",
+            // In the caller's order: unnest alone guarantees none.
+            "SELECT u FROM unnest($2::BIGINT[]) WITH ORDINALITY AS t(u, i) WHERE NOT EXISTS ( \
+                SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = u) ORDER BY i",
         )
         .bind(workspace_id)
         .bind(users)
