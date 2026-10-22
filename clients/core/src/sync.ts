@@ -26,13 +26,16 @@ export function inPartition(partition: number, partitionCount: number): (channel
 
 /** Returns how many events were fetched. Errors other than lost access propagate. */
 export async function sync({ api, token, state, dispatch, only }: SyncDeps): Promise<number> {
-  const [listed, positions] = await Promise.all([
+  const [listed, positions, settings] = await Promise.all([
     api.myChannels(await token()),
-    // Read positions are best effort: without them the badges are just higher.
+    // Best effort: without read positions the badges are just higher, without settings
+    // muted channels just look unmuted until the next sync.
     api.readState(await token()).catch(() => []),
+    api.settings(await token()).catch(() => []),
   ]);
   dispatch({ type: "channelList", channels: listed });
   dispatch({ type: "readPositions", positions });
+  dispatch({ type: "settings", settings });
   let fetched = 0;
   const targets = behind(state(), listed).filter(({ id }) => !only || only(id));
   await Promise.all(

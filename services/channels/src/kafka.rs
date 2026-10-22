@@ -8,7 +8,7 @@ use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use rdkafka::{ClientConfig, Message, Offset, TopicPartitionList};
 use xmsg_proto::Message as _;
-use xmsg_proto::v1::{CommandResult, InboundEvent};
+use xmsg_proto::v1::{CommandResult, InboundEvent, MemberSettings};
 
 use crate::commands::Pending;
 
@@ -18,11 +18,21 @@ pub const TOPIC_RESULTS: &str = "commands.results";
 /// Where commands and fast-path events go. Kafka in production; tests use a fake.
 pub trait EventLog: Send + Sync + 'static {
     fn append(&self, event: &InboundEvent) -> impl Future<Output = Result<(), String>> + Send;
+
+    /// A member's settings to the compacted `member.settings` (ADR-0016).
+    fn publish_settings(
+        &self,
+        settings: &MemberSettings,
+    ) -> impl Future<Output = Result<(), String>> + Send;
 }
+
+pub const TOPIC_SETTINGS: &str = "member.settings";
 
 pub struct KafkaLog {
     producer: FutureProducer,
     timeout: Duration,
+    /// `member.settings` partition count, for choosing the partition by user (ADR-0016).
+    settings_partitions: std::sync::atomic::AtomicU32,
 }
 
 impl KafkaLog {
@@ -37,7 +47,19 @@ impl KafkaLog {
             .set("message.timeout.ms", timeout.as_millis().to_string())
             .create()
             .map_err(|e| format!("creating Kafka producer: {e}"))?;
-        Ok(KafkaLog { producer, timeout })
+        Ok(KafkaLog {
+            producer,
+            timeout,
+            settings_partitions: std::sync::atomic::AtomicU32::new(0),
+        })
+    }
+
+    /// Reads `member.settings`' partition count (checked at startup, like `messages.in`).
+    pub fn load_settings_partitions(&self) -> Result<(), String> {
+        let n = partition_count(self.producer.client(), TOPIC_SETTINGS)?;
+        self.settings_partitions
+            .store(n as u32, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
     }
 
     /// Partition count of `topic`, or an error if it doesn't exist.
@@ -62,6 +84,28 @@ fn partition_count<C: rdkafka::client::ClientContext>(
 }
 
 impl EventLog for KafkaLog {
+    async fn publish_settings(&self, settings: &MemberSettings) -> Result<(), String> {
+        let partitions = self
+            .settings_partitions
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if partitions == 0 {
+            return Err("member.settings partition count not loaded".into());
+        }
+        // Key per membership (compaction keeps the latest); partition per user (one writer).
+        let key = format!("{}:{}", settings.user_id, settings.channel_id);
+        let partition = xmsg_partition::partition(settings.user_id, partitions) as i32;
+        let payload = settings.encode_to_vec();
+        let record = FutureRecord::to(TOPIC_SETTINGS)
+            .key(&key)
+            .payload(&payload)
+            .partition(partition);
+        self.producer
+            .send(record, self.timeout)
+            .await
+            .map(|_| ())
+            .map_err(|(e, _)| e.to_string())
+    }
+
     async fn append(&self, event: &InboundEvent) -> Result<(), String> {
         let key = xmsg_partition::channel_key(event.channel_id);
         let payload = event.encode_to_vec();

@@ -118,7 +118,7 @@ function memberList(members: string[], me: string, names: Directory, shown = 5):
 }
 
 function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel, markRead } = useChat(me);
+  const { state, status, syncError, send, nameChannel, markRead, setMuted } = useChat(me);
   const names = useNames(me);
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
@@ -163,12 +163,12 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
         </header>
         <Section title="Channels" onAdd={() => setPanel("channel")}>
           {rooms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} />
+            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} muted={c.muted} />
           ))}
         </Section>
         <Section title="Direct messages" onAdd={() => setPanel("dm")}>
           {dms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} />
+            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} muted={c.muted} />
           ))}
         </Section>
         <footer>
@@ -190,7 +190,14 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
           />
         )}
         {current ? (
-          <Conversation channel={current} me={me} names={names} messages={state.messages[current.id] ?? []} onSend={(b) => send(current.id, b)} />
+          <Conversation
+            channel={current}
+            me={me}
+            names={names}
+            messages={state.messages[current.id] ?? []}
+            onSend={(b) => send(current.id, b)}
+            onToggleMute={() => setMuted(current.id, !current.muted)}
+          />
         ) : (
           <div className="center muted">{channels.length ? "Pick a conversation" : "Create a channel or start a DM"}</div>
         )}
@@ -228,13 +235,27 @@ function Section({ title, onAdd, children }: { title: string; onAdd: () => void;
   );
 }
 
-function Item({ label, active, unread, onClick }: { label: string; active: boolean; unread: number; onClick: () => void }) {
-  const classes = ["item", active && "active", unread > 0 && !active && "unread"].filter(Boolean).join(" ");
+function Item({
+  label,
+  active,
+  unread,
+  muted,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  unread: number;
+  muted: boolean;
+  onClick: () => void;
+}) {
+  // Muted channels never shout: no bold, no badge (as in Slack).
+  const shown = muted ? 0 : unread;
+  const classes = ["item", active && "active", shown > 0 && !active && "unread", muted && "muted"].filter(Boolean).join(" ");
   return (
     <li>
-      <button className={classes} onClick={onClick} aria-label={unread > 0 ? `${label}, ${unread} unread` : label}>
+      <button className={classes} onClick={onClick} aria-label={`${label}${muted ? ", muted" : ""}${shown > 0 ? `, ${shown} unread` : ""}`}>
         <span className="label">{label}</span>
-        {unread > 0 && !active && <span className="badge">{unread > 99 ? "99+" : unread}</span>}
+        {shown > 0 && !active && <span className="badge">{shown > 99 ? "99+" : shown}</span>}
       </button>
     </li>
   );
@@ -307,12 +328,14 @@ function Conversation({
   names,
   messages,
   onSend,
+  onToggleMute,
 }: {
   channel: Channel;
   me: string;
   names: Directory;
   messages: Message[];
   onSend: (body: string) => void;
+  onToggleMute: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
@@ -362,12 +385,17 @@ function Conversation({
             {channel.members.length} member{channel.members.length === 1 ? "" : "s"} · {channel.kind.replace("_", " ")} · {memberList(channel.members, me, names)}
           </div>
         </div>
-        {canManage && (
-          <div className="row">
-            <button onClick={() => membership("invite")}>Invite</button>
-            <button onClick={() => membership("leave")}>Leave</button>
-          </div>
-        )}
+        <div className="row">
+          <button onClick={onToggleMute} aria-pressed={channel.muted}>
+            {channel.muted ? "Unmute" : "Mute"}
+          </button>
+          {canManage && (
+            <>
+              <button onClick={() => membership("invite")}>Invite</button>
+              <button onClick={() => membership("leave")}>Leave</button>
+            </>
+          )}
+        </div>
       </header>
       {note && <p className="note">{note}</p>}
       <ol className="messages">

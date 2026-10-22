@@ -37,6 +37,7 @@ async fn main() {
         )),
         Err(e) => fail(&e),
     }
+    log.load_settings_partitions().unwrap_or_else(|e| fail(&e));
     let memberships = Cassandra::connect(&config.cql_nodes, &config.keyspace)
         .await
         .unwrap_or_else(|e| fail(&e));
@@ -54,6 +55,16 @@ async fn main() {
             .unwrap_or_else(|e| fail(&e)),
         command_timeout: Duration::from_millis(config.command_timeout_ms),
     });
+    // The settings-writer (ADR-0016): the only writer of member_settings.
+    let settings_store = Arc::new(
+        Cassandra::connect(&config.cql_nodes, &config.keyspace)
+            .await
+            .unwrap_or_else(|e| fail(&e)),
+    );
+    tokio::spawn(xmsg_channels::settings_writer::run(
+        settings_store,
+        config.kafka_bootstrap.clone(),
+    ));
     // The workspace-removal job (plan §6.5) runs alongside the API, sharing its clients.
     tokio::spawn(xmsg_channels::removals::run(
         app.clone(),

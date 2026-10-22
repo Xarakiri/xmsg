@@ -15,6 +15,7 @@ pub mod config;
 pub mod kafka;
 pub mod memberships;
 pub mod removals;
+pub mod settings_writer;
 pub mod store;
 
 use std::time::{SystemTime, UNIX_EPOCH};
