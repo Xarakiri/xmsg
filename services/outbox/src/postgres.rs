@@ -73,6 +73,16 @@ impl Leader {
         Ok(done.rows_affected())
     }
 
+    /// Debezium relays rows without marking them: they are deleted `days` after being written.
+    pub async fn delete_written_before(&mut self, days: i32) -> Result<u64, sqlx::Error> {
+        let done =
+            sqlx::query("DELETE FROM outbox WHERE created_at < now() - make_interval(days => $1)")
+                .bind(days)
+                .execute(&mut self.conn)
+                .await?;
+        Ok(done.rows_affected())
+    }
+
     /// Seconds since the oldest unpublished row was written (0 when caught up): the lag.
     pub async fn lag_secs(&mut self) -> Result<f64, sqlx::Error> {
         sqlx::query_scalar(

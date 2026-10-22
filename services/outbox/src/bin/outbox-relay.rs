@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! xmsg-outbox-relay: the built-in outbox poller (Small/Medium tiers, ADR-0020).
+//!
+//! With `XMSG_OUTBOX_MODE=cleanup` it relays nothing and only deletes rows a week after
+//! they were written: the mode for installations where Debezium relays the outbox
+//! (Large tier), since Debezium never marks rows published.
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -27,7 +31,20 @@ async fn main() -> ExitCode {
         "postgres://xmsg:xmsg-dev-only@127.0.0.1:5432/xmsg",
     );
     let bootstrap = get("XMSG_KAFKA_BOOTSTRAP", "127.0.0.1:9092");
-    let poll = Duration::from_millis(get("XMSG_OUTBOX_POLL_MS", "200").parse().unwrap_or(200));
+    let cleanup_only = match get("XMSG_OUTBOX_MODE", "relay").as_str() {
+        "relay" => false,
+        "cleanup" => true,
+        other => {
+            return fail(&format!(
+                "XMSG_OUTBOX_MODE must be relay or cleanup, not {other}"
+            ));
+        }
+    };
+    let poll = if cleanup_only {
+        Duration::from_secs(60)
+    } else {
+        Duration::from_millis(get("XMSG_OUTBOX_POLL_MS", "200").parse().unwrap_or(200))
+    };
 
     let producer: FutureProducer = match ClientConfig::new()
         .set("bootstrap.servers", &bootstrap)
@@ -65,12 +82,19 @@ async fn main() -> ExitCode {
                 _ = &mut shutdown => break 'outer,
             }
         };
-        tracing::info!("outbox relay ready (active)");
+        tracing::info!(
+            mode = if cleanup_only { "cleanup" } else { "relay" },
+            "outbox relay ready (active)"
+        );
         let mut last_cleanup = Instant::now() - Duration::from_secs(3600);
         let mut last_lag_log = Instant::now();
 
         loop {
-            match relay_batch(&mut leader, &producer, &known).await {
+            match if cleanup_only {
+                Ok(0)
+            } else {
+                relay_batch(&mut leader, &producer, &known).await
+            } {
                 // A full batch: more are waiting, go again at once.
                 Ok(n) if n as i64 == BATCH => continue,
                 Ok(_) => {}
@@ -83,14 +107,19 @@ async fn main() -> ExitCode {
                 }
             }
             if last_cleanup.elapsed() >= Duration::from_secs(3600) {
-                match leader.delete_published_before(KEEP_DAYS).await {
+                let cleanup = if cleanup_only {
+                    leader.delete_written_before(KEEP_DAYS).await
+                } else {
+                    leader.delete_published_before(KEEP_DAYS).await
+                };
+                match cleanup {
                     Ok(n) if n > 0 => tracing::info!(deleted = n, "old outbox rows removed"),
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "outbox cleanup failed"),
                 }
                 last_cleanup = Instant::now();
             }
-            if last_lag_log.elapsed() >= Duration::from_secs(60) {
+            if !cleanup_only && last_lag_log.elapsed() >= Duration::from_secs(60) {
                 if let Ok(lag) = leader.lag_secs().await
                     && lag > 5.0
                 {
