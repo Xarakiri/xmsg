@@ -207,7 +207,7 @@ jobs:
           docker compose up cassandra-init --exit-code-from cassandra-init
       - name: Build
         run: |
-          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-e2e-smoke
+          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-e2e-smoke
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
       - name: Messages service integration tests (real Kafka + NATS)
@@ -258,6 +258,8 @@ jobs:
           XMSG_DATABASE_URL=postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg \
             ./target/release/xmsg-outbox-relay > logs/outbox-relay.log 2>&1 &
           ./target/release/xmsg-meta-relay > logs/meta-relay.log 2>&1 &
+          XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
+            ./target/release/xmsg-readstate > logs/readstate.log 2>&1 &
           XMSG_STATE_DIR=$RUNNER_TEMP/seq-state XMSG_INSTANCE_ID=ci-1 \
             services/sequencer/build/install/xmsg-sequencer/bin/xmsg-sequencer > logs/sequencer.log 2>&1 &
           XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
@@ -273,6 +275,7 @@ jobs:
               && grep -q 'channels ready' logs/channels.log \
               && grep -q 'outbox relay ready' logs/outbox-relay.log \
               && grep -q 'meta-relay ready' logs/meta-relay.log \
+              && grep -q 'readstate ready' logs/readstate.log \
               && grep -q 'users ready' logs/users.log \
               && grep -q 'messages service ready' logs/messages.log \
               && grep -q 'history reads ready' logs/messages.log \
@@ -287,6 +290,7 @@ jobs:
           XMSG_AUTH_URL: http://localhost:8081
           XMSG_CHANNELS_URL: http://localhost:8082
           XMSG_MESSAGES_URL: http://localhost:8083
+          XMSG_READSTATE_URL: http://localhost:8085
           XMSG_EXPECT_OUTBOX_RELAY: "true"
           XMSG_EXPECT_REVOCATION: "true"
           XMSG_EXPECT_WORKSPACE_REMOVAL: "true"

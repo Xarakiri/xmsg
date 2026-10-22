@@ -26,8 +26,13 @@ export function inPartition(partition: number, partitionCount: number): (channel
 
 /** Returns how many events were fetched. Errors other than lost access propagate. */
 export async function sync({ api, token, state, dispatch, only }: SyncDeps): Promise<number> {
-  const listed = await api.myChannels(await token());
+  const [listed, positions] = await Promise.all([
+    api.myChannels(await token()),
+    // Read positions are best effort: without them the badges are just higher.
+    api.readState(await token()).catch(() => []),
+  ]);
   dispatch({ type: "channelList", channels: listed });
+  dispatch({ type: "readPositions", positions });
   let fetched = 0;
   const targets = behind(state(), listed).filter(({ id }) => !only || only(id));
   await Promise.all(

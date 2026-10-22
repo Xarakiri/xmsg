@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// A change to one user's read position in one channel (ADR-0012). Topic
+// `readstate.events`, keyed by user_id: one partition owner writes `read_state`
+// for each user, applying these in order.
+message ReadStateEvent {
+  int64 user_id = 1;
+  int64 channel_id = 2;
+  int64 at_ms = 3;
+
+  oneof change {
+    // Read up to `msg_seq` (mark-read from any device, an own send, a join).
+    // Merged with max: a late or older update can't move the position back.
+    int64 read_up_to = 10;
+    // Explicit "mark as unread from here": the position becomes msg_seq - 1,
+    // even if it was further. The only way the position goes back.
+    int64 unread_from = 11;
+  }
+}

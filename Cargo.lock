@@ -4060,6 +4060,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmsg-readstate"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "rdkafka",
+ "scylla",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "xmsg-auth",
+ "xmsg-authn",
+ "xmsg-proto",
+]
+
+[[package]]
 name = "xmsg-users"
 version = "0.0.0"
 dependencies = [

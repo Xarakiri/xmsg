@@ -188,6 +188,9 @@ async fn run() -> Result<(), String> {
         if let Ok(messages_url) = std::env::var("XMSG_MESSAGES_URL") {
             check_history(url, &messages_url, channel, &users).await?;
         }
+        if let Ok(readstate_url) = std::env::var("XMSG_READSTATE_URL") {
+            check_readstate(&readstate_url, channel, &users).await?;
+        }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
@@ -481,6 +484,77 @@ async fn check_workspace_removal(
     println!(
         "workspace removal: the removed member got nothing of the workspace's channel; the job took her out of it in {} ms",
         left_after.as_millis()
+    );
+    Ok(())
+}
+
+/// Read positions (ADR-0012): own sends mark the channel read up to them, a join starts
+/// at the channel's current message, and mark-read / mark-unread go through the owner.
+/// The channel: alice sent 1 and 3, bob sent 2, mallory joined after 3 (then left).
+async fn check_readstate(url: &str, channel: i64, users: &[(i64, String)]) -> Result<(), String> {
+    let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
+    let position = async |token: &str| -> Result<Option<String>, String> {
+        let (status, body) = call("GET", &format!("{url}/v1/me/read-state"), token, None).await?;
+        if status != 200 {
+            return Err(format!("read-state: {status} {body}"));
+        }
+        Ok(body["positions"].as_array().and_then(|ps| {
+            ps.iter()
+                .find(|p| p["channel_id"].as_str() == Some(channel.to_string().as_str()))
+                .and_then(|p| p["last_read_msg_seq"].as_str().map(str::to_string))
+        }))
+    };
+    let wait_for = async |who: &str, token: &str, want: &str| -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let got = position(token).await?;
+            if got.as_deref() == Some(want) {
+                return Ok(());
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "{who}'s read position: expected {want}, got {got:?}"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    };
+    wait_for("alice (sent 1 and 3)", &alice.1, "3").await?;
+    wait_for("bob (sent 2)", &bob.1, "2").await?;
+    wait_for("mallory (joined after 3)", &mallory.1, "3").await?;
+
+    let read = format!("{url}/v1/channels/{channel}/read");
+    let (status, body) = call(
+        "POST",
+        &read,
+        &bob.1,
+        Some(serde_json::json!({"msg_seq": "3"})),
+    )
+    .await?;
+    if status != 202 {
+        return Err(format!("mark read: {status} {body}"));
+    }
+    wait_for("bob after mark-read 3", &bob.1, "3").await?;
+    // An older mark-read (e.g. a slow device) can't move him back...
+    call(
+        "POST",
+        &read,
+        &bob.1,
+        Some(serde_json::json!({"msg_seq": "1"})),
+    )
+    .await?;
+    // ...but an explicit "unread from 2" does.
+    let unread = format!("{url}/v1/channels/{channel}/unread");
+    call(
+        "POST",
+        &unread,
+        &bob.1,
+        Some(serde_json::json!({"msg_seq": "2"})),
+    )
+    .await?;
+    wait_for("bob after unread-from 2", &bob.1, "1").await?;
+    println!(
+        "read state: own sends and joins set positions (alice 3, bob 2, mallory 3); mark-read can't go back, mark-unread does"
     );
     Ok(())
 }

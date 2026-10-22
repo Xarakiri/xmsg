@@ -19,6 +19,8 @@ export interface Endpoints {
   channels: string;
   /** Base URL of the messages service's HTTP reads. */
   messages: string;
+  /** Base URL of the readstate service. */
+  readstate: string;
   users: string;
 }
 
@@ -112,7 +114,7 @@ export class Api {
 
   /** My channels with their heads (sync, cheap step). */
   async myChannels(token: string): Promise<ListedChannel[]> {
-    const reply = await call<{ channels: { channel_id: string; type: string; name: string; event_seq: string }[] }>(
+    const reply = await call<{ channels: { channel_id: string; type: string; name: string; event_seq: string; msg_seq: string }[] }>(
       `${this.endpoints.channels}/v1/me/channels`,
       { method: "GET", token },
     );
@@ -121,7 +123,26 @@ export class Api {
       kind: (["public", "private", "dm", "group_dm", "broadcast"].includes(c.type) ? c.type : "unknown") as ChannelKind,
       name: c.name,
       eventSeq: Number(c.event_seq),
+      msgSeq: Number(c.msg_seq),
     }));
+  }
+
+  /** My read positions (`readstate`, ADR-0012). */
+  async readState(token: string): Promise<{ channelId: string; msgSeq: number }[]> {
+    const reply = await call<{ positions: { channel_id: string; last_read_msg_seq: string }[] }>(
+      `${this.endpoints.readstate}/v1/me/read-state`,
+      { method: "GET", token },
+    );
+    return reply.positions.map((p) => ({ channelId: p.channel_id, msgSeq: Number(p.last_read_msg_seq) }));
+  }
+
+  /** Read up to `msgSeq` (applied by the user's readstate owner shortly after). */
+  async markRead(token: string, channelId: string, msgSeq: number): Promise<void> {
+    await call(`${this.endpoints.readstate}/v1/channels/${channelId}/read`, {
+      method: "POST",
+      token,
+      body: json({ msg_seq: String(msgSeq) }),
+    });
   }
 
   /** A channel's events after `after` (sync, lazy step). 404: not a member (any more). */

@@ -21,11 +21,12 @@ const msg = (seq: number) => ({
 /** Channel 7 has events 1..450; channel 8 refuses us (we were removed). */
 function fakeApi(calls: string[]): Api {
   const listed: ListedChannel[] = [
-    { id: "7", kind: "public", name: "big", eventSeq: 450 },
-    { id: "8", kind: "private", name: "gone", eventSeq: 3 },
+    { id: "7", kind: "public", name: "big", eventSeq: 450, msgSeq: 450 },
+    { id: "8", kind: "private", name: "gone", eventSeq: 3, msgSeq: 1 },
   ];
   return {
     myChannels: async () => listed,
+    readState: async () => [{ channelId: "7", msgSeq: 400 }],
     events: async (_t: string, id: string, after: number, limit: number): Promise<EventPage> => {
       calls.push(`${id}@${after}`);
       if (id === "8") throw new ApiError(404, "unknown channel");
@@ -49,6 +50,7 @@ test("sync pages through moved channels and marks refused ones as left", async (
   assert.equal(state.channels["7"]!.syncedSeq, 450);
   assert.equal(state.messages["7"]!.length, 450);
   assert.equal(state.channels["8"]!.left, true);
+  assert.equal(state.channels["7"]!.readSeq, 400, "read positions come with the sync");
 
   // Nothing moved: a second sync fetches no events.
   calls.length = 0;

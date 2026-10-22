@@ -9,7 +9,7 @@ class FakeApi extends Api {
   presented: string[] = [];
   private next = 1;
   constructor() {
-    super({ auth: "", channels: "", messages: "", users: "" });
+    super({ auth: "", channels: "", messages: "", users: "", readstate: "/readstate" });
   }
   override async refresh(refreshToken: string): Promise<Tokens> {
     this.presented.push(refreshToken);

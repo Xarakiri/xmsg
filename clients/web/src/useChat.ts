@@ -19,7 +19,7 @@ import {
 import { api, gatewayUrl, safe, session } from "./session.ts";
 
 // Versioned: a saved state from an older client shape is dropped and re-synced.
-const stateKey = (me: string) => `xmsg.state.v2.${me}`;
+const stateKey = (me: string) => `xmsg.state.v3.${me}`;
 
 function load(me: string): ChatState {
   const saved = safe(() => localStorage.getItem(stateKey(me)));
@@ -90,5 +90,17 @@ export function useChat(me: string) {
 
   const nameChannel = (channelId: string, name: string) => dispatch({ type: "channelNamed", channelId, name });
 
-  return { state, status, syncError, send, nameChannel };
+  // Read positions (ADR-0012): shown at once, applied by the user's readstate owner.
+  const markRead = (channelId: string) => {
+    const channel = latest.current.channels[channelId];
+    if (!channel || channel.msgSeq <= channel.readSeq) return;
+    const msgSeq = channel.msgSeq;
+    dispatch({ type: "markRead", channelId, msgSeq });
+    void session
+      .accessToken()
+      .then((token) => api.markRead(token, channelId, msgSeq))
+      .catch(() => undefined); // the next sync brings the server's position back; harmless
+  };
+
+  return { state, status, syncError, send, nameChannel, markRead };
 }
