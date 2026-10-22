@@ -13,10 +13,10 @@ Reads `messages.in`, writes `messages.persisted` and `commands.results`, with `e
 - Push/pull fan-out mode with hysteresis and an ordered `channel_mode_changed` event.
 - Snowflake message IDs from event time, partition and a counter.
 - Explicit, fixed names for every processor, store and changelog ([`Names.kt`](src/main/kotlin/dev/xmsg/sequencer/Names.kt)).
+- **Membership endpoint** (plan §5.6, [`MembershipEndpoint.kt`](src/main/kotlin/dev/xmsg/sequencer/MembershipEndpoint.kt)): `GET /v1/channels/{id}/members` on `XMSG_SEQUENCER_HTTP_PORT` (default 8090) answers a protobuf `ChannelMembers` (members and `membership_version`) straight from the stores, via Kafka Streams Interactive Queries. A channel owned by another instance gets a 307 to that instance (`application.server` = `XMSG_ADVERTISED_HOST:port`, default the hostname); 503 while rebalancing, 404 for an unknown channel. HTTP + protobuf rather than gRPC: one small read, no extra runtime. Fan-out uses it when its Cassandra snapshot is behind.
 
 ## Not yet (later in Phase 0 / Phase 1a)
 - Threads, reactions, admin deletes, `last_mention_seq`.
-- Interactive Queries membership endpoint.
 - Recovery mode after Kafka disaster recovery (ADR-0014).
 - Commit-latency benchmark at scale (cloud spike), and running "version N" from a previous release artifact in the upgrade test once releases exist.
 

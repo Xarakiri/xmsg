@@ -8,7 +8,8 @@ use rdkafka::{ClientConfig, ClientContext, Message as _, Offset, TopicPartitionL
 use tracing_subscriber::EnvFilter;
 use xmsg_fanout::config::Config;
 use xmsg_fanout::denylist::DenyList;
-use xmsg_fanout::membership::Membership;
+use xmsg_fanout::membership::{Fallback, Membership};
+use xmsg_fanout::sequencer::Sequencer;
 use xmsg_fanout::sessions::SessionMap;
 use xmsg_fanout::store::Store;
 use xmsg_fanout::streams::Streams;
@@ -71,6 +72,11 @@ async fn main() -> ExitCode {
     let store = match Store::connect(&config.cql_nodes, &config.keyspace).await {
         Ok(s) => s,
         Err(e) => return fail(&e),
+    };
+    // Snapshots: the wide-column store, and the sequencer when the store is behind (§5.6).
+    let snapshots = Fallback {
+        primary: store,
+        secondary: config.sequencer_url.clone().map(Sequencer::new),
     };
     let nats = match async_nats::connect(&config.nats_url).await {
         Ok(c) => c,
@@ -205,7 +211,7 @@ async fn main() -> ExitCode {
         // Membership must be known before delivering; the store may lag by milliseconds.
         let mut backoff = Duration::from_millis(20);
         loop {
-            match membership.ensure_loaded(&event, &store).await {
+            match membership.ensure_loaded(&event, &snapshots).await {
                 Ok(()) => break,
                 Err(reason) => {
                     if backoff >= Duration::from_secs(1) {

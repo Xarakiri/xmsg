@@ -9,6 +9,8 @@ pub struct Config {
     pub keyspace: String,
     pub partitions: i32,
     pub group_id: String,
+    /// The sequencer's membership endpoint (any instance), the second snapshot source.
+    pub sequencer_url: Option<String>,
 }
 
 impl Config {
@@ -24,6 +26,7 @@ impl Config {
                 .collect(),
             keyspace: get("XMSG_CQL_KEYSPACE", "xmsg"),
             group_id: get("XMSG_FANOUT_GROUP", "xmsg-fanout"),
+            sequencer_url: std::env::var("XMSG_SEQUENCER_URL").ok(),
             partitions: std::env::var("XMSG_PARTITIONS")
                 .map_err(|_| {
                     "XMSG_PARTITIONS must be set to this installation's partition count".to_string()

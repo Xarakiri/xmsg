@@ -198,6 +198,9 @@ impl Stack {
                 Service::new(&format!("sequencer-{i}"), sequencer.clone(), repo, logs)
                     .env("XMSG_STATE_DIR", state.to_string_lossy())
                     .env("XMSG_INSTANCE_ID", format!("chaos-{i}"))
+                    // Each instance's membership endpoint on its own port (same host).
+                    .env("XMSG_SEQUENCER_HTTP_PORT", (8090 + i).to_string())
+                    .env("XMSG_ADVERTISED_HOST", "127.0.0.1")
                     // Static membership: a short session timeout makes a longer outage
                     // move the instance's tasks to the other one (a real rebalance).
                     .env("XMSG_SESSION_TIMEOUT_MS", "6000")

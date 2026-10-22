@@ -12,12 +12,40 @@ pub struct Snapshot {
     pub members: HashSet<i64>,
 }
 
-/// Where cold channels are loaded from (the wide-column store in production).
+/// Where cold channels are loaded from (the wide-column store, then the sequencer).
+/// `at_least` is the membership version the event needs: a source that knows it can't
+/// be that current may hand over to another (see `Fallback`).
 pub trait SnapshotSource {
     fn load(
         &self,
         channel_id: i64,
+        at_least: i64,
     ) -> impl Future<Output = Result<Option<Snapshot>, String>> + Send;
+}
+
+/// The primary source, and the secondary only when the primary has nothing or is behind
+/// (plan §5.6: the wide-column store first, the sequencer's membership endpoint when the
+/// persister hasn't caught up). The newer of the two answers wins.
+pub struct Fallback<A, B> {
+    pub primary: A,
+    pub secondary: Option<B>,
+}
+
+impl<A: SnapshotSource + Sync, B: SnapshotSource + Sync> SnapshotSource for Fallback<A, B> {
+    async fn load(&self, channel_id: i64, at_least: i64) -> Result<Option<Snapshot>, String> {
+        let primary = self.primary.load(channel_id, at_least).await;
+        let current = matches!(&primary, Ok(Some(s)) if s.version >= at_least);
+        let Some(secondary) = self.secondary.as_ref().filter(|_| !current) else {
+            return primary;
+        };
+        match (primary, secondary.load(channel_id, at_least).await) {
+            (Ok(Some(a)), Ok(Some(b))) => Ok(Some(if b.version > a.version { b } else { a })),
+            (Ok(Some(a)), _) => Ok(Some(a)),
+            (_, Ok(b)) => Ok(b),
+            (Err(e), Err(_)) => Err(e),
+            (Ok(None), Err(e)) => Err(e),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -81,7 +109,10 @@ impl Membership {
         {
             return Ok(());
         }
-        match source.load(event.channel_id).await {
+        match source
+            .load(event.channel_id, event.membership_version)
+            .await
+        {
             Ok(Some(snapshot)) if snapshot.version >= event.membership_version => {
                 self.channels.insert(event.channel_id, snapshot.members);
                 Ok(())
@@ -106,7 +137,7 @@ mod tests {
 
     struct Fixed(Option<Snapshot>);
     impl SnapshotSource for Fixed {
-        async fn load(&self, _channel_id: i64) -> Result<Option<Snapshot>, String> {
+        async fn load(&self, _channel_id: i64, _at_least: i64) -> Result<Option<Snapshot>, String> {
             Ok(self.0.clone())
         }
     }
@@ -204,5 +235,48 @@ mod tests {
             m.ensure_loaded(&msg(5, 1), &Fixed(None)).await,
             Err(Unknown::NoSnapshot)
         );
+    }
+
+    #[tokio::test]
+    async fn the_sequencer_is_asked_only_when_the_store_is_behind() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Counted(Option<Snapshot>, AtomicUsize);
+        impl SnapshotSource for Counted {
+            async fn load(&self, _: i64, _: i64) -> Result<Option<Snapshot>, String> {
+                self.1.fetch_add(1, Ordering::SeqCst);
+                Ok(self.0.clone())
+            }
+        }
+        let snap = |version, members: &[i64]| {
+            Some(Snapshot {
+                version,
+                members: members.iter().copied().collect(),
+            })
+        };
+        let source = Fallback {
+            primary: Fixed(snap(5, &[1])),
+            secondary: Some(Counted(snap(9, &[1, 2]), AtomicUsize::new(0))),
+        };
+
+        // Current enough in the store: the sequencer isn't bothered.
+        assert_eq!(source.load(7, 5).await.unwrap().unwrap().version, 5);
+        assert_eq!(
+            source.secondary.as_ref().unwrap().1.load(Ordering::SeqCst),
+            0
+        );
+        // Behind: the sequencer's newer answer is used.
+        assert_eq!(source.load(7, 8).await.unwrap(), snap(9, &[1, 2]));
+        // Nothing in the store yet (channel created moments ago): the sequencer answers.
+        let cold = Fallback {
+            primary: Fixed(None),
+            secondary: Some(Fixed(snap(1, &[1]))),
+        };
+        assert_eq!(cold.load(7, 1).await.unwrap().unwrap().version, 1);
+        // No sequencer configured: the store's answer as before.
+        let alone: Fallback<Fixed, Fixed> = Fallback {
+            primary: Fixed(snap(5, &[1])),
+            secondary: None,
+        };
+        assert_eq!(alone.load(7, 8).await.unwrap().unwrap().version, 5);
     }
 }

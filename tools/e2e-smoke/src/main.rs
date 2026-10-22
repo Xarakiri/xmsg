@@ -192,6 +192,9 @@ async fn run() -> Result<(), String> {
             check_readstate(&readstate_url, channel, &users).await?;
         }
         check_settings(url, channel, &users).await?;
+        if let Ok(sequencer_url) = std::env::var("XMSG_SEQUENCER_URL") {
+            check_membership_endpoint(&sequencer_url, channel, &users).await?;
+        }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
@@ -485,6 +488,45 @@ async fn check_workspace_removal(
     println!(
         "workspace removal: the removed member got nothing of the workspace's channel; the job took her out of it in {} ms",
         left_after.as_millis()
+    );
+    Ok(())
+}
+
+/// The sequencer's membership endpoint (plan §5.6): after mallory's join and leave the
+/// channel has alice and bob again, at the version of the leave (event 6).
+async fn check_membership_endpoint(
+    url: &str,
+    channel: i64,
+    users: &[(i64, String)],
+) -> Result<(), String> {
+    let response = reqwest::get(format!("{url}/v1/channels/{channel}/members"))
+        .await
+        .map_err(|e| e.to_string())?;
+    if response.status() != 200 {
+        return Err(format!("membership endpoint: {}", response.status()));
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let members =
+        xmsg_proto::v1::ChannelMembers::decode(bytes.as_ref()).map_err(|e| e.to_string())?;
+    let mut expected = vec![users[0].0, users[1].0];
+    expected.sort();
+    if members.user_ids != expected || members.membership_version != 6 {
+        return Err(format!(
+            "membership endpoint: expected {expected:?} at version 6, got {:?} at {}",
+            members.user_ids, members.membership_version
+        ));
+    }
+    let unknown = reqwest::get(format!("{url}/v1/channels/1/members"))
+        .await
+        .map_err(|e| e.to_string())?
+        .status();
+    if unknown != 404 {
+        return Err(format!(
+            "membership endpoint, unknown channel: expected 404, got {unknown}"
+        ));
+    }
+    println!(
+        "membership endpoint: the sequencer serves alice and bob at version 6; an unknown channel is 404"
     );
     Ok(())
 }
