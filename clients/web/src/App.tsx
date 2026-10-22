@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ApiError, unread, type Channel, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
+import { ApiError, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
+import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
 import { useNames } from "./useNames.ts";
 
@@ -117,8 +118,18 @@ function memberList(members: string[], me: string, names: Directory, shown = 5):
   return more > 0 ? `${labels.join(", ")} and ${more} more` : labels.join(", ");
 }
 
+/** Opens the local database first, so the chat renders with what it had (plan §9.2). */
 function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel, markRead, setMuted } = useChat(me);
+  const [initial, setInitial] = useState<ChatState | null>(null);
+  useEffect(() => {
+    void loadState(me).then(setInitial);
+  }, [me]);
+  if (!initial) return <div className="center muted">Loading…</div>;
+  return <ChatView me={me} initial={initial} onSignOut={onSignOut} />;
+}
+
+function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; onSignOut: () => void }) {
+  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry } = useChat(me, initial);
   const names = useNames(me);
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
@@ -197,6 +208,7 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
             messages={state.messages[current.id] ?? []}
             onSend={(b) => send(current.id, b)}
             onToggleMute={() => setMuted(current.id, !current.muted)}
+            onRetry={retry}
           />
         ) : (
           <div className="center muted">{channels.length ? "Pick a conversation" : "Create a channel or start a DM"}</div>
@@ -329,6 +341,7 @@ function Conversation({
   messages,
   onSend,
   onToggleMute,
+  onRetry,
 }: {
   channel: Channel;
   me: string;
@@ -336,6 +349,7 @@ function Conversation({
   messages: Message[];
   onSend: (body: string) => void;
   onToggleMute: () => void;
+  onRetry: (key: string) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
@@ -408,7 +422,19 @@ function Conversation({
               {m.status === "sent" && <span className="muted small">sent</span>}
             </div>
             <div className="body">{m.body}</div>
-            {m.error && <div className="error small">{m.error}</div>}
+            {m.error && (
+              <div className="error small">
+                {m.error}
+                {m.status === "failed" && (
+                  <>
+                    {" · "}
+                    <button className="link" onClick={() => onRetry(m.key)}>
+                      Retry
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </li>
         ))}
         <div ref={bottom} />

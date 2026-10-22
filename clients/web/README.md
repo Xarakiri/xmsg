@@ -19,10 +19,10 @@ Open http://localhost:5173. The Vite dev server is the browser's single origin a
 
 - Signing in stores the refresh token in `localStorage`; access tokens (15 min) are refreshed a minute before they expire, and a reload resumes the session.
 - Messages show instantly as **sending…**, become **sent** on the gateway's ack and take their place by `msg_seq` when the sequenced event arrives. Rejections stay visible with the reason.
-- Unconfirmed messages are resent when the connection comes back; the sequencer drops repeats of the same `client_msg_id`.
+- **Outbox** ([plan §9.2](../../docs/architecture-plan.md)): unconfirmed messages are resent when the connection comes back, and the sequencer drops repeats of the same `client_msg_id`. After **10 minutes** (inside the sequencer's 15-minute dedupe window) a message stops being resent and shows **Not sent · Retry**. A retry goes out under a **new** `client_msg_id`. If the original got through after all, its event still confirms it.
 - **Mute** (ADR-0016): muted channels are dimmed, with no bold or badge. The toggle is shown at once and stored through `member.settings`, and sync brings the setting to your other devices.
 - **Unread badges** (ADR-0012) show the channel's latest message minus your read position. Your own messages and joins count as read. The open channel is marked read while the tab is visible, and the sync brings your other devices' positions (merged with max).
-- Channels and messages are kept in `localStorage`, so a reload keeps the conversation.
+- **Local database:** channels and messages live in **IndexedDB**, so the app opens instantly with what it had, and history isn't capped by localStorage's ~5 MB. A state saved by an older version moves over on first load, and fields added since get their defaults. Where IndexedDB is unavailable (some private modes), localStorage is used instead.
 - **Sync** ([plan §6.6](../../docs/architecture-plan.md)) runs on reconnect, on a gateway `Resync` (only the named partition's channels), when the tab comes back to the foreground, and every 30 minutes. One sync runs at a time; requests made meanwhile merge into one follow-up. Each sync lists its channels with their heads and fetches events (up to 5 pages of 200) only for channels whose head moved past what it has. History and live events are applied in any order: messages by `msg_seq`, membership only if newer than the last change seen.
 
 ## Not yet

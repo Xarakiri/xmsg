@@ -31,7 +31,14 @@ export interface Channel {
   left: boolean;
 }
 
-export type MessageStatus = "pending" | "sent" | "confirmed" | "rejected";
+export type MessageStatus = "pending" | "sent" | "confirmed" | "rejected" | "failed";
+
+/**
+ * How long the outbox resends a message on its own (plan §9.2): inside the sequencer's
+ * 15-minute dedupe window, so a resend can never be sequenced twice. After that it is
+ * `failed` and the user retries it under a new client_msg_id.
+ */
+export const OUTBOX_RETRY_MS = 10 * 60_000;
 
 export interface Message {
   /** client_msg_id for own messages, otherwise `seq:<msg_seq>`. */
@@ -62,6 +69,10 @@ export type Action =
   | { type: "channelList"; channels: ListedChannel[] }
   /** Read positions from the server (sync); merged with max, like heads (plan §6.6). */
   | { type: "readPositions"; positions: { channelId: string; msgSeq: number }[] }
+  /** Own messages unsent for longer than OUTBOX_RETRY_MS stop being resent. */
+  | { type: "expire"; now: number }
+  /** The user retries a failed message: it goes out again under a new client_msg_id. */
+  | { type: "retry"; oldKey: string; newKey: string; at: number }
   /** Personal settings from the server, or one just changed (shown at once). */
   | { type: "settings"; settings: { channelId: string; muted: boolean; notifyLevel: NotifyLevel }[] }
   /** The user read the channel up to here (shown at once; the server applies it shortly). */
@@ -184,6 +195,20 @@ export function reduce(state: ChatState, action: Action): ChatState {
       }
       return next;
     }
+    case "expire": {
+      let next = state;
+      for (const [channelId, list] of Object.entries(state.messages)) {
+        if (!list.some((m) => isStale(m, state.me, action.now))) continue;
+        next = withMessages(next, channelId, (l) =>
+          l.map((m) => (isStale(m, state.me, action.now) ? { ...m, status: "failed" as const, error: "Not sent" } : m)),
+        );
+      }
+      return next;
+    }
+    case "retry":
+      return updateOwn(state, action.oldKey, (m) =>
+        m.status === "failed" ? { ...m, key: action.newKey, status: "pending", error: undefined, at: action.at } : m,
+      );
     case "markRead": {
       const channel = state.channels[action.channelId];
       if (!channel || action.msgSeq <= channel.readSeq) return state;
@@ -326,6 +351,10 @@ export function behind(state: ChatState, listed: ListedChannel[]): { id: string;
     .map((l) => ({ id: l.id, head: l.eventSeq, after: state.channels[l.id]?.syncedSeq ?? 0 }))
     .filter((c) => c.head > c.after)
     .map(({ id, after }) => ({ id, after }));
+}
+
+function isStale(m: Message, me: string, now: number): boolean {
+  return m.authorId === me && m.msgSeq === 0 && (m.status === "pending" || m.status === "sent") && now - m.at > OUTBOX_RETRY_MS;
 }
 
 /** Unread messages in a channel (ADR-0012: the head minus the read position). */
