@@ -21,6 +21,10 @@
 //! against the sequencer's verdicts: a non-admin can't remove someone, an outsider
 //! can't join a private channel, an admin's invite and a member leaving are accepted.
 //!
+//! With `XMSG_USERS_URL` set too, profiles and workspaces are checked: a renamed user's
+//! name is visible to a co-member, and someone outside a new workspace can't be put
+//! into its channels until they accept an invite.
+//!
 //! With `XMSG_AUTH_URL` set, the three users sign up and log in through the auth
 //! service and connect with real access tokens (the gateway checks them against the
 //! JWKS); a forged token must be refused. Without it, development tokens are used.
@@ -29,7 +33,8 @@
 //! Env: XMSG_GATEWAY_URL (ws://127.0.0.1:4000/ws), XMSG_KAFKA_BOOTSTRAP (127.0.0.1:9092),
 //! XMSG_CQL_NODES (optional, e.g. 127.0.0.1:9042), XMSG_AUTH_URL (optional, e.g. http://127.0.0.1:8081),
 //! XMSG_CHANNELS_URL (optional, e.g. http://127.0.0.1:8082),
-//! XMSG_MESSAGES_URL (optional, e.g. http://127.0.0.1:8083; history reads, checked after membership).
+//! XMSG_MESSAGES_URL (optional, e.g. http://127.0.0.1:8083; history reads, checked after membership),
+//! XMSG_USERS_URL (optional, e.g. http://127.0.0.1:8084; needs XMSG_CHANNELS_URL).
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -179,7 +184,135 @@ async fn run() -> Result<(), String> {
         if let Ok(messages_url) = std::env::var("XMSG_MESSAGES_URL") {
             check_history(url, &messages_url, channel, &users).await?;
         }
+        if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
+            check_workspaces(&users_url, url, &users, run_id).await?;
+        }
     }
+    Ok(())
+}
+
+/// Users service + the channels service's workspace checks.
+async fn check_workspaces(
+    users_url: &str,
+    channels_url: &str,
+    users: &[(i64, String)],
+    run_id: i64,
+) -> Result<(), String> {
+    let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
+    let fail =
+        |what: &str, got: &(u16, serde_json::Value)| format!("{what}: got {} {}", got.0, got.1);
+
+    // Everyone signed up into the default workspace, so bob sees alice's new name.
+    let name = format!("Alice {run_id}");
+    let renamed = call(
+        "PATCH",
+        &format!("{users_url}/v1/me"),
+        &alice.1,
+        Some(serde_json::json!({"name": name})),
+    )
+    .await?;
+    if renamed.0 != 200 {
+        return Err(fail("alice renaming herself", &renamed));
+    }
+    let seen = call(
+        "GET",
+        &format!("{users_url}/v1/users?ids={},{}", alice.0, bob.0),
+        &bob.1,
+        None,
+    )
+    .await?;
+    let names: Vec<&str> = seen.1["users"]
+        .as_array()
+        .map(|us| us.iter().filter_map(|u| u["name"].as_str()).collect())
+        .unwrap_or_default();
+    if seen.0 != 200 || !names.contains(&name.as_str()) {
+        return Err(fail("bob reading alice's profile", &seen));
+    }
+
+    // A new workspace holds only alice: nobody else can be put into its channels.
+    let created = call(
+        "POST",
+        &format!("{users_url}/v1/workspaces"),
+        &alice.1,
+        Some(serde_json::json!({"name": "E2E", "slug": format!("e2e-{run_id}")})),
+    )
+    .await?;
+    let workspace = created.1["workspace_id"].as_str().map(str::to_string);
+    let (201, Some(workspace)) = (created.0, workspace) else {
+        return Err(fail("creating a workspace", &created));
+    };
+    let channels = format!("{channels_url}/v1/channels");
+    let with_bob = call(
+        "POST",
+        &channels,
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": "ws", "workspace_id": workspace, "member_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if with_bob.0 != 400 {
+        return Err(fail("a channel with an outsider as member", &with_bob));
+    }
+    let channel = call(
+        "POST",
+        &channels,
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": "ws", "workspace_id": workspace})),
+    )
+    .await?;
+    let Some(channel_id) = channel.1["channel_id"]
+        .as_str()
+        .filter(|_| channel.0 == 201)
+    else {
+        return Err(fail("creating a channel in the new workspace", &channel));
+    };
+    let members = format!("{channels_url}/v1/channels/{channel_id}/members");
+    let invite_mallory = serde_json::json!({"user_id": mallory.0.to_string()});
+    let outsider = call("POST", &members, &alice.1, Some(invite_mallory.clone())).await?;
+    if outsider.0 != 403 {
+        return Err(fail("adding an outsider to the channel", &outsider));
+    }
+    let hidden = call(
+        "GET",
+        &format!("{users_url}/v1/workspaces/{workspace}/members"),
+        &mallory.1,
+        None,
+    )
+    .await?;
+    if hidden.0 != 404 {
+        return Err(fail("an outsider listing the members", &hidden));
+    }
+
+    // An invite brings mallory in; then the same add reaches the sequencer.
+    let invite = call(
+        "POST",
+        &format!("{users_url}/v1/workspaces/{workspace}/invites"),
+        &alice.1,
+        None,
+    )
+    .await?;
+    let Some(code) = invite.1["code"].as_str().filter(|_| invite.0 == 201) else {
+        return Err(fail("creating an invite", &invite));
+    };
+    let accepted = call(
+        "POST",
+        &format!("{users_url}/v1/invites/{code}/accept"),
+        &mallory.1,
+        None,
+    )
+    .await?;
+    if accepted.0 != 200 || accepted.1["status"] != "joined" {
+        return Err(fail("mallory accepting the invite", &accepted));
+    }
+    let added = call("POST", &members, &alice.1, Some(invite_mallory)).await?;
+    if added.0 != 200 && added.0 != 202 {
+        return Err(fail(
+            "adding mallory after she joined the workspace",
+            &added,
+        ));
+    }
+    println!(
+        "users: a co-member sees the new name; an outsider can't join a workspace's channel (403) until invited, then can"
+    );
     Ok(())
 }
 

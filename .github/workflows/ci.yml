@@ -207,7 +207,7 @@ jobs:
           docker compose up cassandra-init --exit-code-from cassandra-init
       - name: Build
         run: |
-          cargo build --release -p xmsg-auth -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-e2e-smoke
+          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-e2e-smoke
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
       - name: Messages service integration tests (real Kafka + NATS)
@@ -228,13 +228,20 @@ jobs:
         env:
           XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
         run: cargo test -p xmsg-channels --test integration -- --ignored
-      - name: Start auth, channels, sequencer, messages, persister, fan-out and gateway
+      - name: Users integration tests (real PostgreSQL)
+        env:
+          XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
+        run: cargo test -p xmsg-users --test integration -- --ignored
+      - name: Start auth, users, channels, sequencer, messages, persister, fan-out and gateway
         run: |
           mkdir -p logs
           XMSG_AUTH_KEY=$(openssl rand -base64 32) \
             XMSG_DATABASE_URL=postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg \
             ./target/release/xmsg-auth > logs/auth.log 2>&1 &
           for i in $(seq 1 30); do curl -fs http://localhost:8081/healthz >/dev/null && break; sleep 1; done
+          XMSG_DATABASE_URL=postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg \
+            XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
+            ./target/release/xmsg-users > logs/users.log 2>&1 &
           XMSG_DATABASE_URL=postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg \
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
             ./target/release/xmsg-channels > logs/channels.log 2>&1 &
@@ -251,6 +258,7 @@ jobs:
             curl -fs http://localhost:4000/healthz >/dev/null \
               && grep -q 'JWKS loaded' logs/gateway.log \
               && grep -q 'channels ready' logs/channels.log \
+              && grep -q 'users ready' logs/users.log \
               && grep -q 'messages service ready' logs/messages.log \
               && grep -q 'history reads ready' logs/messages.log \
               && grep -q 'persister ready' logs/persister.log \
@@ -259,11 +267,12 @@ jobs:
             sleep 2
           done
           echo "services did not become ready"; tail -n 50 logs/*.log; exit 1
-      - name: End-to-end smoke (auth → channels → client → gateway → messages → sequencer → persister + fan-out → clients)
+      - name: End-to-end smoke (auth → users → channels → client → gateway → messages → sequencer → persister + fan-out → clients)
         env:
           XMSG_AUTH_URL: http://localhost:8081
           XMSG_CHANNELS_URL: http://localhost:8082
           XMSG_MESSAGES_URL: http://localhost:8083
+          XMSG_USERS_URL: http://localhost:8084
         run: ./target/release/xmsg-e2e-smoke
       - name: Upload service logs
         if: always()

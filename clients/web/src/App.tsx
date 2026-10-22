@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ApiError, type Channel, type ConnectionStatus, type Message } from "@xmsg/client-core";
+import { ApiError, type Channel, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 import { useChat } from "./useChat.ts";
+import { useNames } from "./useNames.ts";
 
 export function App() {
   const [me, setMe] = useState<string | null>(null);
@@ -102,17 +103,23 @@ function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
   );
 }
 
-const shortId = (id: string) => `…${id.slice(-6)}`;
-
-function channelTitle(c: Channel, me: string): string {
+function channelTitle(c: Channel, me: string, names: Directory): string {
   if (c.name) return c.kind === "public" || c.kind === "private" || c.kind === "broadcast" ? `# ${c.name}` : c.name;
   const others = c.members.filter((m) => m !== me);
-  if (c.kind === "dm" || c.kind === "group_dm") return others.length ? others.map(shortId).join(", ") : "Direct message";
-  return `Channel ${shortId(c.id)}`;
+  if (c.kind === "dm" || c.kind === "group_dm") return others.length ? others.map((m) => names.label(m)).join(", ") : "Direct message";
+  return `Channel …${c.id.slice(-6)}`;
+}
+
+/** "Ada, Bob, You and 4 more" */
+function memberList(members: string[], me: string, names: Directory, shown = 5): string {
+  const labels = members.slice(0, shown).map((m) => (m === me ? "You" : names.label(m)));
+  const more = members.length - labels.length;
+  return more > 0 ? `${labels.join(", ")} and ${more} more` : labels.join(", ");
 }
 
 function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
   const { state, status, syncError, send, nameChannel } = useChat(me);
+  const names = useNames(me);
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
 
@@ -127,7 +134,12 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
         <header className="me">
           <StatusDot status={status} />
           <div>
-            <div className="strong">You{syncError && <span className="muted small"> · couldn't load history</span>}</div>
+            <div className="strong">
+              <button className="link strong" title="Change your display name" onClick={() => rename(me, names)}>
+                {names.label(me)}
+              </button>
+              {syncError && <span className="muted small"> · couldn't load history</span>}
+            </div>
             <button className="link mono" title="Copy your user ID" onClick={() => navigator.clipboard?.writeText(me)}>
               {me}
             </button>
@@ -135,12 +147,12 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
         </header>
         <Section title="Channels" onAdd={() => setPanel("channel")}>
           {rooms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me)} />
+            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} />
           ))}
         </Section>
         <Section title="Direct messages" onAdd={() => setPanel("dm")}>
           {dms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me)} />
+            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} />
           ))}
         </Section>
         <footer>
@@ -162,13 +174,23 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
           />
         )}
         {current ? (
-          <Conversation channel={current} me={me} messages={state.messages[current.id] ?? []} onSend={(b) => send(current.id, b)} />
+          <Conversation channel={current} me={me} names={names} messages={state.messages[current.id] ?? []} onSend={(b) => send(current.id, b)} />
         ) : (
           <div className="center muted">{channels.length ? "Pick a conversation" : "Create a channel or start a DM"}</div>
         )}
       </main>
     </div>
   );
+}
+
+async function rename(me: string, names: Directory) {
+  const name = prompt("Your display name", names.profile(me)?.name ?? "")?.trim();
+  if (!name) return;
+  try {
+    names.remember(await api.updateMe(await session.accessToken(), { name }));
+  } catch (err) {
+    alert(errorText(err));
+  }
 }
 
 function StatusDot({ status }: { status: ConnectionStatus }) {
@@ -261,7 +283,19 @@ function CreatePanel({ kind, onClose, onCreated }: { kind: "channel" | "dm"; onC
   );
 }
 
-function Conversation({ channel, me, messages, onSend }: { channel: Channel; me: string; messages: Message[]; onSend: (body: string) => void }) {
+function Conversation({
+  channel,
+  me,
+  names,
+  messages,
+  onSend,
+}: {
+  channel: Channel;
+  me: string;
+  names: Directory;
+  messages: Message[];
+  onSend: (body: string) => void;
+}) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
@@ -305,9 +339,9 @@ function Conversation({ channel, me, messages, onSend }: { channel: Channel; me:
     <section className="conversation">
       <header className="conv-header">
         <div>
-          <div className="strong">{channelTitle(channel, me)}</div>
-          <div className="muted small">
-            {channel.members.length} member{channel.members.length === 1 ? "" : "s"} · {channel.kind.replace("_", " ")}
+          <div className="strong">{channelTitle(channel, me, names)}</div>
+          <div className="muted small" title={channel.members.map((m) => (m === me ? "You" : names.label(m))).join(", ")}>
+            {channel.members.length} member{channel.members.length === 1 ? "" : "s"} · {channel.kind.replace("_", " ")} · {memberList(channel.members, me, names)}
           </div>
         </div>
         {canManage && (
@@ -322,7 +356,7 @@ function Conversation({ channel, me, messages, onSend }: { channel: Channel; me:
         {messages.map((m) => (
           <li key={m.key} className={`message ${m.authorId === me ? "own" : ""} ${m.status}`}>
             <div className="meta">
-              <span className="strong">{m.authorId === me ? "You" : shortId(m.authorId)}</span>
+              <span className="strong">{m.authorId === me ? "You" : names.label(m.authorId)}</span>
               <time className="muted small">{new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
               {m.status === "pending" && <span className="muted small">sending…</span>}
               {m.status === "sent" && <span className="muted small">sent</span>}
@@ -340,7 +374,7 @@ function Conversation({ channel, me, messages, onSend }: { channel: Channel; me:
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) submit(e);
           }}
-          placeholder={`Message ${channelTitle(channel, me)}`}
+          placeholder={`Message ${channelTitle(channel, me, names)}`}
           rows={2}
           aria-label="Message"
         />

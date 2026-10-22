@@ -57,7 +57,7 @@ pub fn router<S: Store, L: EventLog, M: Memberships>(app: Arc<App<S, L, M>>) -> 
 pub enum ApiError {
     BadRequest(&'static str),
     Unauthorized,
-    Forbidden,
+    Forbidden(&'static str),
     NotFound(&'static str),
     Unavailable,
 }
@@ -67,7 +67,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "invalid or missing access token"),
-            ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "try again later"),
         };
@@ -162,6 +162,7 @@ async fn create_channel<S: Store, L: EventLog, M: Memberships>(
     if members.len() > MAX_INITIAL_MEMBERS {
         return Err(ApiError::BadRequest("too many initial members"));
     }
+    check_workspace(&app, workspace_id, creator, &members).await?;
     let channel = NewChannel {
         id: new_id(),
         workspace_id,
@@ -211,9 +212,30 @@ async fn my_channels<S: Store, L: EventLog, M: Memberships>(
     Ok(Json(json!({ "channels": list })))
 }
 
+/// The creator and every initial member must belong to the channel's workspace. An
+/// outsider creator is refused (403), as is an unknown workspace, so its existence
+/// doesn't leak; outsiders among the members make the request invalid (400).
+async fn check_workspace<S: Store, L, M>(
+    app: &App<S, L, M>,
+    workspace_id: i64,
+    creator: i64,
+    members: &[i64],
+) -> Result<(), ApiError> {
+    let outside = app.store.outside_workspace(workspace_id, members).await?;
+    if outside.contains(&creator) {
+        return Err(ApiError::Forbidden("not a member of this workspace"));
+    }
+    if !outside.is_empty() {
+        return Err(ApiError::BadRequest("user is not in the workspace"));
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct CreateDm {
     user_ids: Vec<String>,
+    /// Absent: a workspace everyone shares (the lowest-numbered one).
+    workspace_id: Option<String>,
 }
 
 /// One other user: the pair's DM (created once, then returned again). More: a new group DM.
@@ -233,19 +255,30 @@ async fn create_dm<S: Store, L: EventLog, M: Memberships>(
         n if n <= MAX_GROUP_DM => ("group_dm", ChannelType::GroupDm),
         _ => return Err(ApiError::BadRequest("group DMs hold at most 9 people")),
     };
+    let mut members = others.clone();
+    members.push(creator);
+    let workspace_id = match req.workspace_id.as_deref().map(parse_id).transpose()? {
+        Some(id) => {
+            check_workspace(&app, id, creator, &members).await?;
+            id
+        }
+        None => app
+            .store
+            .shared_workspace(&members)
+            .await?
+            .ok_or(ApiError::Forbidden("no workspace in common"))?,
+    };
     let channel = NewChannel {
         id: new_id(),
-        workspace_id: DEFAULT_WORKSPACE,
+        workspace_id,
         kind,
         name: None,
         topic: None,
         created_by: creator,
     };
-    let mut members = others.clone();
-    members.push(creator);
     let event = channel_created(
         channel.id,
-        DEFAULT_WORKSPACE,
+        workspace_id,
         creator,
         channel_type,
         "",
@@ -307,6 +340,22 @@ async fn join<S: Store, L: EventLog, M: Memberships>(
         .map(parse_id)
         .transpose()?
         .unwrap_or(actor);
+    // Only members of the channel's workspace can join or be invited.
+    let workspace_id = app
+        .store
+        .channel_workspace(channel_id)
+        .await?
+        .ok_or(ApiError::NotFound("unknown channel"))?;
+    if !app
+        .store
+        .outside_workspace(workspace_id, &[user_id])
+        .await?
+        .is_empty()
+    {
+        return Err(ApiError::Forbidden(
+            "user is not in the channel's workspace",
+        ));
+    }
     command(
         &app,
         channel_id,
@@ -373,7 +422,7 @@ async fn command<S, L: EventLog, M>(
         match RejectReason::try_from(result.reason).unwrap_or(RejectReason::Unspecified) {
             RejectReason::UnknownChannel => ApiError::NotFound("unknown channel"),
             RejectReason::NotAMember => ApiError::NotFound("not a member"),
-            RejectReason::Forbidden => ApiError::Forbidden,
+            RejectReason::Forbidden => ApiError::Forbidden("forbidden"),
             _ => ApiError::BadRequest("rejected"),
         },
     )

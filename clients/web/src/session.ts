@@ -10,7 +10,7 @@ const tokenStore: TokenStore = {
   save: (token) => safe(() => (token ? localStorage.setItem(REFRESH_KEY, token) : localStorage.removeItem(REFRESH_KEY))),
 };
 
-export const api = new Api({ auth: "/auth", channels: "/channels", messages: "/messages" });
+export const api = new Api({ auth: "/auth", channels: "/channels", messages: "/messages", users: "/users" });
 export const session = new Session(api, tokenStore);
 
 export const gatewayUrl = () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
