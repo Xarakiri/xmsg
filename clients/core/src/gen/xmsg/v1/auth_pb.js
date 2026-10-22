@@ -7,12 +7,13 @@
 /* eslint-disable */
 
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import { file_xmsg_v1_users } from "./users_pb.js";
 
 /**
  * Describes the file xmsg/v1/auth.proto.
  */
 export const file_xmsg_v1_auth = /*@__PURE__*/
-  fileDesc("ChJ4bXNnL3YxL2F1dGgucHJvdG8SB3htc2cudjEiSAoJQXV0aEV2ZW50EjIKD3Nlc3Npb25fcmV2b2tlZBgBIAEoCzIXLnhtc2cudjEuU2Vzc2lvblJldm9rZWRIAEIHCgVldmVudCJ1Cg5TZXNzaW9uUmV2b2tlZBIPCgd1c2VyX2lkGAEgASgDEhIKCnNlc3Npb25faWQYAiABKAMSFQoNcmV2b2tlZF9hdF9tcxgDIAEoAxIXCg9yZWZ1c2VfdW50aWxfbXMYBCABKAMSDgoGcmVhc29uGAUgASgJQhUKEWRldi54bXNnLnByb3RvLnYxUAFiBnByb3RvMw");
+  fileDesc("ChJ4bXNnL3YxL2F1dGgucHJvdG8SB3htc2cudjEijQEKCUF1dGhFdmVudBIyCg9zZXNzaW9uX3Jldm9rZWQYASABKAsyFy54bXNnLnYxLlNlc3Npb25SZXZva2VkSAASQwoYd29ya3NwYWNlX21lbWJlcl9yZW1vdmVkGAIgASgLMh8ueG1zZy52MS5Xb3Jrc3BhY2VNZW1iZXJSZW1vdmVkSABCBwoFZXZlbnQidQoOU2Vzc2lvblJldm9rZWQSDwoHdXNlcl9pZBgBIAEoAxISCgpzZXNzaW9uX2lkGAIgASgDEhUKDXJldm9rZWRfYXRfbXMYAyABKAMSFwoPcmVmdXNlX3VudGlsX21zGAQgASgDEg4KBnJlYXNvbhgFIAEoCUIVChFkZXYueG1zZy5wcm90by52MVABYgZwcm90bzM", [file_xmsg_v1_users]);
 
 /**
  * Describes the message xmsg.v1.AuthEvent.

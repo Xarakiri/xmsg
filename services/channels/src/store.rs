@@ -74,6 +74,15 @@ pub trait Store: Send + Sync + 'static {
         users: &[i64],
     ) -> impl Future<Output = Result<Option<i64>, StoreError>> + Send;
 
+    /// Writes a workspace event (aggregate `workspace`, e.g. a removal completed) to the
+    /// outbox, for `users.events`.
+    fn outbox_workspace_event(
+        &self,
+        workspace_id: i64,
+        event_type: &str,
+        payload: &[u8],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
     /// The channel's workspace (absent: unknown channel).
     fn channel_workspace(
         &self,
@@ -172,6 +181,21 @@ impl Store for Postgres {
         .bind(distinct.len() as i64)
         .fetch_optional(&self.pool)
         .await?)
+    }
+
+    async fn outbox_workspace_event(
+        &self,
+        workspace_id: i64,
+        event_type: &str,
+        payload: &[u8],
+    ) -> Result<(), StoreError> {
+        sqlx::query("INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload) VALUES ('workspace', $1, $2, $3)")
+            .bind(workspace_id)
+            .bind(event_type)
+            .bind(payload)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     async fn channel_workspace(&self, channel_id: i64) -> Result<Option<i64>, StoreError> {

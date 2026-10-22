@@ -11,6 +11,11 @@ defmodule Xmsg.V1.AuthEvent do
   oneof :event, 0
 
   field :session_revoked, 1, type: Xmsg.V1.SessionRevoked, json_name: "sessionRevoked", oneof: 0
+
+  field :workspace_member_removed, 2,
+    type: Xmsg.V1.WorkspaceMemberRemoved,
+    json_name: "workspaceMemberRemoved",
+    oneof: 0
 end
 
 defmodule Xmsg.V1.SessionRevoked do

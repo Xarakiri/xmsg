@@ -13,6 +13,7 @@
 //!   with consecutive sequence numbers, plus `StreamHeads` every second (ADR-0009).
 
 pub mod config;
+pub mod denylist;
 pub mod membership;
 pub mod sessions;
 pub mod store;

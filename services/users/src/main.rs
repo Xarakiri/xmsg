@@ -23,11 +23,30 @@ async fn main() {
     let store = Postgres::connect(&config.database_url)
         .await
         .unwrap_or_else(|e| fail(&format!("postgres: {e}")));
+    // Fast path for workspace removals; the outbox copy follows via meta-relay regardless.
+    let removals = match std::env::var("XMSG_NATS_URL") {
+        Ok(url) => {
+            let client = async_nats::connect(&url)
+                .await
+                .unwrap_or_else(|e| fail(&format!("nats {url}: {e}")));
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    if let Err(e) = client.publish("auth.revocations", event.into()).await {
+                        tracing::warn!(error = %e, "publishing a workspace removal failed; the outbox will deliver it");
+                    }
+                }
+            });
+            Some(tx)
+        }
+        Err(_) => None,
+    };
     let app = Arc::new(App {
         store,
         verifier: xmsg_authn::Verifier::from_env(config.jwks_url)
             .await
             .unwrap_or_else(|e| fail(&format!("revocations: {e}"))),
+        removals,
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await

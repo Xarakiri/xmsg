@@ -8,6 +8,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
+import type { WorkspaceMemberRemoved } from "./users_pb.js";
 
 /**
  * Describes the file xmsg/v1/auth.proto.
@@ -15,9 +16,10 @@ import type { Message } from "@bufbuild/protobuf";
 export declare const file_xmsg_v1_auth: GenFile;
 
 /**
- * Events of the auth service (topic `auth.events`, and NATS `auth.revocations` for
- * revocations). Written to the outbox with the change; revocations also go to NATS
- * straight after commit (fast path, ADR-0010). Consumers dedupe: every event is absolute.
+ * Events of the auth service (topic `auth.events`), and what NATS `auth.revocations`
+ * carries: revocations, written to the outbox with the change and also published
+ * straight after commit (fast path, ADR-0010), plus workspace removals from the users
+ * service (plan §6.5). Consumers dedupe: every event is absolute.
  *
  * @generated from message xmsg.v1.AuthEvent
  */
@@ -31,6 +33,12 @@ export declare type AuthEvent = Message<"xmsg.v1.AuthEvent"> & {
      */
     value: SessionRevoked;
     case: "sessionRevoked";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.WorkspaceMemberRemoved workspace_member_removed = 2;
+     */
+    value: WorkspaceMemberRemoved;
+    case: "workspaceMemberRemoved";
   } | { case: undefined; value?: undefined };
 };
 

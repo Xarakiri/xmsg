@@ -25,10 +25,14 @@ Membership replies: 200 `{status: "accepted", event_seq}`, 403 forbidden, 404 un
 - **DMs:** one per pair (`dm_pairs`, `ON CONFLICT DO NOTHING`); two people opening it at the same moment get the same channel.
 - **Membership** (§6.3): `member.join_requested` / `member.kick_requested` with a fresh `request_id` (dedupe ID `cmd:{request_id}`). The waiter is registered before producing; every instance reads all of `commands.results` from its end at startup (no consumer group) and completes its own waiters. The rules (who may join, invite, remove) live in the sequencer.
 - **My channels** (§6.6 cheap step): membership and heads from the wide-column store (`channels_by_user`, `channel_heads`, written by the persister), names from Postgres. Clients compare heads with what they have and fetch events only for channels that moved. Redis `chan_head` and sync tokens replace the per-channel head reads in Phase 1b.
+- **Workspace removal job** (§6.5) consumes `users.events`, consumer group `xmsg-channels-removals`.
+  - For each `member_removed`, it sends a leave for every channel of that workspace the user is in. The channels come from `channels_by_user`. Each leave is a `member.kick_requested` with the user as actor, which the sequencer always allows, and waits for the verdict.
+  - Then it records `workspace.member_removal_completed` in the outbox.
+  - **Idempotent:** dedupe ID `wsremove:{workspace}:{user}:{removed_at}:{channel}`. "Not a member" counts as done, and offsets are committed after completion, so a crash re-runs the removal harmlessly.
+  - **Stale removals:** if the user was invited back since, no channel is left, but the completion is still recorded so fan-out lifts its deny entry.
 - **Startup check:** exits with code 2 if `messages.in` is missing or its partition count differs from `XMSG_PARTITIONS` (ADR-0021).
 
 ## Not yet
-- Revoking channel membership when someone leaves a workspace (§6.5).
 - Channel reads and lists, rename/topic/archive (`channel.updated` via `meta-relay`), pins, personal settings (`member.settings`, ADR-0016).
 
 ## Configuration

@@ -29,6 +29,8 @@ struct Memory {
     channels: Mutex<Vec<(NewChannel, Vec<i64>)>>,
     outbox: Mutex<Vec<InboundEvent>>,
     dms: Mutex<HashMap<(i64, i64), i64>>,
+    /// Workspace outbox events: (workspace, event_type, payload).
+    workspace_events: Mutex<Vec<(i64, String, Vec<u8>)>>,
 }
 
 impl Store for Memory {
@@ -83,6 +85,19 @@ impl Store for Memory {
             .unwrap()
             .push((c.clone(), members.to_vec()));
         self.outbox.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+    async fn outbox_workspace_event(
+        &self,
+        workspace_id: i64,
+        event_type: &str,
+        payload: &[u8],
+    ) -> Result<(), StoreError> {
+        self.workspace_events.lock().unwrap().push((
+            workspace_id,
+            event_type.to_string(),
+            payload.to_vec(),
+        ));
         Ok(())
     }
     async fn create_dm(
@@ -653,4 +668,134 @@ async fn channels_and_dms_stay_inside_workspaces() {
         .map(|(c, _)| c.workspace_id)
         .collect();
     assert_eq!(workspaces, [2, 2]);
+}
+
+#[tokio::test]
+async fn a_workspace_removal_leaves_that_workspaces_channels_and_records_completion() {
+    use xmsg_proto::Message;
+    use xmsg_proto::v1::{UsersEvent, users_event};
+    let h = harness().await;
+    // BOB was just removed from workspace 2 (he's outside it now), but the persister's
+    // channels_by_user still lists two channels there, and one in workspace 1.
+    h.state.memberships.0.lock().unwrap().insert(
+        BOB,
+        vec![
+            MyChannel {
+                channel_id: 21,
+                workspace_id: 2,
+                kind: "public".into(),
+                event_seq: 3,
+                msg_seq: 1,
+            },
+            MyChannel {
+                channel_id: 22,
+                workspace_id: 2,
+                kind: "private".into(),
+                event_seq: 5,
+                msg_seq: 2,
+            },
+            MyChannel {
+                channel_id: 11,
+                workspace_id: 1,
+                kind: "public".into(),
+                event_seq: 9,
+                msg_seq: 4,
+            },
+        ],
+    );
+    h.answer(CommandResult {
+        accepted: true,
+        event_seq: 6,
+        ..Default::default()
+    });
+    let ended = xmsg_channels::removals::remove_from_workspace(&h.state, 2, BOB, 1_700)
+        .await
+        .unwrap();
+    assert_eq!(ended, 2);
+
+    let leaves: Vec<(i64, i64, String)> = h
+        .sent()
+        .into_iter()
+        .map(|e| match e.payload {
+            Some(Payload::MemberKickRequested(k)) => (e.channel_id, k.user_id, e.dedupe_id),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        leaves,
+        vec![
+            (21, BOB, "wsremove:2:102:1700:21".to_string()),
+            (22, BOB, "wsremove:2:102:1700:22".to_string())
+        ],
+        "only workspace 2's channels, as BOB leaving"
+    );
+    assert!(h.sent().iter().all(|e| e.actor_id == BOB));
+
+    let events = h.state.store.workspace_events.lock().unwrap().clone();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        (events[0].0, events[0].1.as_str()),
+        (2, "workspace.member_removal_completed")
+    );
+    match UsersEvent::decode(events[0].2.as_slice()).unwrap().event {
+        Some(users_event::Event::RemovalCompleted(c)) => {
+            assert_eq!((c.workspace_id, c.user_id, c.channels), (2, BOB, 2))
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_stale_removal_of_someone_back_in_the_workspace_does_nothing() {
+    let h = harness().await;
+    h.state.memberships.0.lock().unwrap().insert(
+        ALICE,
+        vec![MyChannel {
+            channel_id: 21,
+            workspace_id: 2,
+            kind: "public".into(),
+            event_seq: 3,
+            msg_seq: 1,
+        }],
+    );
+    // ALICE is (again) a member of workspace 2.
+    let ended = xmsg_channels::removals::remove_from_workspace(&h.state, 2, ALICE, 1)
+        .await
+        .unwrap();
+    assert_eq!(ended, 0);
+    assert!(h.sent().is_empty(), "no channel is left");
+    assert_eq!(
+        h.state.store.workspace_events.lock().unwrap().len(),
+        1,
+        "the completion is still recorded, so fan-out lifts its deny entry"
+    );
+}
+
+#[tokio::test]
+async fn channels_the_user_already_left_are_skipped() {
+    let h = harness().await;
+    h.state.memberships.0.lock().unwrap().insert(
+        BOB,
+        vec![MyChannel {
+            channel_id: 21,
+            workspace_id: 2,
+            kind: "public".into(),
+            event_seq: 3,
+            msg_seq: 1,
+        }],
+    );
+    h.answer(CommandResult {
+        accepted: false,
+        reason: RejectReason::NotAMember as i32,
+        ..Default::default()
+    });
+    let ended = xmsg_channels::removals::remove_from_workspace(&h.state, 2, BOB, 1)
+        .await
+        .unwrap();
+    assert_eq!(ended, 0);
+    assert_eq!(
+        h.state.store.workspace_events.lock().unwrap().len(),
+        1,
+        "still completes"
+    );
 }
