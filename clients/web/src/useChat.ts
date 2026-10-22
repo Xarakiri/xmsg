@@ -5,11 +5,9 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import {
   BACKGROUND_SYNC_MS,
-  restore,
   Connection,
   SyncScheduler,
   inPartition,
-  initialState,
   reduce,
   sync,
   unsent,
@@ -17,18 +15,12 @@ import {
   type ChatState,
   type ConnectionStatus,
 } from "@xmsg/client-core";
-import { api, gatewayUrl, safe, session } from "./session.ts";
+import { api, gatewayUrl, session } from "./session.ts";
+import { saveState } from "./storage.ts";
 
-// Versioned: a saved state from an older client shape is dropped and re-synced.
-const stateKey = (me: string) => `xmsg.state.v3.${me}`;
-
-function load(me: string): ChatState {
-  const saved = safe(() => localStorage.getItem(stateKey(me)));
-  return restore(saved ? safe(() => JSON.parse(saved)) : null, me);
-}
-
-export function useChat(me: string) {
-  const [state, dispatch] = useReducer((s: ChatState, a: Action) => reduce(s, a), me, load);
+/** `initial`: the state loaded from the local database (see storage.ts). */
+export function useChat(me: string, initial: ChatState) {
+  const [state, dispatch] = useReducer((s: ChatState, a: Action) => reduce(s, a), initial);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [syncError, setSyncError] = useState(false);
   const conn = useRef<Connection | null>(null);
@@ -70,15 +62,20 @@ export function useChat(me: string) {
     };
     document.addEventListener("visibilitychange", onVisible);
     const timer = setInterval(() => connection.isOnline && scheduler.request(), BACKGROUND_SYNC_MS);
+    // The outbox gives up on its own after OUTBOX_RETRY_MS (plan §9.2); checked now (a
+    // reload after a long time offline) and every 30 s.
+    dispatch({ type: "expire", now: Date.now() });
+    const expiry = setInterval(() => dispatch({ type: "expire", now: Date.now() }), 30_000);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(timer);
+      clearInterval(expiry);
       connection.stop();
     };
   }, [me]);
 
   useEffect(() => {
-    const id = setTimeout(() => safe(() => localStorage.setItem(stateKey(me), JSON.stringify(state))), 200);
+    const id = setTimeout(() => void saveState(me, state), 200);
     return () => clearTimeout(id);
   }, [me, state]);
 
@@ -114,5 +111,17 @@ export function useChat(me: string) {
       .catch(() => dispatch({ type: "settings", settings: [{ channelId, muted: !muted, notifyLevel }] }));
   };
 
-  return { state, status, syncError, send, nameChannel, markRead, setMuted };
+  // A failed message goes out again under a new client_msg_id: the old one may still
+  // be in the sequencer's dedupe window, which would drop the retry silently.
+  const retry = (oldKey: string) => {
+    const message = Object.values(latest.current.messages)
+      .flat()
+      .find((m) => m.key === oldKey && m.status === "failed");
+    if (!message) return;
+    const newKey = crypto.randomUUID();
+    dispatch({ type: "retry", oldKey, newKey, at: Date.now() });
+    conn.current?.send(message.channelId, newKey, message.body);
+  };
+
+  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry };
 }

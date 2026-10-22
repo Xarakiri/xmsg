@@ -199,3 +199,25 @@ test("a state saved by an older client gets the newer fields' defaults", async (
   assert.deepEqual(restore({ me: "someone else", channels: {} }, ME), initialState(ME));
   assert.deepEqual(restore(null, ME), initialState(ME));
 });
+
+test("the outbox gives up after 10 minutes; a retry goes out under a new client_msg_id", async () => {
+  const { OUTBOX_RETRY_MS } = await import("../src/state.ts");
+  let s = reduce(apply(initialState(ME), created), { type: "send", channelId: "7", clientMsgId: "c-old", body: "hi", at: 1_000 });
+  s = reduce(s, { type: "send", channelId: "7", clientMsgId: "c-new", body: "later", at: 1_000 + OUTBOX_RETRY_MS });
+  s = reduce(s, { type: "expire", now: 1_000 + OUTBOX_RETRY_MS + 1 });
+  assert.deepEqual(s.messages["7"]!.map((m) => [m.key, m.status]), [["c-old", "failed"], ["c-new", "pending"]]);
+  assert.deepEqual(unsent(s).map((m) => m.key), ["c-new"], "a failed message isn't resent automatically");
+
+  s = reduce(s, { type: "retry", oldKey: "c-old", newKey: "c-retry", at: 2_000_000 });
+  const retried = s.messages["7"]!.find((m) => m.body === "hi")!;
+  assert.deepEqual([retried.key, retried.status, retried.error], ["c-retry", "pending", undefined]);
+  assert.ok(unsent(s).some((m) => m.key === "c-retry"));
+});
+
+test("a failed message that did get through is confirmed by its event", () => {
+  let s = reduce(apply(initialState(ME), created), { type: "send", channelId: "7", clientMsgId: "c-1", body: "hi", at: 0 });
+  s = reduce(s, { type: "expire", now: 11 * 60_000 });
+  assert.equal(s.messages["7"]![0]!.status, "failed");
+  s = apply(s, message(1, 101n, "c-1", "hi"));
+  assert.deepEqual(s.messages["7"]!.map((m) => [m.key, m.status]), [["c-1", "confirmed"]]);
+});
