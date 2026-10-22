@@ -631,7 +631,12 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
     // A graceful stop must be clean: exit 0 (the JVM reports 143 after running its
     // shutdown hooks). Dying from the signal means the consumer never left its group.
     let kills = kills.lock().unwrap();
-    for k in kills.iter().filter(|k| k.signal == "SIGTERM") {
+    // Only our services: nats-server exits with status 1 on SIGTERM even when it shuts
+    // down cleanly.
+    for k in kills
+        .iter()
+        .filter(|k| k.signal == "SIGTERM" && k.target != "nats")
+    {
         let clean = k.exit.is_some_and(|s| s.success() || s.code() == Some(143));
         if !clean {
             report.fail(
