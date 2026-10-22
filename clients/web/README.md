@@ -21,7 +21,7 @@ Open http://localhost:5173. The Vite dev server is the browser's single origin a
 - Messages show instantly as **sending…**, become **sent** on the gateway's ack and take their place by `msg_seq` when the sequenced event arrives. Rejections stay visible with the reason.
 - Unconfirmed messages are resent when the connection comes back; the sequencer drops repeats of the same `client_msg_id`.
 - Channels and messages are kept in `localStorage`, so a reload keeps the conversation.
-- **Sync on every (re)connect** ([plan §6.6](../../docs/architecture-plan.md)): the client lists its channels with their heads and fetches events (up to 5 pages of 200) only for channels whose head moved past what it has. History and live events are applied in any order: messages by `msg_seq`, membership only if newer than the last change seen.
+- **Sync** ([plan §6.6](../../docs/architecture-plan.md)) runs on reconnect, on a gateway `Resync` (only the named partition's channels), when the tab comes back to the foreground, and every 30 minutes. One sync runs at a time; requests made meanwhile merge into one follow-up. Each sync lists its channels with their heads and fetches events (up to 5 pages of 200) only for channels whose head moved past what it has. History and live events are applied in any order: messages by `msg_seq`, membership only if newer than the last change seen.
 
 ## Not yet
 - Older history on demand (scrolling up), and jumping to the latest page when a channel is far behind (today the first 1,000 missing events load).

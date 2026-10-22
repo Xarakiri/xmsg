@@ -18,6 +18,11 @@ export interface ConnectionHandlers {
   onAck(clientMsgId: string): void;
   onSendRejected(clientMsgId: string, reason: RejectReason, detail: string): void;
   onStatus(status: ConnectionStatus): void;
+  /**
+   * The gateway lost deliveries for us (ADR-0009): catch up through sync. `partition`
+   * names the only affected partition; undefined means everything.
+   */
+  onResync?(partition: number | undefined): void;
 }
 
 export interface ConnectionOptions extends ConnectionHandlers {
@@ -61,6 +66,7 @@ export class Connection {
   private attempt = 0;
   private pinger: ReturnType<typeof setInterval> | undefined;
   private retry: ReturnType<typeof setTimeout> | undefined;
+  private partitions = 0;
 
   private readonly opts: ConnectionOptions;
   constructor(opts: ConnectionOptions) {
@@ -82,6 +88,11 @@ export class Connection {
 
   get isOnline(): boolean {
     return this.online;
+  }
+
+  /** The installation's partition count from the last Welcome (0 before the first). */
+  get partitionCount(): number {
+    return this.partitions;
   }
 
   /** Sends if online; returns false otherwise (the message stays in the caller's outbox). */
@@ -129,6 +140,7 @@ export class Connection {
     }
     switch (frame.frame.case) {
       case "welcome":
+        this.partitions = frame.frame.value.partitionCount;
         this.online = true;
         this.attempt = 0;
         this.startPings();
@@ -143,8 +155,11 @@ export class Connection {
       case "sendRejected":
         this.opts.onSendRejected(frame.frame.value.clientMsgId, frame.frame.value.reason, frame.frame.value.detail);
         break;
+      case "resync":
+        this.opts.onResync?.(frame.frame.value.partition);
+        break;
       default:
-        break; // pong; resync comes with the sync API
+        break; // pong
     }
   }
 

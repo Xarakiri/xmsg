@@ -4,7 +4,10 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 import {
+  BACKGROUND_SYNC_MS,
   Connection,
+  SyncScheduler,
+  inPartition,
   initialState,
   reduce,
   sync,
@@ -33,6 +36,16 @@ export function useChat(me: string) {
   latest.current = state;
 
   useEffect(() => {
+    // Catching up (plan §6.6): on reconnect, on a gateway Resync (one partition or all),
+    // when the tab comes back, and every 30 minutes. One sync at a time.
+    const scheduler = new SyncScheduler((only) =>
+      sync({ api, token: () => session.accessToken(), state: () => latest.current, dispatch, only })
+        .then(() => setSyncError(false))
+        .catch((e) => {
+          setSyncError(true);
+          throw e;
+        }),
+    );
     const connection = new Connection({
       url: gatewayUrl(),
       token: () => session.accessToken(),
@@ -45,14 +58,23 @@ export function useChat(me: string) {
         // Back online: resend the outbox (the sequencer drops repeats), then catch up on
         // what happened meanwhile. Live events keep flowing during the sync.
         for (const m of unsent(latest.current)) connection.send(m.channelId, m.key, m.body);
-        sync({ api, token: () => session.accessToken(), state: () => latest.current, dispatch })
-          .then(() => setSyncError(false))
-          .catch(() => setSyncError(true));
+        scheduler.request();
       },
+      onResync: (partition) =>
+        scheduler.request(partition === undefined ? undefined : inPartition(partition, connection.partitionCount)),
     });
     conn.current = connection;
     connection.start();
-    return () => connection.stop();
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && connection.isOnline) scheduler.request();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = setInterval(() => connection.isOnline && scheduler.request(), BACKGROUND_SYNC_MS);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(timer);
+      connection.stop();
+    };
   }, [me]);
 
   useEffect(() => {
