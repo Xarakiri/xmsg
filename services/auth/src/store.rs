@@ -76,21 +76,30 @@ pub trait Store: Send + Sync + 'static {
 
     /// Replaces a refresh token with `new`. A token revoked by rotation (not by logout)
     /// within `reuse_grace` of `now` is `Reissued` rather than treated as theft.
+    /// A reuse that revokes the session also writes `revoked(user_id, device_id)` to the
+    /// outbox, in the same transaction.
     fn rotate(
         &self,
         old_hash: &str,
         new: NewRefresh,
         now: DateTime<Utc>,
         reuse_grace: Duration,
+        revoked: &Revoked<'_>,
     ) -> impl Future<Output = Result<Rotation, StoreError>> + Send;
 
-    /// Revokes a refresh token; unknown or already revoked tokens are fine.
+    /// Ends the token's session (logout): revokes every live token of its device and
+    /// writes `revoked(user_id, device_id)` to the outbox, in one transaction. Unknown or
+    /// already revoked tokens are fine and write nothing.
     fn revoke(
         &self,
         token_hash: &str,
         now: DateTime<Utc>,
+        revoked: &Revoked<'_>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 }
+
+/// Encodes the outbox event for a revoked session: `(user_id, device_id) -> payload`.
+pub type Revoked<'a> = dyn Fn(i64, i64) -> Vec<u8> + Send + Sync + 'a;
 
 /// user_id, device_id, expires_at, revoked_at, replaced_by
 type TokenRow = (i64, i64, DateTime<Utc>, Option<DateTime<Utc>>, Option<i64>);
@@ -176,6 +185,7 @@ impl Store for Postgres {
         new: NewRefresh,
         now: DateTime<Utc>,
         reuse_grace: Duration,
+        revoked: &Revoked<'_>,
     ) -> Result<Rotation, StoreError> {
         let mut tx = self.pool.begin().await?;
         let row: Option<TokenRow> = sqlx::query_as(
@@ -194,11 +204,15 @@ impl Store for Postgres {
                     issue(&mut tx, user_id, device_id, &new, now).await?;
                     Rotation::Reissued { user_id, device_id }
                 } else {
-                    sqlx::query("UPDATE refresh_tokens SET revoked_at = $2 WHERE device_id = $1 AND revoked_at IS NULL")
+                    let ended = sqlx::query("UPDATE refresh_tokens SET revoked_at = $2 WHERE device_id = $1 AND revoked_at IS NULL")
                         .bind(device_id)
                         .bind(now)
                         .execute(&mut *tx)
                         .await?;
+                    // Only when this ended a live session: a later replay changes nothing.
+                    if ended.rows_affected() > 0 {
+                        outbox_revocation(&mut tx, device_id, revoked(user_id, device_id)).await?;
+                    }
                     Rotation::Reused { device_id }
                 }
             }
@@ -220,14 +234,48 @@ impl Store for Postgres {
         Ok(rotation)
     }
 
-    async fn revoke(&self, token_hash: &str, now: DateTime<Utc>) -> Result<(), StoreError> {
-        sqlx::query("UPDATE refresh_tokens SET revoked_at = $2 WHERE token_hash = $1 AND revoked_at IS NULL")
-            .bind(token_hash)
-            .bind(now)
-            .execute(&self.pool)
-            .await?;
+    async fn revoke(
+        &self,
+        token_hash: &str,
+        now: DateTime<Utc>,
+        revoked: &Revoked<'_>,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let session: Option<(i64, i64)> = sqlx::query_as(
+            "UPDATE refresh_tokens SET revoked_at = $2 WHERE token_hash = $1 AND revoked_at IS NULL \
+             RETURNING user_id, device_id",
+        )
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((user_id, device_id)) = session {
+            // Logout ends the session (device), including tokens a grace reissue left live.
+            sqlx::query("UPDATE refresh_tokens SET revoked_at = $2 WHERE device_id = $1 AND revoked_at IS NULL")
+                .bind(device_id)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
+            outbox_revocation(&mut tx, device_id, revoked(user_id, device_id)).await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
+}
+
+async fn outbox_revocation(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    device_id: i64,
+    payload: Vec<u8>,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload) VALUES ('session', $1, 'session.revoked', $2)",
+    )
+    .bind(device_id)
+    .bind(payload)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// Stores the next token of a session and marks the device as seen.

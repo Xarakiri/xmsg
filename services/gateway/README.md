@@ -13,10 +13,12 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 - **Sessions:** each authenticated connection is published to Kafka `sessions.events` (compacted, key = connection ID) with brod; a monitor-based tracker publishes the tombstone however the socket ends (clean close, abrupt disconnect or crash). A heartbeat goes to NATS `gateway.alive.{gateway_id}` every 2 s.
 - Ping/Pong.
 
+- **Revocations** (§6.4): `XmsgGateway.Revocations` subscribes to NATS `auth.revocations`. A `SessionRevoked` closes every socket of that session (close code 1008, "session revoked") and puts the session in an ETS deny set until `refuse_until_ms`, so its still-valid access tokens can't reconnect. The deny check runs before *and* after a connecting socket registers its session, so a revocation landing in between isn't missed. Development tokens (session 0) are never revoked.
+
 ## Not yet
-- Revocation (`auth.revocations`): until then a logged-out session's access token stays valid until it expires (15 min).
+- After a gateway restart, the deny set starts empty. Until it's rebuilt from `auth.events`, a session revoked in the last ~15 minutes could reconnect to that gateway with a still-valid token.
 - Resume tokens are issued but not yet accepted on reconnect.
-- Presence, typing, pull-mode channel subscriptions (`ch.{id}`), revocations, admission control, per-connection limits, drain on deploy.
+- Presence, typing, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`, admission control, per-connection limits, drain on deploy.
 - Hibernation of idle connections, kernel/BEAM tuning, and the 100k-connections-per-pod capacity spike.
 
 ## Configuration (environment, `config/runtime.exs`)

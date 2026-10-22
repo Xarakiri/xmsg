@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// Events of the auth service (topic `auth.events`, and NATS `auth.revocations` for
+// revocations). Written to the outbox with the change; revocations also go to NATS
+// straight after commit (fast path, ADR-0010). Consumers dedupe: every event is absolute.
+message AuthEvent {
+  oneof event {
+    SessionRevoked session_revoked = 1;
+  }
+}
+
+// A session (one login on one device) was ended: logout, or its refresh token was
+// reused (theft). Gateways close its sockets and refuse its access tokens, which stay
+// cryptographically valid until they expire, until `refuse_until_ms`.
+message SessionRevoked {
+  int64 user_id = 1;
+  // The access tokens' `sid` claim (the device ID).
+  int64 session_id = 2;
+  int64 revoked_at_ms = 3;
+  // revoked_at + the access-token lifetime (+ leeway): no token of the session is
+  // usable after this, so the deny entry can be dropped.
+  int64 refuse_until_ms = 4;
+  string reason = 5;
+}

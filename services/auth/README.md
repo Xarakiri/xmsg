@@ -24,9 +24,17 @@ IDs are JSON strings (JavaScript numbers lose precision above 2^53). Errors are 
 - **Reuse grace:** a token revoked *by rotation* less than `XMSG_AUTH_REUSE_GRACE_SECS` (30 s) ago is rotated again instead: a new refresh token for the same session, nothing revoked. This covers a reply lost in flight (tab closed, network drop) and two tabs refreshing with one stored token. Rotation records the successor in `refresh_tokens.replaced_by`; logout leaves it NULL, so logged-out tokens never get grace, and neither does a session with no live token left (logged out or already revoked for reuse). The trade-off: a thief replaying a token within those seconds gets a session too, until the next reuse outside the window. Clients still serialize refreshes (the web client across tabs with a Web Lock).
 - **Passwords:** Argon2id (crate defaults), 10 to 256 characters; hashing runs on the blocking pool. Unknown emails are checked against a dummy hash, so "no such user" and "wrong password" look and time the same. Emails are trimmed and lower-cased.
 
+## Revocations
+
+Logout, and a reused refresh token outside the grace window (theft), end the **session** (the device). Every live refresh token of the device is revoked, and an `AuthEvent{SessionRevoked}` goes out by two routes:
+1. **Outbox** (`aggregate_type = 'session'`, `event_type = 'session.revoked'`), in the same transaction as the revocation. Then outbox relay → `auth.events` → meta-relay → NATS (the safety net).
+2. **Fast path:** straight to NATS `auth.revocations` after commit, when `XMSG_NATS_URL` is set.
+
+Gateways close the session's sockets and refuse its access tokens until `refuse_until_ms` (now + access-token lifetime + 30 s leeway). Measured locally: 8 ms with the fast path, about 200 ms through the outbox alone; the plan's target is p99 under 5 s. A replay of an already-ended session emits nothing.
+
 ## Not yet
 - Magic links, Google/GitHub OAuth (the identity-provider interface); SAML/OIDC/LDAP and SCIM are Enterprise Edition ([ADR-0022](../../docs/adr/0022-open-core-licensing.md)).
-- Revocations to the outbox and NATS `auth.revocations` (until then a logged-out session's access token lives out its 15 minutes).
+- `user.banned` (revoking every session of a user) and an admin API to end someone's sessions.
 - Login rate limiting, email verification, password reset, signing-key rotation (the JWKS can already publish a next key).
 
 ## Configuration
@@ -38,6 +46,7 @@ IDs are JSON strings (JavaScript numbers lose precision above 2^53). Errors are 
 | `XMSG_AUTH_PORT` | `8081` | HTTP port |
 | `XMSG_DATABASE_URL` | `postgres://xmsg:xmsg-dev-only@127.0.0.1:5432/xmsg` | PostgreSQL with the [Small-tier schema](../../deploy/compose/init/postgres/001_schema.sql) |
 | `XMSG_AUTH_ACCESS_TTL_SECS` | `900` | access-token lifetime |
+| `XMSG_NATS_URL` | *(none)* | NATS for the revocation fast path (without it, revocations travel through the outbox only) |
 | `XMSG_AUTH_REFRESH_TTL_SECS` | `2592000` | refresh-token lifetime (30 days) |
 | `XMSG_AUTH_REUSE_GRACE_SECS` | `30` | how long a rotated refresh token may still be presented; `0` disables the grace |
 

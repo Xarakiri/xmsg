@@ -14,6 +14,26 @@ use xmsg_auth::{new_id, password, random_token, token_hash};
 
 const GRACE: Duration = Duration::seconds(30);
 
+/// The outbox payload of a revocation: the session, so tests can find their row.
+fn revoked_event(user_id: i64, device_id: i64) -> Vec<u8> {
+    format!("{user_id}:{device_id}").into_bytes()
+}
+
+/// `session.revoked` rows the store wrote to the outbox for `device_id`.
+async fn revocations(device_id: i64) -> Vec<Vec<u8>> {
+    let pool = sqlx::PgPool::connect(&std::env::var("XMSG_IT_PG").unwrap())
+        .await
+        .unwrap();
+    sqlx::query_scalar(
+        "SELECT payload FROM outbox WHERE aggregate_type = 'session' AND aggregate_id = $1 \
+         AND event_type = 'session.revoked' ORDER BY id",
+    )
+    .bind(device_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+}
+
 async fn store() -> Postgres {
     let url = std::env::var("XMSG_IT_PG").expect("XMSG_IT_PG must be set for integration tests");
     Postgres::connect(&url).await.expect("connect to Postgres")
@@ -50,7 +70,7 @@ async fn session(store: &Postgres, ttl: Duration) -> (i64, i64, String) {
 async fn rotate(store: &Postgres, token: &str, now: DateTime<Utc>) -> (String, Rotation) {
     let (next, new) = refresh(Duration::days(30));
     let rotation = store
-        .rotate(&token_hash(token), new, now, GRACE)
+        .rotate(&token_hash(token), new, now, GRACE, &revoked_event)
         .await
         .unwrap();
     (next, rotation)
@@ -134,7 +154,10 @@ async fn logged_out_and_revoked_sessions_get_no_grace() {
     let now = Utc::now();
     let (second, rotation) = rotate(&store, &first, now).await;
     assert_eq!(rotation, Rotation::Rotated { user_id, device_id });
-    store.revoke(&token_hash(&second), now).await.unwrap();
+    store
+        .revoke(&token_hash(&second), now, &revoked_event)
+        .await
+        .unwrap();
     assert_eq!(
         rotate(&store, &first, now).await.1,
         Rotation::Reused { device_id }
@@ -174,8 +197,14 @@ async fn expired_unknown_and_logged_out_tokens_do_not_rotate() {
     );
 
     let (_, device_id, token) = session(&store, Duration::days(30)).await;
-    store.revoke(&token_hash(&token), Utc::now()).await.unwrap();
-    store.revoke(&token_hash(&token), Utc::now()).await.unwrap(); // idempotent
+    store
+        .revoke(&token_hash(&token), Utc::now(), &revoked_event)
+        .await
+        .unwrap();
+    store
+        .revoke(&token_hash(&token), Utc::now(), &revoked_event)
+        .await
+        .unwrap(); // idempotent
     // Logout leaves `replaced_by` NULL: no grace, even right away.
     assert_eq!(
         rotate(&store, &token, Utc::now()).await.1,
@@ -206,5 +235,45 @@ async fn concurrent_refreshes_with_one_token_rotate_once() {
     assert_eq!(
         reissued, 7,
         "the losers are within the grace, not treated as theft"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn ending_a_session_writes_one_revocation_to_the_outbox() {
+    let store = store().await;
+    // Logout.
+    let (user_id, device_id, token) = session(&store, Duration::days(30)).await;
+    store
+        .revoke(&token_hash(&token), Utc::now(), &revoked_event)
+        .await
+        .unwrap();
+    store
+        .revoke(&token_hash(&token), Utc::now(), &revoked_event)
+        .await
+        .unwrap();
+    assert_eq!(
+        revocations(device_id).await,
+        vec![format!("{user_id}:{device_id}").into_bytes()],
+        "once, not per call"
+    );
+
+    // Theft: replaying a rotated token after the grace window.
+    let (user_id, device_id, first) = session(&store, Duration::days(30)).await;
+    let now = Utc::now();
+    rotate(&store, &first, now).await;
+    let later = now + GRACE + Duration::seconds(1);
+    assert_eq!(
+        rotate(&store, &first, later).await.1,
+        Rotation::Reused { device_id }
+    );
+    assert_eq!(
+        rotate(&store, &first, later).await.1,
+        Rotation::Reused { device_id }
+    );
+    assert_eq!(
+        revocations(device_id).await,
+        vec![format!("{user_id}:{device_id}").into_bytes()],
+        "a replay of a dead session emits nothing"
     );
 }

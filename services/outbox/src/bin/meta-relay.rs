@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! xmsg-meta-relay: copies channel events from `channels.meta` into `messages.in`
-//! (plan §5, ADR-0010). At least once: offsets are committed after delivery, and the
-//! sequencer drops repeats by dedupe ID.
+//! xmsg-meta-relay (plan §5, ADR-0010): copies channel events from `channels.meta` into
+//! `messages.in`, and forwards revocations from `auth.events` to NATS `auth.revocations`.
+//! At least once: offsets are committed after delivery; the sequencer drops repeats by
+//! dedupe ID and gateways apply a revocation twice harmlessly.
 
 use std::process::ExitCode;
 use std::time::Duration;
@@ -11,7 +12,10 @@ use rdkafka::Message as _;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use tracing_subscriber::EnvFilter;
-use xmsg_outbox::{TOPIC_CHANNELS_META, TOPIC_MESSAGES_IN, relay_channel_event};
+use xmsg_outbox::{
+    SUBJECT_REVOCATIONS, TOPIC_AUTH_EVENTS, TOPIC_CHANNELS_META, TOPIC_MESSAGES_IN,
+    relay_auth_event, relay_channel_event,
+};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -66,8 +70,25 @@ async fn main() -> ExitCode {
         },
         Err(e) => return fail(&format!("fetching metadata: {e}")),
     }
-    if let Err(e) = consumer.subscribe(&[TOPIC_CHANNELS_META]) {
-        return fail(&format!("subscribing to {TOPIC_CHANNELS_META}: {e}"));
+    let nats = match std::env::var("XMSG_NATS_URL") {
+        Ok(url) => match async_nats::connect(&url).await {
+            Ok(c) => Some(c),
+            Err(e) => return fail(&format!("connecting to NATS at {url}: {e}")),
+        },
+        Err(_) => {
+            tracing::warn!(
+                "XMSG_NATS_URL not set: revocations are not forwarded (only auth's fast path)"
+            );
+            None
+        }
+    };
+    let topics: &[&str] = if nats.is_some() {
+        &[TOPIC_CHANNELS_META, TOPIC_AUTH_EVENTS]
+    } else {
+        &[TOPIC_CHANNELS_META]
+    };
+    if let Err(e) = consumer.subscribe(topics) {
+        return fail(&format!("subscribing to {topics:?}: {e}"));
     }
     tracing::info!("meta-relay ready");
 
@@ -85,6 +106,32 @@ async fn main() -> ExitCode {
                 continue;
             }
         };
+        if message.topic() == TOPIC_AUTH_EVENTS {
+            match relay_auth_event(message.payload().unwrap_or_default()) {
+                Ok(Some(event)) => {
+                    let nats = nats
+                        .as_ref()
+                        .expect("subscribed to auth.events only with NATS");
+                    let mut backoff = Duration::from_millis(100);
+                    while let Err(e) = nats
+                        .publish(SUBJECT_REVOCATIONS, event.clone().into())
+                        .await
+                    {
+                        tracing::warn!(error = %e, "publishing a revocation failed; retrying");
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(Duration::from_secs(5));
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!(error = %e, offset = message.offset(), "skipping an auth.events record")
+                }
+            }
+            if let Err(e) = consumer.commit_message(&message, CommitMode::Async) {
+                tracing::warn!(error = %e, "offset commit failed (events will be relayed again, harmlessly)");
+            }
+            continue;
+        }
         match relay_channel_event(message.key(), message.payload().unwrap_or_default()) {
             Ok((channel_id, payload)) => {
                 let key = xmsg_partition::channel_key(channel_id);
@@ -117,6 +164,9 @@ async fn main() -> ExitCode {
         }
     }
     let _ = consumer.commit_consumer_state(CommitMode::Sync);
+    if let Some(nats) = nats {
+        let _ = nats.flush().await;
+    }
     tracing::info!("shutting down");
     ExitCode::SUCCESS
 }

@@ -17,12 +17,12 @@ channels/users/auth ──commit──▶ Postgres outbox ──xmsg-outbox-rela
 
 ## `xmsg-meta-relay`
 - Copies `channels.meta` records unchanged into `messages.in`, keyed by channel, so the sequencer orders metadata events with the channel's messages.
+- **Revocations:** when `XMSG_NATS_URL` is set, it also forwards `auth.events` revocations (`AuthEvent{SessionRevoked}`) unchanged to NATS `auth.revocations`. This is the safety net behind auth's own fast path; a gateway applies a repeat harmlessly. Other auth events are skipped.
 - **Refuses what it can't route safely** (logged and skipped): a payload that isn't an `InboundEvent`, a key that names another channel, or a missing dedupe ID. Without a dedupe ID, the sequencer couldn't drop the fast-path copy.
 - **At least once:** offsets are committed after delivery, and a failed produce is retried until it lands, in order. The sequencer drops repeats by dedupe ID, and `channel.created` is a no-op for an existing channel.
 - **Startup check:** exits with code 2 if `messages.in`'s partition count differs from `XMSG_PARTITIONS` (ADR-0021).
 
 ## Not yet
-- Forwarding revocations from `auth.events` to NATS (`auth.revocations`) comes with revocations.
 - The failover reconciler (republish what a Postgres failover lost, ADR-0010) and metrics beyond the lag log.
 
 ## Configuration
@@ -34,6 +34,7 @@ channels/users/auth ──commit──▶ Postgres outbox ──xmsg-outbox-rela
 | `XMSG_OUTBOX_POLL_MS` | `200` | outbox-relay | Poll interval when caught up |
 | `XMSG_PARTITIONS` | *(required)* | meta-relay | The installation's partition count |
 | `XMSG_META_RELAY_GROUP` | `xmsg-meta-relay` | meta-relay | Consumer group |
+| `XMSG_NATS_URL` | *(none)* | meta-relay | Forward revocations to NATS `auth.revocations` |
 
 ## Tests
 

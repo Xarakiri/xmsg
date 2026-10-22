@@ -283,6 +283,7 @@ jobs:
           XMSG_CHANNELS_URL: http://localhost:8082
           XMSG_MESSAGES_URL: http://localhost:8083
           XMSG_EXPECT_OUTBOX_RELAY: "true"
+          XMSG_EXPECT_REVOCATION: "true"
           XMSG_USERS_URL: http://localhost:8084
         run: ./target/release/xmsg-e2e-smoke
       - name: Upload service logs

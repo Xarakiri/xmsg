@@ -36,7 +36,9 @@
 //! XMSG_MESSAGES_URL (optional, e.g. http://127.0.0.1:8083; history reads, checked after membership),
 //! XMSG_USERS_URL (optional, e.g. http://127.0.0.1:8084; needs XMSG_CHANNELS_URL),
 //! XMSG_EXPECT_OUTBOX_RELAY=true (optional: the outbox poller and meta-relay run, so the
-//! channel's `channel.created` must reach `messages.in` twice: fast path and outbox).
+//! channel's `channel.created` must reach `messages.in` twice: fast path and outbox),
+//! XMSG_EXPECT_REVOCATION=true (optional, needs XMSG_AUTH_URL: logging out closes the
+//! session's open socket and its still-valid access token can't reconnect).
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -95,7 +97,7 @@ async fn run() -> Result<(), String> {
                     sign_up_and_log_in(&auth, &format!("{name}-{run_id}@example.org")).await?,
                 );
             }
-            expect_refused(&gateway, &forge(&users[0].1)).await?;
+            expect_refused(&gateway, &forge(&users[0].1), "invalid token").await?;
             println!("signed up and logged in 3 users via {auth}; a forged token was refused");
             users
         }
@@ -192,6 +194,11 @@ async fn run() -> Result<(), String> {
         if std::env::var("XMSG_EXPECT_OUTBOX_RELAY").as_deref() == Ok("true") {
             check_outbox_copy(&bootstrap, channel)?;
         }
+    }
+    if let Ok(auth) = std::env::var("XMSG_AUTH_URL")
+        && std::env::var("XMSG_EXPECT_REVOCATION").as_deref() == Ok("true")
+    {
+        check_revocation(&auth, &gateway, run_id).await?;
     }
     Ok(())
 }
@@ -677,7 +684,7 @@ fn forge(token: &str) -> String {
     )
 }
 
-async fn expect_refused(url: &str, token: &str) -> Result<(), String> {
+async fn expect_refused(url: &str, token: &str, reason: &str) -> Result<(), String> {
     let (mut ws, _) = connect_async(url)
         .await
         .map_err(|e| format!("connecting to {url}: {e}"))?;
@@ -692,11 +699,66 @@ async fn expect_refused(url: &str, token: &str) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
-        Ok(Some(Ok(Ws::Close(Some(close))))) if close.reason == "invalid token" => Ok(()),
-        other => Err(format!(
-            "forged token: expected close \"invalid token\", got {other:?}"
-        )),
+        Ok(Some(Ok(Ws::Close(Some(close))))) if close.reason == reason => Ok(()),
+        other => Err(format!("expected close \"{reason}\", got {other:?}")),
     }
+}
+
+/// Revocation (plan §6.4): logging out closes the session's open socket within seconds,
+/// and its access token, still cryptographically valid for ~15 minutes, is refused.
+async fn check_revocation(auth: &str, gateway: &str, run_id: i64) -> Result<(), String> {
+    let http = reqwest::Client::new();
+    let email = format!("dora-{run_id}@example.org");
+    let password = "e2e smoke password";
+    let post = async |path: &str, body: serde_json::Value| -> Result<serde_json::Value, String> {
+        let response = http
+            .post(format!("{auth}{path}"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("{path}: {e}"))?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("{path}: {status} {text}"));
+        }
+        Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
+    };
+    post(
+        "/v1/signup",
+        serde_json::json!({"email": email, "password": password, "name": "Dora"}),
+    )
+    .await?;
+    let tokens = post(
+        "/v1/login",
+        serde_json::json!({"email": email, "password": password}),
+    )
+    .await?;
+    let access = tokens["access_token"]
+        .as_str()
+        .ok_or("login: no access_token")?;
+    let refresh = tokens["refresh_token"]
+        .as_str()
+        .ok_or("login: no refresh_token")?;
+
+    let mut client = connect(gateway, access).await?;
+    let started = Instant::now();
+    post("/v1/logout", serde_json::json!({"refresh_token": refresh})).await?;
+    match tokio::time::timeout(Duration::from_secs(5), client.ws.next()).await {
+        Ok(Some(Ok(Ws::Close(Some(close))))) if close.reason == "session revoked" => {}
+        other => {
+            return Err(format!(
+                "after logout: expected close \"session revoked\" within 5 s, got {other:?}"
+            ));
+        }
+    }
+    let closed_after = started.elapsed();
+    expect_refused(gateway, access, "session revoked").await?;
+    println!(
+        "revocation: logout closed the open socket in {} ms; its still-valid access token is refused",
+        closed_after.as_millis()
+    );
+    Ok(())
 }
 
 async fn connect(url: &str, token: &str) -> Result<Client, String> {

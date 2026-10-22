@@ -15,23 +15,36 @@ defmodule XmsgGateway.Auth do
   @leeway_s 30
 
   @spec verify(String.t()) :: {:ok, integer()} | {:error, :invalid_token}
-  def verify("dev:" <> id) do
+  def verify(token) do
+    with {:ok, %{user_id: user_id}} <- authenticate(token), do: {:ok, user_id}
+  end
+
+  @doc """
+  The user and session (`sid`, the device) of a valid token. Development tokens have
+  session 0, which is never revoked.
+  """
+  @spec authenticate(term()) ::
+          {:ok, %{user_id: integer(), session_id: integer()}} | {:error, :invalid_token}
+  def authenticate("dev:" <> id) do
     with true <- XmsgGateway.Config.dev_auth?(),
          {user_id, ""} when user_id > 0 <- Integer.parse(id) do
-      {:ok, user_id}
+      {:ok, %{user_id: user_id, session_id: 0}}
     else
       _ -> {:error, :invalid_token}
     end
   end
 
-  def verify(token) when is_binary(token) do
-    case verify_jwt(token, System.os_time(:second)) do
-      {:ok, %{"sub" => sub}} -> parse_user_id(sub)
+  def authenticate(token) when is_binary(token) do
+    with {:ok, %{"sub" => sub} = claims} <- verify_jwt(token, System.os_time(:second)),
+         {:ok, user_id} <- parse_user_id(sub) do
+      session_id = if is_integer(claims["sid"]), do: claims["sid"], else: 0
+      {:ok, %{user_id: user_id, session_id: session_id}}
+    else
       _ -> {:error, :invalid_token}
     end
   end
 
-  def verify(_), do: {:error, :invalid_token}
+  def authenticate(_), do: {:error, :invalid_token}
 
   @doc "Checks signature and claims; returns the claims. `now` is Unix seconds."
   @spec verify_jwt(String.t(), integer()) :: {:ok, map()} | {:error, atom()}

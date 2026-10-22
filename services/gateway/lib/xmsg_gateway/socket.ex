@@ -31,7 +31,7 @@ defmodule XmsgGateway.Socket do
   @impl true
   def init(_opts) do
     Process.send_after(self(), :auth_timeout, Config.auth_timeout_ms())
-    {:ok, %{user_id: nil, conn_id: nil}}
+    {:ok, %{user_id: nil, conn_id: nil, session_id: 0}}
   end
 
   @impl true
@@ -51,6 +51,10 @@ defmodule XmsgGateway.Socket do
     {:push, {:binary, frame}, state}
   end
 
+  def handle_info(:session_revoked, state) do
+    {:stop, :normal, {@close_policy, "session revoked"}, state}
+  end
+
   def handle_info(:auth_timeout, %{user_id: nil} = state) do
     {:stop, :normal, {@close_policy, "authentication timeout"}, state}
   end
@@ -59,22 +63,25 @@ defmodule XmsgGateway.Socket do
 
   # Before authentication only Connect is accepted.
   defp handle_frame({:connect, %Connect{access_token: token}}, %{user_id: nil} = state) do
-    case XmsgGateway.Auth.verify(token) do
-      {:ok, user_id} ->
-        {:ok, _} = Registry.register(XmsgGateway.Users, user_id, nil)
-        conn_id = XmsgGateway.Sessions.new_conn_id()
-        XmsgGateway.Sessions.Tracker.track(conn_id, user_id)
+    with {:ok, %{user_id: user_id, session_id: sid}} <- XmsgGateway.Auth.authenticate(token),
+         false <- XmsgGateway.Revocations.revoked?(sid),
+         {:ok, _} <- register_session(sid),
+         # Checked again once registered: a revocation that landed in between is not missed.
+         false <- XmsgGateway.Revocations.revoked?(sid) do
+      {:ok, _} = Registry.register(XmsgGateway.Users, user_id, nil)
+      conn_id = XmsgGateway.Sessions.new_conn_id()
+      XmsgGateway.Sessions.Tracker.track(conn_id, user_id)
 
-        welcome = %Welcome{
-          resume_token: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
-          partition_count: Config.partition_count()
-        }
+      welcome = %Welcome{
+        resume_token: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
+        partition_count: Config.partition_count()
+      }
 
-        {:push, {:binary, encode(%ServerFrame{frame: {:welcome, welcome}})},
-         %{state | user_id: user_id}}
-
-      {:error, _} ->
-        {:stop, :normal, {@close_policy, "invalid token"}, state}
+      {:push, {:binary, encode(%ServerFrame{frame: {:welcome, welcome}})},
+       %{state | user_id: user_id, session_id: sid}}
+    else
+      {:error, _} -> {:stop, :normal, {@close_policy, "invalid token"}, state}
+      true -> {:stop, :normal, {@close_policy, "session revoked"}, state}
     end
   end
 
@@ -147,4 +154,8 @@ defmodule XmsgGateway.Socket do
   end
 
   defp encode(frame), do: ServerFrame.encode(frame)
+
+  # Dev tokens (session 0) are never revoked, so they aren't tracked.
+  defp register_session(0), do: {:ok, nil}
+  defp register_session(sid), do: Registry.register(XmsgGateway.Revocations.registry(), sid, nil)
 end
