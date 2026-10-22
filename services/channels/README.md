@@ -20,7 +20,7 @@ Membership replies: 200 `{status: "accepted", event_seq}`, 403 forbidden, 404 un
 
 ## How it works
 
-- **Create** (§6.2, [ADR-0010](../../docs/adr/0010-outbox-with-fast-path.md)): the `channels` row (plus `dm_pairs` for a DM) and an outbox `channel.created` commit in one transaction; then the same event goes straight to `messages.in` (**fast path**). Its dedupe ID is `create:{channel_id}`, so the sequencer turns the fast-path and outbox copies into one creation. If the fast path fails the answer is 202 `pending`: the channel exists and the outbox relay delivers it.
+- **Create** (§6.2, [ADR-0010](../../docs/adr/0010-outbox-with-fast-path.md)): the `channels` row (plus `dm_pairs` for a DM) and an outbox `channel.created` commit in one transaction; then the same event goes straight to `messages.in` (**fast path**). Its dedupe ID is `create:{channel_id}`, so the sequencer turns the fast-path and outbox copies into one creation. If the fast path fails the answer is 202 `pending`: the channel exists and the outbox relay ([`services/outbox`](../outbox)) delivers it.
 - **Workspaces:** checked against Postgres `workspace_members` (written by the auth and users services). The creator must belong to the channel's workspace (else 403, also for unknown workspaces), and so must every initial member (else 400). A join or invite is refused (403) unless the joining user belongs to the channel's workspace; an unknown channel is 404. A DM goes to the lowest-numbered workspace all its people share, or 403 if they share none.
 - **DMs:** one per pair (`dm_pairs`, `ON CONFLICT DO NOTHING`); two people opening it at the same moment get the same channel.
 - **Membership** (§6.3): `member.join_requested` / `member.kick_requested` with a fresh `request_id` (dedupe ID `cmd:{request_id}`). The waiter is registered before producing; every instance reads all of `commands.results` from its end at startup (no consumer group) and completes its own waiters. The rules (who may join, invite, remove) live in the sequencer.
@@ -28,7 +28,6 @@ Membership replies: 200 `{status: "accepted", event_seq}`, 403 forbidden, 404 un
 - **Startup check:** exits with code 2 if `messages.in` is missing or its partition count differs from `XMSG_PARTITIONS` (ADR-0021).
 
 ## Not yet
-- The outbox relay (Phase 1b): until then a creation whose fast path failed waits in the outbox.
 - Revoking channel membership when someone leaves a workspace (§6.5).
 - Channel reads and lists, rename/topic/archive (`channel.updated` via `meta-relay`), pins, personal settings (`member.settings`, ADR-0016).
 
