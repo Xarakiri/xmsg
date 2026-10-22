@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "xmsg-outbox"
+description = "Outbox poller (Postgres outbox -> Kafka outbox topics) and meta-relay (channels.meta -> messages.in)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+xmsg-partition = { path = "../../crates/xmsg-partition" }
+xmsg-proto = { path = "../../crates/xmsg-proto" }
+futures-util = "0.3.34"
+rdkafka = { version = "0.39.0", features = ["tokio"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres", "chrono"] }
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[[bin]]
+name = "xmsg-outbox-relay"
+path = "src/bin/outbox-relay.rs"
+
+[[bin]]
+name = "xmsg-meta-relay"
+path = "src/bin/meta-relay.rs"

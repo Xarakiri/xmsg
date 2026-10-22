@@ -310,7 +310,7 @@ async fn fast_path<S, L: EventLog, M>(
             Json(json!({ "channel_id": channel_id.to_string(), "status": "created" })),
         ),
         Err(e) => {
-            tracing::warn!(channel_id, error = %e, "fast path failed; left to the outbox relay");
+            tracing::warn!(channel_id, error = %e, "fast path failed; left to the outbox relay (xmsg-outbox-relay + meta-relay)");
             (
                 StatusCode::ACCEPTED,
                 Json(json!({ "channel_id": channel_id.to_string(), "status": "pending" })),

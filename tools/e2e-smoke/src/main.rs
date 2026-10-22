@@ -34,7 +34,9 @@
 //! XMSG_CQL_NODES (optional, e.g. 127.0.0.1:9042), XMSG_AUTH_URL (optional, e.g. http://127.0.0.1:8081),
 //! XMSG_CHANNELS_URL (optional, e.g. http://127.0.0.1:8082),
 //! XMSG_MESSAGES_URL (optional, e.g. http://127.0.0.1:8083; history reads, checked after membership),
-//! XMSG_USERS_URL (optional, e.g. http://127.0.0.1:8084; needs XMSG_CHANNELS_URL).
+//! XMSG_USERS_URL (optional, e.g. http://127.0.0.1:8084; needs XMSG_CHANNELS_URL),
+//! XMSG_EXPECT_OUTBOX_RELAY=true (optional: the outbox poller and meta-relay run, so the
+//! channel's `channel.created` must reach `messages.in` twice: fast path and outbox).
 
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -187,7 +189,52 @@ async fn run() -> Result<(), String> {
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             check_workspaces(&users_url, url, &users, run_id).await?;
         }
+        if std::env::var("XMSG_EXPECT_OUTBOX_RELAY").as_deref() == Ok("true") {
+            check_outbox_copy(&bootstrap, channel)?;
+        }
     }
+    Ok(())
+}
+
+/// The outbox safety net (ADR-0010): besides the fast path, the committed outbox row reaches
+/// `messages.in` through the poller and meta-relay. The sequencer created the channel once
+/// all the same (the checks above saw a single `channel.created` at event_seq 1).
+fn check_outbox_copy(bootstrap: &str, channel: i64) -> Result<(), String> {
+    use rdkafka::{Offset, TopicPartitionList};
+    let partitions: u32 = std::env::var("XMSG_PARTITIONS")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(16);
+    let partition = xmsg_partition::partition(channel, partitions) as i32;
+    let consumer: BaseConsumer = ClientConfig::new()
+        .set("bootstrap.servers", bootstrap)
+        .set("group.id", format!("e2e-outbox-{channel}"))
+        .set("enable.auto.commit", "false")
+        .create()
+        .map_err(|e| e.to_string())?;
+    let mut tpl = TopicPartitionList::new();
+    tpl.add_partition_offset("messages.in", partition, Offset::Beginning)
+        .map_err(|e| e.to_string())?;
+    consumer.assign(&tpl).map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut copies = 0;
+    while copies < 2 && Instant::now() < deadline {
+        if let Some(Ok(m)) = consumer.poll(Duration::from_millis(500))
+            && let Ok(e) = InboundEvent::decode(m.payload().unwrap_or_default())
+            && e.channel_id == channel
+            && matches!(e.payload, Some(inbound_event::Payload::ChannelCreated(_)))
+        {
+            copies += 1;
+        }
+    }
+    if copies < 2 {
+        return Err(format!(
+            "outbox: expected channel.created twice in messages.in (fast path + outbox), saw {copies}"
+        ));
+    }
+    println!(
+        "outbox: channel.created reached messages.in by the fast path and through the outbox relay; sequenced once"
+    );
     Ok(())
 }
 
