@@ -10,6 +10,8 @@ pub struct Config {
     pub access_ttl_secs: i64,
     pub refresh_ttl_secs: i64,
     pub reuse_grace_secs: i64,
+    /// NATS for the revocation fast path; without it revocations travel via the outbox only.
+    pub nats_url: Option<String>,
 }
 
 impl Config {
@@ -49,6 +51,7 @@ impl Config {
             access_ttl_secs: number("XMSG_AUTH_ACCESS_TTL_SECS", "900")?,
             refresh_ttl_secs: number("XMSG_AUTH_REFRESH_TTL_SECS", "2592000")?,
             reuse_grace_secs: number("XMSG_AUTH_REUSE_GRACE_SECS", "30")?,
+            nats_url: std::env::var("XMSG_NATS_URL").ok(),
         })
     }
 }

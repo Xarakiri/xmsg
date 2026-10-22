@@ -12,6 +12,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::keys::Keys;
+use crate::revocation::Recorder;
 use crate::store::{NewRefresh, Rotation, Store, StoreError};
 use crate::{new_id, password, random_token, token_hash};
 
@@ -22,6 +23,9 @@ pub struct Auth<S> {
     pub refresh_ttl_secs: i64,
     /// How long a rotated refresh token may still be presented (lost reply, racing tabs).
     pub reuse_grace_secs: i64,
+    /// Fast path for revocations (NATS `auth.revocations`), fed after commit; `None`
+    /// leaves them to the outbox alone.
+    pub revocations: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
 }
 
 pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
@@ -175,16 +179,19 @@ async fn refresh<S: Store>(
 ) -> Result<Json<Tokens>, ApiError> {
     let now = Utc::now();
     let (refresh_token, new) = auth.new_refresh(now);
-    match auth
+    let revoked = Recorder::new(now, auth.access_ttl_secs, "refresh token reused");
+    let rotation = auth
         .store
         .rotate(
             &token_hash(&req.refresh_token),
             new,
             now,
             Duration::seconds(auth.reuse_grace_secs),
+            &|user, device| revoked.encode(user, device),
         )
-        .await?
-    {
+        .await?;
+    revoked.publish(auth.revocations.as_ref());
+    match rotation {
         Rotation::Rotated { user_id, device_id } => {
             Ok(Json(auth.tokens(user_id, device_id, refresh_token, now)))
         }
@@ -207,9 +214,14 @@ async fn logout<S: Store>(
     State(auth): State<Arc<Auth<S>>>,
     Json(req): Json<RefreshRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let now = Utc::now();
+    let revoked = Recorder::new(now, auth.access_ttl_secs, "logout");
     auth.store
-        .revoke(&token_hash(&req.refresh_token), Utc::now())
+        .revoke(&token_hash(&req.refresh_token), now, &|user, device| {
+            revoked.encode(user, device)
+        })
         .await?;
+    revoked.publish(auth.revocations.as_ref());
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -287,6 +299,8 @@ mod tests {
     struct Memory {
         users: Mutex<HashMap<String, Credentials>>,
         tokens: Mutex<HashMap<String, Token>>,
+        /// What the Postgres store writes to the outbox (`session.revoked` payloads).
+        outbox: Mutex<Vec<Vec<u8>>>,
     }
 
     impl Store for Memory {
@@ -336,6 +350,7 @@ mod tests {
             new: NewRefresh,
             now: DateTime<Utc>,
             grace: Duration,
+            revoked: &crate::store::Revoked<'_>,
         ) -> Result<Rotation, StoreError> {
             let mut tokens = self.tokens.lock().unwrap();
             let Some(t) = tokens.get_mut(old) else {
@@ -349,10 +364,20 @@ mod tests {
                         t.device_id == device_id && t.revoked_at.is_none() && t.expires_at > now
                     });
                     if !(in_grace && live) {
+                        let mut ended = 0;
                         tokens
                             .values_mut()
                             .filter(|t| t.device_id == device_id && t.revoked_at.is_none())
-                            .for_each(|t| t.revoked_at = Some(now));
+                            .for_each(|t| {
+                                t.revoked_at = Some(now);
+                                ended += 1;
+                            });
+                        if ended > 0 {
+                            self.outbox
+                                .lock()
+                                .unwrap()
+                                .push(revoked(user_id, device_id));
+                        }
                         return Ok(Rotation::Reused { device_id });
                     }
                     Rotation::Reissued { user_id, device_id }
@@ -376,10 +401,25 @@ mod tests {
             );
             Ok(rotation)
         }
-        async fn revoke(&self, hash: &str, now: DateTime<Utc>) -> Result<(), StoreError> {
-            if let Some(t) = self.tokens.lock().unwrap().get_mut(hash) {
-                t.revoked_at.get_or_insert(now);
-            }
+        async fn revoke(
+            &self,
+            hash: &str,
+            now: DateTime<Utc>,
+            revoked: &crate::store::Revoked<'_>,
+        ) -> Result<(), StoreError> {
+            let mut tokens = self.tokens.lock().unwrap();
+            let Some(t) = tokens.get(hash).filter(|t| t.revoked_at.is_none()) else {
+                return Ok(());
+            };
+            let (user_id, device_id) = (t.user_id, t.device_id);
+            tokens
+                .values_mut()
+                .filter(|t| t.device_id == device_id && t.revoked_at.is_none())
+                .for_each(|t| t.revoked_at = Some(now));
+            self.outbox
+                .lock()
+                .unwrap()
+                .push(revoked(user_id, device_id));
             Ok(())
         }
     }
@@ -391,8 +431,27 @@ mod tests {
             access_ttl_secs: 900,
             refresh_ttl_secs: 3600,
             reuse_grace_secs: 30,
+            revocations: None,
         });
         (router(auth.clone()), auth)
+    }
+
+    /// Like `app`, with the revocation fast path captured.
+    fn app_with_revocations() -> (
+        Router,
+        Arc<Auth<Memory>>,
+        tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let auth = Arc::new(Auth {
+            store: Memory::default(),
+            keys: Keys::generate(),
+            access_ttl_secs: 900,
+            refresh_ttl_secs: 3600,
+            reuse_grace_secs: 30,
+            revocations: Some(tx),
+        });
+        (router(auth.clone()), auth, rx)
     }
 
     async fn call(
@@ -638,5 +697,81 @@ mod tests {
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let jwks: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(jwks, auth.keys.jwks());
+    }
+
+    fn decode_revocation(bytes: &[u8]) -> xmsg_proto::v1::SessionRevoked {
+        use xmsg_proto::Message;
+        match xmsg_proto::v1::AuthEvent::decode(bytes).unwrap().event {
+            Some(xmsg_proto::v1::auth_event::Event::SessionRevoked(r)) => r,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn logout_and_theft_each_revoke_the_session_once_via_outbox_and_fast_path() {
+        let (app, auth, mut fast) = app_with_revocations();
+        signed_up(&app).await;
+        let tokens = logged_in(&app).await;
+        let (status, _) = call(
+            &app,
+            "/v1/logout",
+            serde_json::json!({"refresh_token": tokens.refresh_token}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let outbox = auth.store.outbox.lock().unwrap().clone();
+        assert_eq!(outbox.len(), 1, "logout writes one session.revoked");
+        assert_eq!(
+            fast.try_recv().unwrap(),
+            outbox[0],
+            "and publishes the same bytes"
+        );
+        let r = decode_revocation(&outbox[0]);
+        assert_eq!(
+            (
+                r.user_id.to_string(),
+                r.session_id.to_string(),
+                r.reason.as_str()
+            ),
+            (tokens.user_id.clone(), tokens.session_id.clone(), "logout")
+        );
+        assert!(
+            r.refuse_until_ms >= r.revoked_at_ms + 900_000,
+            "refused until every access token has expired"
+        );
+
+        // Logging out again (or with an unknown token) changes nothing and emits nothing.
+        call(
+            &app,
+            "/v1/logout",
+            serde_json::json!({"refresh_token": tokens.refresh_token}),
+        )
+        .await;
+        assert_eq!(auth.store.outbox.lock().unwrap().len(), 1);
+        assert!(fast.try_recv().is_err());
+
+        // Theft: a rotated token replayed after the grace window ends the session.
+        let second = logged_in(&app).await;
+        let (_, body) = call(
+            &app,
+            "/v1/token/refresh",
+            serde_json::json!({"refresh_token": second.refresh_token}),
+        )
+        .await;
+        assert!(body["refresh_token"].is_string());
+        revoked_ago(&auth, &second.refresh_token, 60);
+        let (status, _) = call(
+            &app,
+            "/v1/token/refresh",
+            serde_json::json!({"refresh_token": second.refresh_token}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let theft = decode_revocation(&fast.try_recv().unwrap());
+        assert_eq!(
+            (theft.session_id.to_string(), theft.reason.as_str()),
+            (second.session_id, "refresh token reused")
+        );
+        assert_eq!(auth.store.outbox.lock().unwrap().len(), 2);
     }
 }

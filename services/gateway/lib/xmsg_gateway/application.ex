@@ -13,6 +13,11 @@ defmodule XmsgGateway.Application do
         [
           {XmsgGateway.Auth.Jwks, XmsgGateway.Config.jwks_url()},
           {Registry,
+           keys: :duplicate,
+           name: XmsgGateway.Revocations.registry(),
+           partitions: System.schedulers_online()},
+          XmsgGateway.Revocations,
+          {Registry,
            keys: :duplicate, name: XmsgGateway.Users, partitions: System.schedulers_online()}
         ] ++
         Enum.map(0..(XmsgGateway.Delivery.worker_count() - 1), &{XmsgGateway.Delivery.Worker, &1}) ++

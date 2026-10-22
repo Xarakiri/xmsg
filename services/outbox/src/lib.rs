@@ -6,8 +6,10 @@
 //!   the outbox topic of their aggregate, then marks them published. A crash in between
 //!   republishes them (at least once); every consumer dedupes by the outbox event.
 //! - **meta-relay** (`xmsg-meta-relay`): copies channel events from `channels.meta` into
-//!   `messages.in`, where the sequencer orders them with the channel's messages. The fast
-//!   path already sent most of them; the sequencer drops the repeat by its dedupe ID.
+//!   `messages.in`, where the sequencer orders them with the channel's messages, and
+//!   forwards revocations from `auth.events` to NATS `auth.revocations`. The fast paths
+//!   already sent most of them; the sequencer drops repeats by dedupe ID, and a gateway
+//!   applies a revocation twice harmlessly.
 
 pub mod postgres;
 
@@ -18,6 +20,8 @@ pub const TOPIC_CHANNELS_META: &str = "channels.meta";
 pub const TOPIC_USERS_EVENTS: &str = "users.events";
 pub const TOPIC_AUTH_EVENTS: &str = "auth.events";
 pub const TOPIC_MESSAGES_IN: &str = "messages.in";
+/// NATS subject gateways listen on for revocations (plan §5.1).
+pub const SUBJECT_REVOCATIONS: &str = "auth.revocations";
 
 /// One committed outbox row.
 #[derive(Debug, Clone, PartialEq)]
@@ -71,10 +75,39 @@ pub fn relay_channel_event(key: Option<&[u8]>, payload: &[u8]) -> Result<(i64, V
     Ok((event.channel_id, payload.to_vec()))
 }
 
+/// What `meta-relay` forwards to NATS for an `auth.events` record: the unchanged
+/// `AuthEvent`, if it is a revocation (the only kind gateways act on).
+pub fn relay_auth_event(payload: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    use xmsg_proto::v1::{AuthEvent, auth_event};
+    let event = AuthEvent::decode(payload).map_err(|e| format!("not an AuthEvent: {e}"))?;
+    let revocation = matches!(event.event, Some(auth_event::Event::SessionRevoked(_)));
+    Ok(revocation.then(|| payload.to_vec()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use xmsg_proto::v1::{ChannelCreated, inbound_event};
+
+    #[test]
+    fn revocations_are_forwarded_unchanged_and_garbage_is_refused() {
+        use xmsg_proto::v1::{AuthEvent, SessionRevoked, auth_event};
+        let revoked = AuthEvent {
+            event: Some(auth_event::Event::SessionRevoked(SessionRevoked {
+                user_id: 1,
+                session_id: 2,
+                ..Default::default()
+            })),
+        }
+        .encode_to_vec();
+        assert_eq!(relay_auth_event(&revoked), Ok(Some(revoked.clone())));
+        assert_eq!(
+            relay_auth_event(&AuthEvent::default().encode_to_vec()),
+            Ok(None),
+            "nothing for gateways"
+        );
+        assert!(relay_auth_event(b"\xff\xff").is_err());
+    }
 
     fn created(channel_id: i64, dedupe_id: &str) -> Vec<u8> {
         InboundEvent {

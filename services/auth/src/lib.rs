@@ -7,6 +7,7 @@ pub mod api;
 pub mod config;
 pub mod keys;
 pub mod password;
+pub mod revocation;
 pub mod store;
 
 use std::time::{SystemTime, UNIX_EPOCH};

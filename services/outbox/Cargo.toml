@@ -12,6 +12,7 @@ publish.workspace = true
 xmsg-partition = { path = "../../crates/xmsg-partition" }
 xmsg-proto = { path = "../../crates/xmsg-proto" }
 futures-util = "0.3.34"
+async-nats = "0.46.0"
 rdkafka = { version = "0.39.0", features = ["tokio"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres", "chrono"] }
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "signal", "time"] }

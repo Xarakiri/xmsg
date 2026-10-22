@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use xmsg_auth::api::{Auth, router};
 use xmsg_auth::config::Config;
+use xmsg_auth::revocation;
 use xmsg_auth::store::Postgres;
 
 #[tokio::main]
@@ -24,12 +25,37 @@ async fn main() {
             eprintln!("postgres: {e}");
             std::process::exit(1);
         });
+    let revocations = match &config.nats_url {
+        Some(url) => {
+            let client = async_nats::connect(url).await.unwrap_or_else(|e| {
+                eprintln!("nats {url}: {e}");
+                std::process::exit(1);
+            });
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    // Best effort: the outbox copy reaches gateways via meta-relay anyway.
+                    if let Err(e) = client.publish(revocation::SUBJECT, event.into()).await {
+                        tracing::warn!(error = %e, "publishing a revocation failed; the outbox will deliver it");
+                    }
+                }
+            });
+            Some(tx)
+        }
+        None => {
+            tracing::warn!(
+                "XMSG_NATS_URL not set: revocations reach gateways through the outbox only"
+            );
+            None
+        }
+    };
     let auth = Arc::new(Auth {
         store,
         keys: config.keys,
         access_ttl_secs: config.access_ttl_secs,
         refresh_ttl_secs: config.refresh_ttl_secs,
         reuse_grace_secs: config.reuse_grace_secs,
+        revocations,
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await
