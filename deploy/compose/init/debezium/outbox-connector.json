@@ -1,0 +1,47 @@
+{
+  "name": "xmsg-outbox",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    "plugin.name": "pgoutput",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "xmsg",
+    "database.password": "${file:/kafka/secrets/postgres.properties:password}",
+    "database.dbname": "xmsg",
+    "topic.prefix": "xmsg",
+    "slot.name": "xmsg_outbox",
+    "publication.name": "xmsg_outbox",
+    "publication.autocreate.mode": "filtered",
+    "table.include.list": "public.outbox",
+    "tombstones.on.delete": "false",
+    "snapshot.mode": "no_data",
+
+    "key.converter": "org.apache.kafka.connect.converters.LongConverter",
+    "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+    "header.converter": "org.apache.kafka.connect.storage.SimpleHeaderConverter",
+
+    "transforms": "outbox,channels,users,auth",
+    "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+    "transforms.outbox.table.field.event.id": "id",
+    "transforms.outbox.table.field.event.key": "aggregate_id",
+    "transforms.outbox.table.field.event.payload": "payload",
+    "transforms.outbox.table.fields.additional.placement": "id:header:outbox_id,event_type:header:event_type",
+    "transforms.outbox.route.by.field": "aggregate_type",
+    "transforms.outbox.route.topic.replacement": "${routedByValue}",
+    "transforms.outbox.table.expand.json.payload": "false",
+    "transforms.outbox.debezium.op.invalid.behavior": "warn",
+    "transforms.channels.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.channels.regex": "channel",
+    "transforms.channels.replacement": "channels.meta",
+    "transforms.users.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.users.regex": "user|workspace",
+    "transforms.users.replacement": "users.events",
+    "transforms.auth.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.auth.regex": "session|auth",
+    "transforms.auth.replacement": "auth.events",
+
+    "producer.override.enable.idempotence": "true",
+    "producer.override.acks": "all"
+  }
+}

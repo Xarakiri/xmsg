@@ -15,6 +15,21 @@ channels/users/auth ──commit──▶ Postgres outbox ──xmsg-outbox-rela
 - **Unknown aggregate types** stay unpublished for a newer relay instead of going to the wrong topic or blocking the rest.
 - **Retention and lag:** published rows are kept 7 days for replays, then deleted (checked hourly). A lag above 5 s is logged.
 
+### With Debezium (Large tier)
+[`deploy/compose/init/debezium`](../../deploy/compose/init/debezium) holds the connector: Debezium's Postgres connector reads `public.outbox` from the WAL (`pgoutput`, slot and publication `xmsg_outbox`), and its outbox event router produces the same records as the poller:
+- **Topic** from `aggregate_type`, with the same mapping (one `RegexRouter` per topic).
+- **Key:** `aggregate_id` through `LongConverter`, i.e. the 8-byte big-endian channel key; Kafka Connect's default partitioner is the murmur2 one the poller imitates, so partitions match.
+- **Value:** `payload` as raw bytes; **headers** `outbox_id` and `event_type`.
+
+Debezium doesn't mark rows published, so `xmsg-outbox-relay` runs with `XMSG_OUTBOX_MODE=cleanup`: it relays nothing and deletes rows 7 days after they were written. Postgres needs `wal_level=logical` and a user allowed to replicate and create publications. An unknown aggregate type has no topic, so the connector stops on it instead of skipping it: deploy relay mapping changes before the services that write the new type.
+
+```bash
+docker compose --profile debezium up -d debezium   # Kafka Connect on 127.0.0.1:8093
+deploy/compose/init/debezium/register.sh           # create or update the connector
+```
+
+CI runs the end-to-end smoke once with each relay.
+
 ## `xmsg-meta-relay`
 - Copies `channels.meta` records unchanged into `messages.in`, keyed by channel, so the sequencer orders metadata events with the channel's messages.
 - **Revocations:** when `XMSG_NATS_URL` is set, it also forwards `auth.events` revocations (`AuthEvent{SessionRevoked}`) unchanged to NATS `auth.revocations`. This is the safety net behind auth's own fast path; a gateway applies a repeat harmlessly. Other auth events are skipped.
@@ -32,6 +47,7 @@ channels/users/auth ──commit──▶ Postgres outbox ──xmsg-outbox-rela
 | `XMSG_DATABASE_URL` | `postgres://xmsg:xmsg-dev-only@127.0.0.1:5432/xmsg` | outbox-relay | Postgres with the outbox |
 | `XMSG_KAFKA_BOOTSTRAP` | `127.0.0.1:9092` | both | Kafka |
 | `XMSG_OUTBOX_POLL_MS` | `200` | outbox-relay | Poll interval when caught up |
+| `XMSG_OUTBOX_MODE` | `relay` | outbox-relay | `cleanup` when Debezium relays the outbox: only delete rows older than 7 days |
 | `XMSG_PARTITIONS` | *(required)* | meta-relay | The installation's partition count |
 | `XMSG_META_RELAY_GROUP` | `xmsg-meta-relay` | meta-relay | Consumer group |
 | `XMSG_NATS_URL` | *(none)* | meta-relay | Forward revocations to NATS `auth.revocations` |

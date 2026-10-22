@@ -176,9 +176,15 @@ jobs:
         run: docker compose down -v
 
   pipeline:
-    name: Pipeline (service integration + end-to-end smoke)
+    name: Pipeline (service integration + end-to-end smoke, ${{ matrix.relay }} outbox relay)
     runs-on: ubuntu-latest
     needs: [rust, elixir, sequencer]
+    # The same end-to-end checks with each outbox relay (ADR-0020): the Rust poller
+    # (Small/Medium) and Debezium (Large). Integration tests run in the poller leg only.
+    strategy:
+      fail-fast: false
+      matrix:
+        relay: [poller, debezium]
     env:
       XMSG_PARTITIONS: "16"
       XMSG_KAFKA_BOOTSTRAP: localhost:9092
@@ -205,40 +211,55 @@ jobs:
           docker compose up -d --wait kafka nats cassandra postgres
           docker compose up kafka-init --exit-code-from kafka-init
           docker compose up cassandra-init --exit-code-from cassandra-init
+      - name: Start Debezium and register the outbox connector
+        if: matrix.relay == 'debezium'
+        working-directory: deploy/compose
+        env:
+          XMSG_CONNECT_URL: http://localhost:8093
+        run: |
+          docker compose --profile debezium up -d --wait debezium
+          init/debezium/register.sh
       - name: Build
         run: |
           cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-e2e-smoke
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
       - name: Messages service integration tests (real Kafka + NATS)
+        if: matrix.relay == 'poller'
         env:
           XMSG_IT_KAFKA: localhost:9092
           XMSG_IT_NATS: nats://localhost:4222
         run: cargo test -p xmsg-messages --test integration -- --ignored --test-threads=1
       - name: Persister integration tests (real Kafka + Cassandra 5)
+        if: matrix.relay == 'poller'
         env:
           XMSG_IT_KAFKA: localhost:9092
           XMSG_IT_CQL: localhost:9042
         run: cargo test -p xmsg-persister --test integration -- --ignored --test-threads=1
       - name: Auth integration tests (real PostgreSQL)
+        if: matrix.relay == 'poller'
         env:
           XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
         run: cargo test -p xmsg-auth --test integration -- --ignored
       - name: Gateway revocation replay test (real Kafka)
+        if: matrix.relay == 'poller'
         working-directory: services/gateway
         env:
           XMSG_IT_KAFKA: localhost:9092
         run: mix test --only kafka
       - name: Outbox relay integration tests (real PostgreSQL + Kafka)
+        if: matrix.relay == 'poller'
         env:
           XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
           XMSG_IT_KAFKA: localhost:9092
         run: cargo test -p xmsg-outbox --test integration -- --ignored --test-threads=1
       - name: Channels integration tests (real PostgreSQL)
+        if: matrix.relay == 'poller'
         env:
           XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
         run: cargo test -p xmsg-channels --test integration -- --ignored
       - name: Users integration tests (real PostgreSQL)
+        if: matrix.relay == 'poller'
         env:
           XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
         run: cargo test -p xmsg-users --test integration -- --ignored
@@ -256,6 +277,7 @@ jobs:
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
             ./target/release/xmsg-channels > logs/channels.log 2>&1 &
           XMSG_DATABASE_URL=postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg \
+            XMSG_OUTBOX_MODE=${{ matrix.relay == 'debezium' && 'cleanup' || 'relay' }} \
             ./target/release/xmsg-outbox-relay > logs/outbox-relay.log 2>&1 &
           ./target/release/xmsg-meta-relay > logs/meta-relay.log 2>&1 &
           XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
@@ -297,11 +319,15 @@ jobs:
           XMSG_EXPECT_WORKSPACE_REMOVAL: "true"
           XMSG_USERS_URL: http://localhost:8084
         run: ./target/release/xmsg-e2e-smoke
+      - name: Save Debezium's log
+        if: always() && matrix.relay == 'debezium'
+        working-directory: deploy/compose
+        run: mkdir -p ../../logs && docker compose --profile debezium logs debezium > ../../logs/debezium.log 2>&1 || true
       - name: Upload service logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pipeline-logs
+          name: pipeline-logs-${{ matrix.relay }}
           path: logs/
           if-no-files-found: ignore
       - name: Stop
