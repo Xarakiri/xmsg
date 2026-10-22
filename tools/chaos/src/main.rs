@@ -232,7 +232,7 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
             users.clone(),
             ledger.clone(),
             senders_rx.clone(),
-            Rng(seed ^ (u as u64 + 1) * 0x9E37_79B9),
+            Rng(seed ^ ((u as u64 + 1) * 0x9E37_79B9)),
         );
         let mine = of_user[u].clone();
         let (rate, dup_rate) = (args.rate, args.dup_rate);
@@ -290,8 +290,9 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
                 }
                 let n = count.entry(target.clone()).or_default();
                 *n += 1;
-                // Each target alternates between SIGKILL and a graceful stop.
-                let (signal, name) = if *n % 2 == 1 {
+                // Each target alternates between SIGKILL and a graceful stop, starting with
+                // either in turn, so even one round covers both.
+                let (signal, name) = if (*n as usize + round % targets.len()) % 2 == 1 {
                     (libc::SIGKILL, "SIGKILL")
                 } else {
                     (libc::SIGTERM, "SIGTERM")
