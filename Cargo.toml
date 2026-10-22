@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 [workspace]
 resolver = "3"
-members = ["crates/*", "services/auth", "services/channels", "services/fanout", "services/messages", "services/persister", "services/users", "tools/e2e-smoke", "tools/loadgen"]
+members = ["crates/*", "services/auth", "services/channels", "services/fanout", "services/messages", "services/persister", "services/users", "tools/chaos", "tools/e2e-smoke", "tools/loadgen"]
 
 [workspace.package]
 edition = "2024"

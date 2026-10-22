@@ -39,9 +39,18 @@ async fn main() {
         });
     tracing::info!(port = config.port, "auth ready");
     axum::serve(listener, router(auth))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server");
+}
+
+/// SIGINT or SIGTERM. Kubernetes and systemd stop services with SIGTERM; without a
+/// handler the process dies on the spot and skips the clean shutdown below.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("installing the SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
 }

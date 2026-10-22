@@ -130,6 +130,8 @@ async fn main() -> ExitCode {
     let mut heads_tick = tokio::time::interval(Duration::from_secs(1));
     let mut announced = false;
 
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
     loop {
         take_assignments(&assigned, &mut streams, &mut announced);
         let message = tokio::select! {
@@ -141,7 +143,7 @@ async fn main() -> ExitCode {
                 }
                 continue;
             }
-            _ = tokio::signal::ctrl_c() => break,
+            _ = &mut shutdown => break,
         };
         // Assignments arrive inside recv() (rebalance callback): take them before the message.
         take_assignments(&assigned, &mut streams, &mut announced);
@@ -285,4 +287,15 @@ fn follow_sessions(
 fn fail(message: &str) -> ExitCode {
     eprintln!("xmsg-fanout: {message}");
     ExitCode::from(2)
+}
+
+/// SIGINT or SIGTERM. Kubernetes and systemd stop services with SIGTERM; without a
+/// handler the process dies on the spot and skips the clean shutdown below.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("installing the SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
 }
