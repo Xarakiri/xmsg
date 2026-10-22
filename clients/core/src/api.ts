@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// HTTP calls to the auth, channels and messages services. IDs are decimal strings, as on the wire.
+// HTTP calls to the auth, users, channels and messages services. IDs are decimal strings, as on the wire.
 
 import { fromBinary } from "@bufbuild/protobuf";
 import { EventPageSchema, type EventPage } from "./gen/xmsg/v1/sync_pb.js";
@@ -19,6 +19,25 @@ export interface Endpoints {
   channels: string;
   /** Base URL of the messages service's HTTP reads. */
   messages: string;
+  users: string;
+}
+
+/** What anyone sharing a workspace with the user sees. */
+export interface UserProfile {
+  user_id: string;
+  name: string;
+  avatar_url: string | null;
+}
+
+export interface Workspace {
+  workspace_id: string;
+  name: string;
+  slug: string;
+  role: "owner" | "admin" | "member";
+}
+
+export interface WorkspaceMember extends UserProfile {
+  role: Workspace["role"];
 }
 
 export class ApiError extends Error {
@@ -114,6 +133,50 @@ export class Api {
       throw new ApiError(response.status, (body as { error?: string }).error ?? response.statusText);
     }
     return fromBinary(EventPageSchema, new Uint8Array(await response.arrayBuffer()));
+  }
+
+  me(token: string): Promise<UserProfile & { email: string }> {
+    return call(`${this.endpoints.users}/v1/me`, { method: "GET", token });
+  }
+
+  /** Absent fields stay; avatar_url null clears the avatar. */
+  updateMe(token: string, change: { name?: string; avatar_url?: string | null }): Promise<UserProfile> {
+    return call(`${this.endpoints.users}/v1/me`, { method: "PATCH", token, body: json(change) });
+  }
+
+  /** Up to 200 profiles; users sharing no workspace with you are simply missing. */
+  async users(token: string, ids: string[]): Promise<UserProfile[]> {
+    const reply = await call<{ users: UserProfile[] }>(
+      `${this.endpoints.users}/v1/users?ids=${ids.map(encodeURIComponent).join(",")}`,
+      { method: "GET", token },
+    );
+    return reply.users;
+  }
+
+  async myWorkspaces(token: string): Promise<Workspace[]> {
+    return (await call<{ workspaces: Workspace[] }>(`${this.endpoints.users}/v1/me/workspaces`, { method: "GET", token })).workspaces;
+  }
+
+  createWorkspace(token: string, name: string, slug: string): Promise<Workspace> {
+    return call(`${this.endpoints.users}/v1/workspaces`, { method: "POST", token, body: json({ name, slug }) });
+  }
+
+  /** One page of members by user ID; pass `next` back as `after` for the following page. */
+  workspaceMembers(token: string, workspaceId: string, after?: string): Promise<{ members: WorkspaceMember[]; next: string | null }> {
+    const query = after ? `?after=${encodeURIComponent(after)}` : "";
+    return call(`${this.endpoints.users}/v1/workspaces/${workspaceId}/members${query}`, { method: "GET", token });
+  }
+
+  createInvite(token: string, workspaceId: string, ttlHours?: number): Promise<{ code: string; workspace_id: string; expires_at: string }> {
+    return call(`${this.endpoints.users}/v1/workspaces/${workspaceId}/invites`, {
+      method: "POST",
+      token,
+      body: json(ttlHours ? { ttl_hours: ttlHours } : {}),
+    });
+  }
+
+  acceptInvite(token: string, code: string): Promise<{ workspace_id: string; status: "joined" | "already_member" }> {
+    return call(`${this.endpoints.users}/v1/invites/${encodeURIComponent(code)}/accept`, { method: "POST", token });
   }
 
   /** Leave (your own ID) or remove someone (admins). */

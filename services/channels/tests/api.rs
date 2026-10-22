@@ -24,12 +24,38 @@ use xmsg_proto::v1::{
 #[derive(Default)]
 struct Memory {
     users: Vec<i64>,
+    /// workspace → members
+    workspaces: HashMap<i64, Vec<i64>>,
     channels: Mutex<Vec<(NewChannel, Vec<i64>)>>,
     outbox: Mutex<Vec<InboundEvent>>,
     dms: Mutex<HashMap<(i64, i64), i64>>,
 }
 
 impl Store for Memory {
+    async fn outside_workspace(&self, w: i64, users: &[i64]) -> Result<Vec<i64>, StoreError> {
+        let members = self.workspaces.get(&w).cloned().unwrap_or_default();
+        Ok(users
+            .iter()
+            .copied()
+            .filter(|u| !members.contains(u))
+            .collect())
+    }
+    async fn shared_workspace(&self, users: &[i64]) -> Result<Option<i64>, StoreError> {
+        let mut ids: Vec<i64> = self.workspaces.keys().copied().collect();
+        ids.sort_unstable();
+        Ok(ids
+            .into_iter()
+            .find(|w| users.iter().all(|u| self.workspaces[w].contains(u))))
+    }
+    async fn channel_workspace(&self, channel_id: i64) -> Result<Option<i64>, StoreError> {
+        Ok(self
+            .channels
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(c, _)| c.id == channel_id)
+            .map(|(c, _)| c.workspace_id))
+    }
     async fn names(&self, ids: &[i64]) -> Result<HashMap<i64, String>, StoreError> {
         Ok(self
             .channels
@@ -46,7 +72,7 @@ impl Store for Memory {
         members: &[i64],
         event: &InboundEvent,
     ) -> Result<(), StoreError> {
-        if c.workspace_id != 1 {
+        if !self.workspaces.contains_key(&c.workspace_id) {
             return Err(StoreError::UnknownWorkspace);
         }
         if members.iter().any(|m| !self.users.contains(m)) {
@@ -126,6 +152,8 @@ struct Harness {
 const ALICE: i64 = 101;
 const BOB: i64 = 102;
 const CAROL: i64 = 103;
+/// Shares workspace 2 with Alice, and nothing with Bob or Carol.
+const DAVE: i64 = 104;
 
 async fn harness() -> Harness {
     let keys = Arc::new(Keys::generate());
@@ -141,7 +169,8 @@ async fn harness() -> Harness {
     let pending = Arc::new(Pending::default());
     let state = Arc::new(App {
         store: Memory {
-            users: vec![ALICE, BOB, CAROL],
+            users: vec![ALICE, BOB, CAROL, DAVE],
+            workspaces: HashMap::from([(1, vec![ALICE, BOB, CAROL]), (2, vec![ALICE, DAVE])]),
             ..Default::default()
         },
         log: FakeLog {
@@ -200,6 +229,24 @@ impl Harness {
 
     fn sent(&self) -> Vec<InboundEvent> {
         self.state.log.sent.lock().unwrap().clone()
+    }
+
+    /// A channel the store knows, as if created earlier.
+    fn seed_channel(&self, id: i64, workspace_id: i64) {
+        let channel = NewChannel {
+            id,
+            workspace_id,
+            kind: "private",
+            name: Some("seeded".into()),
+            topic: None,
+            created_by: ALICE,
+        };
+        self.state
+            .store
+            .channels
+            .lock()
+            .unwrap()
+            .push((channel, vec![ALICE]));
     }
 
     fn answer(&self, result: CommandResult) {
@@ -291,7 +338,7 @@ async fn invalid_requests_are_refused() {
         ),
         (
             serde_json::json!({"type": "public", "name": "x", "workspace_id": "7"}),
-            StatusCode::BAD_REQUEST,
+            StatusCode::FORBIDDEN,
         ),
     ];
     for (body, expected) in cases {
@@ -389,6 +436,7 @@ async fn a_dm_is_created_once_per_pair_and_group_dms_are_new_channels() {
 #[tokio::test]
 async fn membership_commands_return_the_sequencers_verdict() {
     let h = harness().await;
+    h.seed_channel(555, 1);
     h.answer(CommandResult {
         accepted: true,
         event_seq: 9,
@@ -453,6 +501,7 @@ async fn membership_commands_return_the_sequencers_verdict() {
 #[tokio::test]
 async fn an_undecided_command_answers_pending_and_cleans_up() {
     let h = harness().await;
+    h.seed_channel(555, 1);
     let (status, reply) = h
         .call(
             "DELETE",
@@ -525,4 +574,83 @@ async fn my_channels_lists_heads_with_names_from_postgres() {
         h.call("GET", "/v1/me/channels", None, None).await.0,
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn channels_and_dms_stay_inside_workspaces() {
+    let h = harness().await;
+    let create =
+        |user, body: serde_json::Value| h.call("POST", "/v1/channels", Some(user), Some(body));
+    // Bob isn't in workspace 2; Dave isn't in workspace 1.
+    let (status, reply) = create(
+        BOB,
+        serde_json::json!({"type": "public", "name": "x", "workspace_id": "2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{reply}");
+    let (status, _) = create(
+        ALICE,
+        serde_json::json!({"type": "public", "name": "x", "member_ids": [DAVE.to_string()]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "an outsider as initial member"
+    );
+    let (status, reply) = create(ALICE, serde_json::json!({"type": "private", "name": "ops", "workspace_id": "2", "member_ids": [DAVE.to_string()]})).await;
+    assert_eq!(status, StatusCode::CREATED, "{reply}");
+    let ops: i64 = reply["channel_id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(h.state.store.channels.lock().unwrap()[0].0.workspace_id, 2);
+
+    // Inviting or self-joining someone outside the channel's workspace never reaches the sequencer.
+    let sent = h.sent().len();
+    let (status, _) = h
+        .call(
+            "POST",
+            &format!("/v1/channels/{ops}/members"),
+            Some(ALICE),
+            Some(serde_json::json!({"user_id": BOB.to_string()})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = h
+        .call(
+            "POST",
+            &format!("/v1/channels/{ops}/members"),
+            Some(CAROL),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = h
+        .call("POST", "/v1/channels/999/members", Some(ALICE), None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "unknown channel");
+    assert_eq!(h.sent().len(), sent);
+
+    // DMs need a shared workspace and land in it.
+    let dm = |user, others: Vec<i64>| {
+        let ids: Vec<String> = others.iter().map(i64::to_string).collect();
+        h.call(
+            "POST",
+            "/v1/dms",
+            Some(user),
+            Some(serde_json::json!({"user_ids": ids})),
+        )
+    };
+    assert_eq!(dm(BOB, vec![DAVE]).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(dm(ALICE, vec![BOB, DAVE]).await.0, StatusCode::FORBIDDEN);
+    let (status, _) = dm(ALICE, vec![DAVE]).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let workspaces: Vec<i64> = h
+        .state
+        .store
+        .channels
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(c, _)| c.workspace_id)
+        .collect();
+    assert_eq!(workspaces, [2, 2]);
 }

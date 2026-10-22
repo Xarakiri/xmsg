@@ -61,6 +61,25 @@ pub trait Store: Send + Sync + 'static {
         ids: &[i64],
     ) -> impl Future<Output = Result<std::collections::HashMap<i64, String>, StoreError>> + Send;
 
+    /// Those of `users` who don't belong to the workspace (unknown users included).
+    fn outside_workspace(
+        &self,
+        workspace_id: i64,
+        users: &[i64],
+    ) -> impl Future<Output = Result<Vec<i64>, StoreError>> + Send;
+
+    /// The lowest-numbered workspace every one of `users` belongs to, if any.
+    fn shared_workspace(
+        &self,
+        users: &[i64],
+    ) -> impl Future<Output = Result<Option<i64>, StoreError>> + Send;
+
+    /// The channel's workspace (absent: unknown channel).
+    fn channel_workspace(
+        &self,
+        channel_id: i64,
+    ) -> impl Future<Output = Result<Option<i64>, StoreError>> + Send;
+
     /// Like `create_channel` for a 1:1 DM, unless the pair already has one.
     fn create_dm(
         &self,
@@ -125,6 +144,44 @@ async fn insert_channel(
 }
 
 impl Store for Postgres {
+    async fn outside_workspace(
+        &self,
+        workspace_id: i64,
+        users: &[i64],
+    ) -> Result<Vec<i64>, StoreError> {
+        Ok(sqlx::query_scalar(
+            "SELECT u FROM unnest($2::BIGINT[]) AS u WHERE NOT EXISTS ( \
+                SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = u)",
+        )
+        .bind(workspace_id)
+        .bind(users)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn shared_workspace(&self, users: &[i64]) -> Result<Option<i64>, StoreError> {
+        let mut distinct = users.to_vec();
+        distinct.sort_unstable();
+        distinct.dedup();
+        Ok(sqlx::query_scalar(
+            "SELECT workspace_id FROM workspace_members WHERE user_id = ANY($1) \
+             GROUP BY workspace_id HAVING count(*) = $2 ORDER BY workspace_id LIMIT 1",
+        )
+        .bind(&distinct)
+        .bind(distinct.len() as i64)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    async fn channel_workspace(&self, channel_id: i64) -> Result<Option<i64>, StoreError> {
+        Ok(
+            sqlx::query_scalar("SELECT workspace_id FROM channels WHERE id = $1")
+                .bind(channel_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
     async fn names(
         &self,
         ids: &[i64],

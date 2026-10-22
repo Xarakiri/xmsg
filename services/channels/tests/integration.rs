@@ -21,6 +21,7 @@ async fn pool() -> PgPool {
 }
 
 /// A user row (the auth service owns users; tests insert them directly).
+/// Like sign-up, it joins the default workspace.
 async fn user(pool: &PgPool) -> i64 {
     let id = new_id();
     sqlx::query("INSERT INTO users (id, email, name) VALUES ($1, $2, 'IT')")
@@ -29,6 +30,13 @@ async fn user(pool: &PgPool) -> i64 {
         .execute(pool)
         .await
         .unwrap();
+    sqlx::query(
+        "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (1, $1, 'member')",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
     id
 }
 
@@ -175,4 +183,67 @@ async fn concurrent_dm_opens_create_one_channel() {
         orphans, 1,
         "losing transactions leave no channel or outbox row behind"
     );
+}
+
+#[tokio::test]
+#[ignore]
+async fn workspace_membership_is_read_from_postgres() {
+    let (pool, store) = (pool().await, Postgres::connect(&url()).await.unwrap());
+    let (alice, bob, dave) = (user(&pool).await, user(&pool).await, user(&pool).await);
+    let w = new_id();
+    sqlx::query("INSERT INTO workspaces (id, name, slug) VALUES ($1, 'IT', $2)")
+        .bind(w)
+        .bind(format!("ch-it-{w}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    for u in [alice, dave] {
+        sqlx::query(
+            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'member')",
+        )
+        .bind(w)
+        .bind(u)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        store
+            .outside_workspace(w, &[alice, bob, dave, 999])
+            .await
+            .unwrap(),
+        [bob, 999]
+    );
+    assert_eq!(
+        store.outside_workspace(1, &[alice, bob]).await.unwrap(),
+        Vec::<i64>::new()
+    );
+    assert_eq!(
+        store.shared_workspace(&[alice, bob]).await.unwrap(),
+        Some(1)
+    );
+    assert_eq!(
+        store.shared_workspace(&[alice, dave, alice]).await.unwrap(),
+        Some(1),
+        "duplicates don't count twice"
+    );
+    sqlx::query("DELETE FROM workspace_members WHERE workspace_id = 1 AND user_id = $1")
+        .bind(dave)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.shared_workspace(&[alice, dave]).await.unwrap(),
+        Some(w)
+    );
+    assert_eq!(store.shared_workspace(&[bob, dave]).await.unwrap(), None);
+
+    let mut c = channel("private", alice);
+    c.workspace_id = w;
+    store
+        .create_channel(&c, &[alice], &event(&c, &[alice]))
+        .await
+        .unwrap();
+    assert_eq!(store.channel_workspace(c.id).await.unwrap(), Some(w));
+    assert_eq!(store.channel_workspace(-1).await.unwrap(), None);
 }

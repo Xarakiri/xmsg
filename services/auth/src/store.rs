@@ -117,13 +117,23 @@ impl Store for Postgres {
         password_hash: &str,
         name: &str,
     ) -> Result<(), StoreError> {
+        // Joining the default workspace commits with the user, so no account exists
+        // outside every workspace (where nobody could see or message it).
+        let mut tx = self.pool.begin().await?;
         sqlx::query("INSERT INTO users (id, email, password_hash, name) VALUES ($1, $2, $3, $4)")
             .bind(id)
             .bind(email)
             .bind(password_hash)
             .bind(name)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        sqlx::query(
+            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (1, $1, 'member')",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
