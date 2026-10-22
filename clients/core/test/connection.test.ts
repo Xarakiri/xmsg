@@ -86,3 +86,25 @@ test("a closed socket reconnects with a fresh token after an invalid-token close
   assert.deepEqual(statuses, ["connecting", "offline", "connecting"]);
   conn.stop();
 });
+
+test("Resync frames reach onResync, scoped to their partition", async () => {
+  const resyncs: (number | undefined)[] = [];
+  const conn = new Connection({
+    url: "ws://gw/ws",
+    token: async () => "t",
+    WebSocket: FakeSocket as unknown as typeof WebSocket,
+    onStatus: () => {},
+    onAck: () => {},
+    onEvent: () => {},
+    onSendRejected: () => {},
+    onResync: (p) => resyncs.push(p),
+  });
+  conn.start();
+  await tick();
+  FakeSocket.last.push({ frame: { case: "welcome", value: { partitionCount: 16 } } });
+  assert.equal(conn.partitionCount, 16);
+  FakeSocket.last.push({ frame: { case: "resync", value: { partition: 3 } } });
+  FakeSocket.last.push({ frame: { case: "resync", value: {} } });
+  assert.deepEqual(resyncs, [3, undefined]);
+  conn.stop();
+});

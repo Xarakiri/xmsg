@@ -6,7 +6,8 @@ import { EventPageSchema, type EventPage } from "../src/gen/xmsg/v1/sync_pb.js";
 import { ChannelType } from "../src/gen/xmsg/v1/enums_pb.js";
 import { ApiError, type Api } from "../src/api.ts";
 import { initialState, reduce, type Action, type ChatState, type ListedChannel } from "../src/state.ts";
-import { sync } from "../src/sync.ts";
+import { inPartition, sync } from "../src/sync.ts";
+import { partition } from "../src/partition.ts";
 
 const msg = (seq: number) => ({
   channelId: 7n,
@@ -53,4 +54,55 @@ test("sync pages through moved channels and marks refused ones as left", async (
   calls.length = 0;
   await sync({ api: fakeApi(calls), token: async () => "t", state: () => state, dispatch: (a) => (state = reduce(state, a)) });
   assert.deepEqual(calls, ["8@0"], "only the refused channel is retried");
+});
+
+test("a partition-scoped resync only fetches that partition's channels", async () => {
+  let state: ChatState = initialState("101");
+  const calls: string[] = [];
+  const p7 = partition(7n, 16);
+  await sync({
+    api: fakeApi(calls),
+    token: async () => "t",
+    state: () => state,
+    dispatch: (a: Action) => (state = reduce(state, a)),
+    only: inPartition(p7, 16),
+  });
+  const fetched = new Set(calls.map((c) => c.split("@")[0]));
+  assert.ok(fetched.has("7"));
+  assert.equal(fetched.has("8"), partition(8n, 16) === p7, "channel 8 only if it shares the partition");
+});
+
+test("the scheduler runs one sync at a time and merges what was asked meanwhile", async () => {
+  const { SyncScheduler } = await import("../src/sync.ts");
+  const runs: string[] = [];
+  let release!: () => void;
+  const first = new Promise<void>((r) => (release = r));
+  let n = 0;
+  const scheduler = new SyncScheduler(async (only) => {
+    n += 1;
+    runs.push(only ? ["1", "2", "3"].filter(only).join(",") : "all");
+    if (n === 1) await first;
+  });
+  scheduler.request((id) => id === "1"); // starts at once
+  scheduler.request((id) => id === "2"); // both pending scoped requests merge...
+  scheduler.request((id) => id === "3");
+  release();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(runs, ["1", "2,3"], "...into one follow-up run");
+
+  runs.length = 0;
+  n = 0;
+  let release2!: () => void;
+  const blocked = new Promise<void>((r) => (release2 = r));
+  const s2 = new SyncScheduler(async (only) => {
+    n += 1;
+    runs.push(only ? "scoped" : "all");
+    if (n === 1) await blocked;
+  });
+  s2.request((id) => id === "1");
+  s2.request((id) => id === "2");
+  s2.request(); // a full request swallows the scoped one
+  release2();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(runs, ["scoped", "all"]);
 });
