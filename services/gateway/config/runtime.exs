@@ -11,6 +11,8 @@ if config_env() != :test do
     dev_auth: env.("XMSG_DEV_AUTH", "false") == "true",
     # The auth service's key set, e.g. http://auth:8081/.well-known/jwks.json
     jwks_url: System.get_env("XMSG_AUTH_JWKS_URL"),
+    # Rebuild the revocation deny set from Kafka auth.events on start.
+    revocations_replay: env.("XMSG_REVOCATIONS_REPLAY", "true") == "true",
     kafka_bootstrap: env.("XMSG_KAFKA_BOOTSTRAP", "127.0.0.1:9092"),
     nats: %{
       host: env.("XMSG_NATS_HOST", "127.0.0.1"),

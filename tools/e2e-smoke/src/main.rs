@@ -741,6 +741,13 @@ async fn check_revocation(auth: &str, gateway: &str, run_id: i64) -> Result<(), 
         .as_str()
         .ok_or("login: no refresh_token")?;
 
+    let channels = std::env::var("XMSG_CHANNELS_URL").ok();
+    if let Some(url) = &channels {
+        let (status, body) = call("GET", &format!("{url}/v1/me/channels"), access, None).await?;
+        if status != 200 {
+            return Err(format!("before logout, my channels: {status} {body}"));
+        }
+    }
     let mut client = connect(gateway, access).await?;
     let started = Instant::now();
     post("/v1/logout", serde_json::json!({"refresh_token": refresh})).await?;
@@ -754,8 +761,24 @@ async fn check_revocation(auth: &str, gateway: &str, run_id: i64) -> Result<(), 
     }
     let closed_after = started.elapsed();
     expect_refused(gateway, access, "session revoked").await?;
+    // HTTP services refuse the token too (xmsg-authn's deny set, fed over NATS).
+    if let Some(url) = &channels {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (status, _) = call("GET", &format!("{url}/v1/me/channels"), access, None).await?;
+            if status == 401 {
+                break;
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "after logout, the channels service still answers {status}"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
     println!(
-        "revocation: logout closed the open socket in {} ms; its still-valid access token is refused",
+        "revocation: logout closed the open socket in {} ms; its still-valid access token is refused by the gateway and HTTP services",
         closed_after.as_millis()
     );
     Ok(())

@@ -60,7 +60,10 @@ async fn main() -> ExitCode {
         };
         let app = Arc::new(history::App {
             store,
-            verifier: xmsg_authn::Verifier::new(jwks_url),
+            verifier: match xmsg_authn::Verifier::from_env(jwks_url).await {
+                Ok(v) => v,
+                Err(e) => return fail(&e),
+            },
         });
         let listener = match tokio::net::TcpListener::bind(("0.0.0.0", config.http_port)).await {
             Ok(l) => l,

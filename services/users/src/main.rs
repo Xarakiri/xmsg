@@ -25,7 +25,9 @@ async fn main() {
         .unwrap_or_else(|e| fail(&format!("postgres: {e}")));
     let app = Arc::new(App {
         store,
-        verifier: xmsg_authn::Verifier::new(config.jwks_url),
+        verifier: xmsg_authn::Verifier::from_env(config.jwks_url)
+            .await
+            .unwrap_or_else(|e| fail(&format!("revocations: {e}"))),
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await

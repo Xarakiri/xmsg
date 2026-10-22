@@ -35,6 +35,7 @@ Membership replies: 200 `{status: "accepted", event_seq}`, 403 forbidden, 404 un
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `XMSG_NATS_URL` | *(none)* | Refuse revoked sessions: deny set fed by NATS `auth.revocations`, rebuilt from Kafka `auth.events` (`XMSG_KAFKA_BOOTSTRAP`) on start ([xmsg-authn](../../crates/xmsg-authn)). Without it, a revoked session's access token works until it expires |
 | `XMSG_AUTH_JWKS_URL` | (required) | e.g. `http://auth:8081/.well-known/jwks.json` |
 | `XMSG_PARTITIONS` | (required) | the installation's partition count |
 | `XMSG_CHANNELS_PORT` | `8082` | HTTP port |

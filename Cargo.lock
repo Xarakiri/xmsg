@@ -3900,14 +3900,18 @@ dependencies = [
 name = "xmsg-authn"
 version = "0.0.0"
 dependencies = [
+ "async-nats",
  "axum",
+ "futures-util",
  "jsonwebtoken",
+ "rdkafka",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "xmsg-auth",
+ "xmsg-proto",
 ]
 
 [[package]]

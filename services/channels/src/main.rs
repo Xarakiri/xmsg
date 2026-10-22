@@ -49,7 +49,9 @@ async fn main() {
         log,
         memberships,
         pending,
-        verifier: xmsg_authn::Verifier::new(config.jwks_url),
+        verifier: xmsg_authn::Verifier::from_env(config.jwks_url)
+            .await
+            .unwrap_or_else(|e| fail(&e)),
         command_timeout: Duration::from_millis(config.command_timeout_ms),
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))

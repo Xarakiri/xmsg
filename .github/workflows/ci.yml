@@ -224,6 +224,11 @@ jobs:
         env:
           XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
         run: cargo test -p xmsg-auth --test integration -- --ignored
+      - name: Gateway revocation replay test (real Kafka)
+        working-directory: services/gateway
+        env:
+          XMSG_IT_KAFKA: localhost:9092
+        run: mix test --only kafka
       - name: Outbox relay integration tests (real PostgreSQL + Kafka)
         env:
           XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg

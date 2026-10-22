@@ -11,6 +11,8 @@ defmodule XmsgGateway.Revocations do
 
   The deny set lives in a public ETS table read by every connect; entries are dropped
   once their tokens have expired. A revocation that arrives twice changes nothing.
+  After a (re)start the set is rebuilt from Kafka `auth.events`
+  (`XmsgGateway.Revocations.Replay`) when `revocations_replay` is on.
   """
   use GenServer
   require Logger
@@ -61,7 +63,21 @@ defmodule XmsgGateway.Revocations do
     :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
     send(self(), :subscribe)
     Process.send_after(self(), :purge, @purge_ms)
-    {:ok, %{monitor: nil}}
+    {:ok, %{monitor: nil}, {:continue, :replay}}
+  end
+
+  @impl true
+  def handle_continue(:replay, state) do
+    if Config.revocations_replay?() do
+      # Subscribed first (the :subscribe message is already queued ahead of nothing that
+      # could be lost: NATS delivers to us from now on), then the past is read back.
+      case __MODULE__.Replay.run(Config.kafka_endpoints(), &apply/1) do
+        {:ok, n} -> Logger.info("revocations replayed: #{n} still live")
+        {:error, reason} -> Logger.warning("revocation replay failed: #{inspect(reason)}")
+      end
+    end
+
+    {:noreply, state}
   end
 
   @impl true
