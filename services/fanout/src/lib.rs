@@ -15,6 +15,7 @@
 pub mod config;
 pub mod denylist;
 pub mod membership;
+pub mod sequencer;
 pub mod sessions;
 pub mod store;
 pub mod streams;

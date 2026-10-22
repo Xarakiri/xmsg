@@ -227,4 +227,20 @@ class SequencerTopologyTest {
         }
         assertEquals("xmsg-sequencer-members-changelog", Names.changelogTopic(Names.STORE_MEMBERS))
     }
+
+    @Test
+    fun `the membership endpoint reads members and version straight from the stores`() {
+        create(500, alice, ChannelType.CHANNEL_TYPE_PRIVATE, bob)
+        create(5000, alice, ChannelType.CHANNEL_TYPE_PRIVATE) // shares the "500" prefix, not "500:"
+        join(500, alice, carol, request = "r-join")
+        post(500, bob, "hi")
+        val heads = driver.getKeyValueStore<Long, ByteArray>(Names.STORE_CHANNEL_HEADS)
+        val members = driver.getKeyValueStore<String, ByteArray>(Names.STORE_MEMBERS)
+
+        val found = membersOf(heads, members, 500)!!
+        assertEquals(listOf(alice, bob, carol), found.userIdsList)
+        assertEquals(2L, found.membershipVersion, "the join (event 2), not the later message (event 3)")
+        assertEquals(listOf(alice), membersOf(heads, members, 5000)!!.userIdsList)
+        assertEquals(null, membersOf(heads, members, 404))
+    }
 }

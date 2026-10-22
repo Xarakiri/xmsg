@@ -47,7 +47,7 @@ impl Store {
 }
 
 impl SnapshotSource for Store {
-    async fn load(&self, channel_id: i64) -> Result<Option<Snapshot>, String> {
+    async fn load(&self, channel_id: i64, _at_least: i64) -> Result<Option<Snapshot>, String> {
         // Read the version first: rows are written before the version, so rows read
         // afterwards are at least as new as the version says.
         let version = self

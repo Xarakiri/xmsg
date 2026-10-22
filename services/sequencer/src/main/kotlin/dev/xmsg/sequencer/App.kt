@@ -6,6 +6,7 @@ import org.apache.kafka.clients.admin.AdminClientConfig
 import org.apache.kafka.streams.KafkaStreams
 import org.apache.kafka.streams.StreamsConfig
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse
+import org.apache.kafka.streams.state.HostInfo
 import kotlin.system.exitProcess
 import java.net.InetAddress
 import java.util.Properties
@@ -23,12 +24,18 @@ fun streamsConfig(env: Map<String, String> = System.getenv()): Properties = Prop
     put(StreamsConfig.STATE_DIR_CONFIG, env["XMSG_STATE_DIR"] ?: "/tmp/xmsg-sequencer")
     put(StreamsConfig.producerPrefix("linger.ms"), "1")
     env["XMSG_SESSION_TIMEOUT_MS"]?.let { put(StreamsConfig.consumerPrefix("session.timeout.ms"), it) }
+    // Where this instance's membership endpoint is reachable, so others can redirect to it.
+    put(StreamsConfig.APPLICATION_SERVER_CONFIG, "${advertisedHost(env)}:${httpPort(env)}")
     // Static membership: restarts don't trigger rebalances (ADR-0003).
     put(
         StreamsConfig.consumerPrefix("group.instance.id"),
         env["XMSG_INSTANCE_ID"] ?: InetAddress.getLocalHost().hostName,
     )
 }
+
+fun httpPort(env: Map<String, String>): Int = env["XMSG_SEQUENCER_HTTP_PORT"]?.toIntOrNull() ?: 8090
+
+fun advertisedHost(env: Map<String, String>): String = env["XMSG_ADVERTISED_HOST"] ?: InetAddress.getLocalHost().hostName
 
 fun main() {
     val env = System.getenv()
@@ -42,15 +49,18 @@ fun main() {
     }
 
     val streams = KafkaStreams(SequencerTopology.build(), config)
+    val membership = MembershipServer(streams, HostInfo(advertisedHost(env), httpPort(env)), httpPort(env))
     val stopped = CountDownLatch(1)
     Runtime.getRuntime().addShutdownHook(
         Thread {
+            membership.stop()
             streams.close()
             stopped.countDown()
         },
     )
     streams.setUncaughtExceptionHandler { _ -> StreamThreadExceptionResponse.REPLACE_THREAD }
     streams.start()
+    membership.start()
     stopped.await()
 }
 

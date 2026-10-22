@@ -3977,6 +3977,7 @@ dependencies = [
  "async-nats",
  "futures-util",
  "rdkafka",
+ "reqwest",
  "scylla",
  "tokio",
  "tracing",

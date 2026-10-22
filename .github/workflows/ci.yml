@@ -260,12 +260,12 @@ jobs:
           ./target/release/xmsg-meta-relay > logs/meta-relay.log 2>&1 &
           XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
             ./target/release/xmsg-readstate > logs/readstate.log 2>&1 &
-          XMSG_STATE_DIR=$RUNNER_TEMP/seq-state XMSG_INSTANCE_ID=ci-1 \
+          XMSG_STATE_DIR=$RUNNER_TEMP/seq-state XMSG_INSTANCE_ID=ci-1 XMSG_ADVERTISED_HOST=localhost \
             services/sequencer/build/install/xmsg-sequencer/bin/xmsg-sequencer > logs/sequencer.log 2>&1 &
           XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
             ./target/release/xmsg-messages > logs/messages.log 2>&1 &
           ./target/release/xmsg-persister > logs/persister.log 2>&1 &
-          ./target/release/xmsg-fanout > logs/fanout.log 2>&1 &
+          XMSG_SEQUENCER_URL=http://localhost:8090 ./target/release/xmsg-fanout > logs/fanout.log 2>&1 &
           (cd services/gateway && MIX_ENV=prod XMSG_GATEWAY_ID=ci \
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
             mix run --no-halt > ../../logs/gateway.log 2>&1 &)
@@ -291,6 +291,7 @@ jobs:
           XMSG_CHANNELS_URL: http://localhost:8082
           XMSG_MESSAGES_URL: http://localhost:8083
           XMSG_READSTATE_URL: http://localhost:8085
+          XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_EXPECT_OUTBOX_RELAY: "true"
           XMSG_EXPECT_REVOCATION: "true"
           XMSG_EXPECT_WORKSPACE_REMOVAL: "true"

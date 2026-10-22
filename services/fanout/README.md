@@ -17,7 +17,7 @@ Phase 1a ([plan §5.8](../../docs/architecture-plan.md)). Delivers every sequenc
 
 ## Not yet
 - Pull mode for large channels (`ch.{channel_id}`) and the 10 s dual publish on mode switches; today every channel is delivered in push mode.
-- The sequencer's Interactive Queries endpoint as the second snapshot source; gateway liveness (suspect after missed heartbeats, drop after 60 s); typing and read receipts; batching several events per gateway batch; per-partition parallelism.
+- Gateway liveness (suspect after missed heartbeats, drop after 60 s); typing and read receipts; batching several events per gateway batch; per-partition parallelism.
 
 ## Configuration
 
@@ -28,6 +28,7 @@ Phase 1a ([plan §5.8](../../docs/architecture-plan.md)). Delivers every sequenc
 | `XMSG_CQL_NODES` / `XMSG_CQL_KEYSPACE` | `127.0.0.1:9042` / `xmsg` | Membership snapshots |
 | `XMSG_PARTITIONS` | *(required)* | This installation's partition count |
 | `XMSG_FANOUT_GROUP` | `xmsg-fanout` | Consumer group |
+| `XMSG_SEQUENCER_URL` | *(none)* | The sequencer's membership endpoint, e.g. `http://sequencer:8090`: asked only when the Cassandra snapshot is missing or older than the event's `membership_version` (the persister lags); the newer answer wins. Without it, fan-out waits for the persister |
 
 ## Tests
 `cargo test -p xmsg-fanout` covers the session map, membership with the snapshot rule, recipients and stream sequencing. The whole round trip runs in [`tools/e2e-smoke`](../../tools/e2e-smoke/src/main.rs) (CI job `pipeline`).

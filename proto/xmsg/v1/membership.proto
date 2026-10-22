@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// A channel's members as the sequencer has them (plan §5.6, membership endpoint):
+// read from its state stores, so never behind any event it has sequenced. Fan-out's
+// second snapshot source when the wide-column store hasn't caught up (ADR-0006).
+message ChannelMembers {
+  int64 channel_id = 1;
+  // event_seq of the channel's latest membership change: the version these members are at.
+  int64 membership_version = 2;
+  repeated int64 user_ids = 3;
+}
