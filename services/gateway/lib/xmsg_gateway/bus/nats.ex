@@ -43,8 +43,15 @@ defmodule XmsgGateway.Bus.Nats do
     :exit, reason -> {:error, reason}
   end
 
+  # While NATS is away the connection process doesn't exist and Gnat.pub exits; callers
+  # (the heartbeat) get an error instead of crashing, or repeated crashes would take the
+  # whole gateway down with every socket on it.
   @impl true
-  def publish(subject, body), do: Gnat.pub(@conn, subject, body)
+  def publish(subject, body) do
+    Gnat.pub(@conn, subject, body)
+  catch
+    :exit, reason -> {:error, reason}
+  end
 
   @doc "Gnat delivers `{:msg, map}`; normalize it to the bus message format."
   def normalize({:msg, %{topic: subject, body: body}}), do: {:bus_msg, subject, body}

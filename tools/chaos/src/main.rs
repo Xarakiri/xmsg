@@ -59,6 +59,10 @@ struct Args {
     /// Sequencer instances (two, so an outage moves tasks: a real rebalance).
     #[arg(long, default_value_t = 2)]
     sequencers: usize,
+    /// Run this `nats-server` binary as part of the stack (on the port of `XMSG_NATS_URL`),
+    /// so `nats` can be a target. Without it, NATS is taken as already running.
+    #[arg(long)]
+    nats_server: Option<PathBuf>,
     /// Fraction of sends repeated after their ack (as if the ack was lost).
     #[arg(long, default_value_t = 0.03)]
     dup_rate: f64,
@@ -116,13 +120,21 @@ async fn main() -> ExitCode {
     }
     let logs = std::fs::canonicalize(&args.logs).unwrap();
     let repo = std::fs::canonicalize(&args.repo).unwrap();
-    let mut stack = match Stack::new(&repo, &logs, args.sequencers) {
+    let mut stack = match Stack::new(&repo, &logs, args.sequencers, args.nats_server.clone()) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("❌ {e}");
             return ExitCode::FAILURE;
         }
     };
+    if let Some(t) = args
+        .targets
+        .iter()
+        .find(|t| !stack.services.iter().any(|s| &s.name == *t))
+    {
+        eprintln!("❌ unknown target {t} (nats needs --nats-server)");
+        return ExitCode::FAILURE;
+    }
     println!("starting the services (logs in {})", logs.display());
     if let Err(e) = stack.start_all().await {
         eprintln!("❌ {e}");
@@ -320,6 +332,15 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
                     started.elapsed().as_secs(),
                     ready_after.as_secs_f64()
                 );
+                // An outage must not take anything else down with it (e.g. the gateway
+                // when NATS goes away).
+                if let Some(dead) = stack
+                    .services
+                    .iter_mut()
+                    .find_map(|s| (!s.is_running()).then(|| s.name.clone()))
+                {
+                    return Err(format!("{dead} died while {target} was down"));
+                }
                 kills.lock().unwrap().push(Kill {
                     target,
                     signal: name,
@@ -610,7 +631,12 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
     // A graceful stop must be clean: exit 0 (the JVM reports 143 after running its
     // shutdown hooks). Dying from the signal means the consumer never left its group.
     let kills = kills.lock().unwrap();
-    for k in kills.iter().filter(|k| k.signal == "SIGTERM") {
+    // Only our services: nats-server exits with status 1 on SIGTERM even when it shuts
+    // down cleanly.
+    for k in kills
+        .iter()
+        .filter(|k| k.signal == "SIGTERM" && k.target != "nats")
+    {
         let clean = k.exit.is_some_and(|s| s.success() || s.code() == Some(143));
         if !clean {
             report.fail(

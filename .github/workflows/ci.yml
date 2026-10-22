@@ -310,7 +310,7 @@ jobs:
         run: docker compose down -v
 
   chaos:
-    name: Chaos (Phase 1a exit criteria)
+    name: Chaos (Phase 1a/1b exit criteria)
     runs-on: ubuntu-latest
     needs: [rust, elixir, sequencer]
     timeout-minutes: 25
@@ -335,10 +335,10 @@ jobs:
         with:
           otp-version: "29"
           elixir-version: "1.20"
-      - name: Start Kafka, NATS, Cassandra and PostgreSQL (Small-tier compose)
+      - name: Start Kafka, Cassandra and PostgreSQL (Small-tier compose)
         working-directory: deploy/compose
         run: |
-          docker compose up -d --wait kafka nats cassandra postgres
+          docker compose up -d --wait kafka cassandra postgres
           docker compose up kafka-init --exit-code-from kafka-init
           docker compose up cassandra-init --exit-code-from cassandra-init
       - name: Build
@@ -346,9 +346,18 @@ jobs:
           cargo build --release -p xmsg-auth -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-chaos
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
+      # The tool runs NATS itself so it can be killed too: same binary as the compose image.
+      - name: Take nats-server from the compose image
+        run: |
+          id=$(docker create nats:2.10-alpine)
+          docker cp "$id:/usr/local/bin/nats-server" "$RUNNER_TEMP/nats-server"
+          docker rm "$id"
       # The tool starts the services itself so it can kill and restart them.
-      - name: Chat under load while the sequencer, fan-out, persister and messages service are killed and restarted
-        run: ./target/release/xmsg-chaos --duration 120 --users 12 --channels 4 --senders 6 --rate 4
+      - name: Chat under load while NATS, the sequencer, fan-out, persister and messages service are killed and restarted
+        run: >-
+          ./target/release/xmsg-chaos --duration 150 --users 12 --channels 4 --senders 6 --rate 4
+          --nats-server "$RUNNER_TEMP/nats-server"
+          --targets nats,sequencer-1,fanout,persister,nats,sequencer-2,messages
       - name: Upload service logs
         if: failure()
         uses: actions/upload-artifact@v4

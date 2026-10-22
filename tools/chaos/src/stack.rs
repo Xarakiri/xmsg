@@ -160,9 +160,15 @@ pub struct Stack {
 }
 
 impl Stack {
-    /// The services as the CI `pipeline` job runs them, plus `sequencers` sequencer instances.
-    /// Infrastructure settings (Kafka, NATS, Cassandra, PostgreSQL) come from the environment.
-    pub fn new(repo: &Path, logs: &Path, sequencers: usize) -> Result<Self, String> {
+    /// The services as the CI `pipeline` job runs them, plus `sequencers` sequencer instances,
+    /// and NATS itself when `nats_server` is given. Other infrastructure settings (Kafka,
+    /// Cassandra, PostgreSQL) come from the environment.
+    pub fn new(
+        repo: &Path,
+        logs: &Path,
+        sequencers: usize,
+        nats_server: Option<PathBuf>,
+    ) -> Result<Self, String> {
         let database = std::env::var("XMSG_DATABASE_URL")
             .map_err(|_| "XMSG_DATABASE_URL must be set (PostgreSQL for auth and channels)")?;
         let jwks = std::env::var("XMSG_AUTH_JWKS_URL")
@@ -174,7 +180,21 @@ impl Stack {
         let key = base64::engine::general_purpose::STANDARD.encode(seed);
         let bin = |name: &str| repo.join("target/release").join(name);
 
-        let mut services = vec![
+        let mut services = Vec::new();
+        if let Some(program) = nats_server {
+            let url =
+                std::env::var("XMSG_NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
+            let port = url
+                .rsplit(':')
+                .next()
+                .unwrap_or("4222")
+                .trim_end_matches('/')
+                .to_string();
+            let mut nats = Service::new("nats", program, repo, logs).ready(&["Server is ready"]);
+            nats.args = vec!["-p".into(), port];
+            services.push(nats);
+        }
+        services.extend([
             Service::new("auth", bin("xmsg-auth"), repo, logs)
                 .env("XMSG_AUTH_KEY", key)
                 .env("XMSG_DATABASE_URL", &database)
@@ -189,7 +209,7 @@ impl Stack {
             Service::new("persister", bin("xmsg-persister"), repo, logs)
                 .ready(&["persister ready"]),
             Service::new("fanout", bin("xmsg-fanout"), repo, logs).ready(&["fanout ready"]),
-        ];
+        ]);
         let sequencer =
             repo.join("services/sequencer/build/install/xmsg-sequencer/bin/xmsg-sequencer");
         for i in 1..=sequencers {
@@ -230,15 +250,29 @@ impl Stack {
             .unwrap_or_else(|| panic!("no service {name}"))
     }
 
-    /// Auth first (the others fetch its JWKS), then everything else in parallel.
+    /// NATS (if ours) and auth first (the others fetch its JWKS), then everything else in parallel.
     pub async fn start_all(&mut self) -> Result<(), String> {
-        let auth = self.get("auth");
-        auth.start()?;
-        auth.wait_ready(Duration::from_secs(60)).await?;
-        for s in self.services.iter_mut().filter(|s| s.name != "auth") {
+        const FIRST: [&str; 2] = ["nats", "auth"];
+        for s in self
+            .services
+            .iter_mut()
+            .filter(|s| FIRST.contains(&s.name.as_str()))
+        {
+            s.start()?;
+            s.wait_ready(Duration::from_secs(60)).await?;
+        }
+        for s in self
+            .services
+            .iter_mut()
+            .filter(|s| !FIRST.contains(&s.name.as_str()))
+        {
             s.start()?;
         }
-        for s in self.services.iter_mut().filter(|s| s.name != "auth") {
+        for s in self
+            .services
+            .iter_mut()
+            .filter(|s| !FIRST.contains(&s.name.as_str()))
+        {
             let took = s.wait_ready(Duration::from_secs(180)).await?;
             println!("  {} ready ({:.1}s)", s.name, took.as_secs_f64());
         }

@@ -9,7 +9,7 @@ Checks the Phase 1a exit criteria (plan §14) under load:
 
 ## What it does
 
-1. **Starts the stack.** It runs auth, channels, messages, persister, fan-out, two sequencer instances and the gateway from the built binaries. Each runs in its own process group, so the tool can kill and restart it. Logs go to `target/chaos/<service>.log`.
+1. **Starts the stack.** It runs auth, channels, messages, persister, fan-out, two sequencer instances and the gateway from the built binaries, plus NATS when `--nats-server` gives its binary. Each runs in its own process group, so the tool can kill and restart it. Logs go to `target/chaos/<service>.log`.
 2. **Sets up users and channels.** It signs up `--users` users through auth and connects them all to the gateway over WebSocket. It then creates `--channels` private channels with random members through the channels service.
 3. **Sends continuously.** The first `--senders` users each send `--rate` messages per second to their channels.
    - Like the real client, an unacked send stays in an outbox. It is resent with the same `client_msg_id` after `--retry-after-ms` and after a reconnect.
@@ -17,6 +17,7 @@ Checks the Phase 1a exit criteria (plan §14) under load:
 4. **Injects faults while sending.** It kills one service at a time, in rotation, over `sequencer-1, fanout, persister, sequencer-2, messages`.
    - Each target alternates between SIGKILL and SIGTERM.
    - It restarts the service and waits for its ready line before the next kill.
+   - With `--nats-server`, `nats` can be a target too (CI uses `nats,sequencer-1,fanout,persister,nats,sequencer-2,messages`). While NATS is down, sends fail and stay in the outbox, and live delivery stops. Afterwards the gateway resubscribes, detects the gap and sends `Resync`, and clients catch up from history.
    - A sequencer stays down for 5–15 s. That is longer than its 6 s session timeout, so its tasks move to the other instance and back. Each move is a Kafka Streams rebalance with a state restore and EOS fencing.
 5. **Removes a member.** About 40% of the way in, the admin of channel 0 removes a member while everyone keeps sending. After the removed user's socket receives `member.left`, that user sends 5 more messages to the channel.
 6. **Quiesces.** It stops sending and waits until:
@@ -53,7 +54,7 @@ Any violation fails the run (exit 1). The summary lists violations by kind.
 
 Prerequisites:
 
-- Kafka, NATS, Cassandra and PostgreSQL are running with the schema and topics, for example from `deploy/compose`.
+- Kafka, Cassandra and PostgreSQL are running, and NATS too unless `--nats-server` is given, with the schema and topics, for example from `deploy/compose`.
 - Nothing else of xmsg is running.
 - The services are built:
 
@@ -80,4 +81,4 @@ XMSG_PARTITIONS=16 XMSG_DATABASE_URL=postgres://xmsg:xmsg-dev-only@127.0.0.1:543
   - Graceful stops (SIGTERM) leave the group at once.
   - Static membership or a shorter session timeout would shorten the stall after a crash.
 - **SIGKILLed persister:** the persister has the same 45 s stall for Cassandra writes, which are idempotent.
-- **What isn't killed:** the gateway, Kafka, NATS and Cassandra are not killed. Their failures belong to the Phase 1b and Phase 3 chaos tests.
+- **What isn't killed:** the gateway, Kafka and Cassandra are not killed. Their failures belong to the Phase 1b and Phase 3 chaos tests.
