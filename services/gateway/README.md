@@ -15,8 +15,9 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 
 - **Revocations** (§6.4): `XmsgGateway.Revocations` subscribes to NATS `auth.revocations`. A `SessionRevoked` closes every socket of that session (close code 1008, "session revoked") and puts the session in an ETS deny set until `refuse_until_ms`, so its still-valid access tokens can't reconnect. The deny check runs before *and* after a connecting socket registers its session, so a revocation landing in between isn't missed. Development tokens (session 0) are never revoked.
 
+- **After a (re)start** the deny set is rebuilt from the last 16 minutes of Kafka `auth.events` (the outbox copy of every revocation; `XmsgGateway.Revocations.Replay`). Nothing older can matter, because no access token lives longer. Turn it off with `XMSG_REVOCATIONS_REPLAY=false`.
+
 ## Not yet
-- After a gateway restart, the deny set starts empty. Until it's rebuilt from `auth.events`, a session revoked in the last ~15 minutes could reconnect to that gateway with a still-valid token.
 - Resume tokens are issued but not yet accepted on reconnect.
 - Presence, typing, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`, admission control, per-connection limits, drain on deploy.
 - Hibernation of idle connections, kernel/BEAM tuning, and the 100k-connections-per-pod capacity spike.
@@ -30,6 +31,7 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 | `XMSG_PARTITIONS` | `16` | This installation's partition count, sent to clients |
 | `XMSG_NATS_HOST` / `XMSG_NATS_PORT` | `127.0.0.1` / `4222` | NATS server |
 | `XMSG_AUTH_JWKS_URL` | (none) | Auth service key set, e.g. `http://auth:8081/.well-known/jwks.json`; without it only dev tokens work |
+| `XMSG_REVOCATIONS_REPLAY` | `true` | Rebuild the revocation deny set from Kafka `auth.events` on start |
 | `XMSG_DEV_AUTH` | `false` | Also accept `dev:<user_id>` tokens (development only) |
 | `XMSG_KAFKA_BOOTSTRAP` | `127.0.0.1:9092` | Kafka, for `sessions.events` |
 

@@ -15,6 +15,18 @@ defmodule XmsgGateway.Config do
   def nats, do: get(:nats)
   def sessions, do: get(:sessions)
   def kafka_bootstrap, do: get(:kafka_bootstrap)
+  def revocations_replay?, do: Application.get_env(:xmsg_gateway, :revocations_replay, false)
+
+  @doc "`kafka_bootstrap` as brod endpoints."
+  def kafka_endpoints do
+    kafka_bootstrap()
+    |> String.split(",", trim: true)
+    |> Enum.map(fn hostport ->
+      [host, port] = String.split(hostport, ":")
+      {String.to_charlist(host), String.to_integer(port)}
+    end)
+  end
+
   def sessions_topic, do: "sessions.events"
 
   @doc "NATS subject carrying fan-out batches for this gateway (ADR-0009)."

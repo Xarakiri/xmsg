@@ -28,6 +28,7 @@ Invite codes are 16 random bytes (base64url); only their SHA-256 is stored, and 
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `XMSG_NATS_URL` | *(none)* | Refuse revoked sessions: deny set fed by NATS `auth.revocations`, rebuilt from Kafka `auth.events` (`XMSG_KAFKA_BOOTSTRAP`) on start ([xmsg-authn](../../crates/xmsg-authn)). Without it, a revoked session's access token works until it expires |
 | `XMSG_AUTH_JWKS_URL` | (required) | e.g. `http://auth:8081/.well-known/jwks.json` |
 | `XMSG_USERS_PORT` | `8084` | HTTP port |
 | `XMSG_DATABASE_URL` | `postgres://xmsg:xmsg-dev-only@127.0.0.1:5432/xmsg` | PostgreSQL with the [Small-tier schema](../../deploy/compose/init/postgres/001_schema.sql) |

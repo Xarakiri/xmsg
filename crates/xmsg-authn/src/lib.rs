@@ -14,6 +14,9 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
+pub mod revocations;
+pub use revocations::Revocations;
+
 const REFRESH: Duration = Duration::from_secs(300);
 const MIN_REFRESH: Duration = Duration::from_secs(30);
 
@@ -33,6 +36,8 @@ pub enum Error {
     UnknownKey,
     /// The JWKS couldn't be fetched (callers answer 503, not 401).
     KeysUnavailable,
+    /// Valid, but its session was ended (logout or token theft); 401 like `Invalid`.
+    Revoked,
 }
 
 #[derive(Deserialize)]
@@ -69,6 +74,7 @@ pub struct Verifier {
     http: reqwest::Client,
     keys: RwLock<Keys>,
     validation: Validation,
+    revocations: Option<std::sync::Arc<Revocations>>,
 }
 
 impl Verifier {
@@ -88,7 +94,30 @@ impl Verifier {
                 fetched_at: None,
             }),
             validation,
+            revocations: None,
         }
+    }
+
+    /// The verifier HTTP services use: refuses revoked sessions when `XMSG_NATS_URL` is
+    /// set (rebuilt from Kafka `auth.events` at `XMSG_KAFKA_BOOTSTRAP` on start). Without
+    /// NATS a revoked session's tokens work until they expire (at most ~15 minutes).
+    pub async fn from_env(jwks_url: impl Into<String>) -> Result<Self, String> {
+        let verifier = Verifier::new(jwks_url);
+        let Ok(nats) = std::env::var("XMSG_NATS_URL") else {
+            tracing::warn!(
+                "XMSG_NATS_URL not set: revoked sessions are not refused before their tokens expire"
+            );
+            return Ok(verifier);
+        };
+        let kafka =
+            std::env::var("XMSG_KAFKA_BOOTSTRAP").unwrap_or_else(|_| "127.0.0.1:9092".into());
+        Ok(verifier.with_revocations(Revocations::start(&nats, Some(&kafka)).await?))
+    }
+
+    /// Also refuses tokens of revoked sessions (see `Revocations::start`).
+    pub fn with_revocations(mut self, revocations: std::sync::Arc<Revocations>) -> Self {
+        self.revocations = Some(revocations);
+        self
     }
 
     /// Validates `Authorization: Bearer <token>` header values or bare tokens.
@@ -106,6 +135,14 @@ impl Verifier {
                 .claims
         };
         match claims.sub.parse::<i64>() {
+            Ok(_)
+                if self
+                    .revocations
+                    .as_ref()
+                    .is_some_and(|r| r.is_revoked(claims.sid)) =>
+            {
+                Err(Error::Revoked)
+            }
             Ok(user_id) if user_id > 0 => Ok(Principal {
                 user_id,
                 session_id: claims.sid,
@@ -267,5 +304,54 @@ mod tests {
         let token = SigningKeys::generate().issue(1, 1, now(), 900);
         let verifier = Verifier::new("http://127.0.0.1:9/jwks");
         assert_eq!(verifier.verify(&token).await, Err(Error::KeysUnavailable));
+    }
+}
+
+#[cfg(test)]
+mod revocation_tests {
+    use super::*;
+    use std::sync::Arc;
+    use xmsg_auth::keys::Keys as SigningKeys;
+    use xmsg_proto::Message;
+    use xmsg_proto::v1::{AuthEvent, SessionRevoked, auth_event};
+
+    #[tokio::test]
+    async fn tokens_of_a_revoked_session_are_refused_and_others_still_pass() {
+        let signer = SigningKeys::generate();
+        let jwks = signer.jwks();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/jwks", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/jwks",
+            axum::routing::get(move || async move { axum::Json(jwks) }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let revocations = Arc::new(Revocations::default());
+        let verifier = Verifier::new(url).with_revocations(revocations.clone());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let (revoked, other) = (signer.issue(42, 7, now, 900), signer.issue(42, 8, now, 900));
+        assert!(verifier.verify(&revoked).await.is_ok());
+
+        revocations.apply(
+            &AuthEvent {
+                event: Some(auth_event::Event::SessionRevoked(SessionRevoked {
+                    user_id: 42,
+                    session_id: 7,
+                    refuse_until_ms: (now + 960) * 1000,
+                    ..Default::default()
+                })),
+            }
+            .encode_to_vec(),
+        );
+        assert_eq!(verifier.verify(&revoked).await, Err(Error::Revoked));
+        assert_eq!(
+            verifier.verify(&other).await.map(|p| p.session_id),
+            Ok(8),
+            "the user's other session"
+        );
     }
 }

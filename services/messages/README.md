@@ -19,7 +19,7 @@ First Phase 1a service ([plan §5.5](../../docs/architecture-plan.md)). Receives
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `XMSG_NATS_URL` | `nats://127.0.0.1:4222` | NATS server |
+| `XMSG_NATS_URL` | `nats://127.0.0.1:4222` | NATS server (sends; also feeds the history API's revocation deny set, rebuilt from Kafka `auth.events` on start) |
 | `XMSG_KAFKA_BOOTSTRAP` | `127.0.0.1:9092` | Kafka bootstrap servers |
 | `XMSG_PARTITIONS` | *(required)* | This installation's partition count |
 | `XMSG_APPEND_TIMEOUT_MS` | `1500` | Max wait for Kafka to acknowledge an append |
