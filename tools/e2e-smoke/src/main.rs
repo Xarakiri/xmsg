@@ -195,6 +195,9 @@ async fn run() -> Result<(), String> {
         if let Ok(sequencer_url) = std::env::var("XMSG_SEQUENCER_URL") {
             check_membership_endpoint(&sequencer_url, channel, &users).await?;
         }
+        if let Ok(messages_url) = std::env::var("XMSG_MESSAGES_URL") {
+            check_edits(url, &messages_url, &mut clients, &users, run_id).await?;
+        }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
@@ -527,6 +530,175 @@ async fn check_membership_endpoint(
     }
     println!(
         "membership endpoint: the sequencer serves alice and bob at version 6; an unknown channel is 404"
+    );
+    Ok(())
+}
+
+/// Edits and deletes (plan §5.5), in a channel of their own so the main channel's
+/// event counts stay as the other checks expect.
+async fn check_edits(
+    channels_url: &str,
+    messages_url: &str,
+    clients: &mut [Client; 3],
+    users: &[(i64, String)],
+    run_id: i64,
+) -> Result<(), String> {
+    use sequenced_event::Payload;
+    let (alice, bob) = (&users[0], &users[1]);
+    let (status, reply) = call(
+        "POST",
+        &format!("{channels_url}/v1/channels"),
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": format!("e2e-edits-{run_id}"), "member_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if status != 201 {
+        return Err(format!("edits: creating the channel: {status} {reply}"));
+    }
+    let channel: i64 = reply["channel_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("edits: no channel_id")?;
+    for (i, id) in [(0, "edit-a"), (1, "edit-b")] {
+        send(&mut clients[i].ws, channel, id).await?;
+        expect_ack(&mut clients[i], id).await?;
+    }
+    let msg_seq = |events: &[SequencedEvent], id: &str| {
+        events
+            .iter()
+            .find(|e| {
+                e.channel_id == channel
+                    && e.dedupe_id == id
+                    && matches!(e.payload, Some(Payload::MessageCreated(_)))
+            })
+            .map(|e| e.msg_seq)
+    };
+    wait_events(&mut clients[1], |e| {
+        msg_seq(e, "edit-a").is_some() && msg_seq(e, "edit-b").is_some()
+    })
+    .await?;
+    let (Some(a), Some(b)) = (
+        msg_seq(&clients[1].events, "edit-a"),
+        msg_seq(&clients[1].events, "edit-b"),
+    ) else {
+        return Err("edits: bob didn't receive both messages".into());
+    };
+    let url = |seq: i64| format!("{messages_url}/v1/channels/{channel}/messages/{seq}");
+
+    // Only the author edits.
+    let (status, _) = call(
+        "PATCH",
+        &url(a),
+        &bob.1,
+        Some(serde_json::json!({"body": "hijacked", "edit_id": "x"})),
+    )
+    .await?;
+    if status != 403 {
+        return Err(format!(
+            "edits: bob editing alice's message: expected 403, got {status}"
+        ));
+    }
+    let (status, reply) = call(
+        "PATCH",
+        &url(a),
+        &alice.1,
+        Some(serde_json::json!({"body": "edited by alice", "edit_id": "e1"})),
+    )
+    .await?;
+    if status != 202 {
+        return Err(format!(
+            "edits: alice's edit: expected 202, got {status} {reply}"
+        ));
+    }
+    let edited = |events: &[SequencedEvent]| {
+        events.iter().any(|e| {
+            e.channel_id == channel
+                && e.msg_seq == 0
+                && matches!(&e.payload, Some(Payload::MessageEdited(m)) if m.msg_seq == a && m.body == "edited by alice")
+        })
+    };
+    wait_events(&mut clients[1], edited).await?;
+    if !edited(&clients[1].events) {
+        return Err("edits: bob never received alice's edit".into());
+    }
+
+    // Deleting someone else's message needs the admin role: bob isn't, alice (the creator) is.
+    let (status, _) = call("DELETE", &url(a), &bob.1, None).await?;
+    if status != 202 {
+        return Err(format!(
+            "edits: bob's delete request: expected 202, got {status}"
+        ));
+    }
+    let refused = |events: &[SequencedEvent]| {
+        events.iter().any(|e| {
+            e.channel_id == channel
+                && e.dedupe_id == format!("delete:{a}:{}", bob.0)
+                && matches!(&e.payload, Some(Payload::Rejected(r)) if r.reason == RejectReason::Forbidden as i32)
+        })
+    };
+    wait_events(&mut clients[1], refused).await?;
+    if !refused(&clients[1].events) {
+        return Err(
+            "edits: bob's delete of alice's message wasn't refused by the sequencer".into(),
+        );
+    }
+    let (status, _) = call("DELETE", &url(b), &alice.1, None).await?;
+    if status != 202 {
+        return Err(format!(
+            "edits: alice's admin delete: expected 202, got {status}"
+        ));
+    }
+    let deleted = |events: &[SequencedEvent]| {
+        events.iter().any(|e| {
+            e.channel_id == channel
+                && matches!(&e.payload, Some(Payload::MessageDeleted(d)) if d.msg_seq == b)
+        })
+    };
+    wait_events(&mut clients[1], deleted).await?;
+    if !deleted(&clients[1].events) {
+        return Err("edits: bob never received the delete of his message".into());
+    }
+
+    // History shows the current state: the edited body, and nothing of the deleted one.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let response = reqwest::Client::new()
+            .get(format!(
+                "{messages_url}/v1/channels/{channel}/events?after=0"
+            ))
+            .bearer_auth(&bob.1)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+        let page = xmsg_proto::v1::EventPage::decode(bytes.as_ref()).map_err(|e| e.to_string())?;
+        let body_of = |seq: i64| {
+            page.events.iter().find_map(|e| match &e.payload {
+                Some(Payload::MessageCreated(m)) if e.msg_seq == seq => Some(m.body.clone()),
+                _ => None,
+            })
+        };
+        let has_delete = page
+            .events
+            .iter()
+            .any(|e| matches!(&e.payload, Some(Payload::MessageDeleted(d)) if d.msg_seq == b));
+        if body_of(a).as_deref() == Some("edited by alice")
+            && body_of(b).as_deref() == Some("")
+            && has_delete
+        {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "edits: history shows {:?} / {:?}, delete event: {has_delete}",
+                body_of(a),
+                body_of(b)
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    println!(
+        "edits: only the author edits; members get the edit live; a non-admin's delete of another's message is refused by the sequencer, an admin's goes through; history shows the edited body and none for the deleted message"
     );
     Ok(())
 }

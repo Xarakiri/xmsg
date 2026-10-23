@@ -3,6 +3,8 @@ package dev.xmsg.sequencer
 
 import dev.xmsg.proto.v1.ChannelCreated
 import dev.xmsg.proto.v1.ChannelType
+import dev.xmsg.proto.v1.DeleteMessage
+import dev.xmsg.proto.v1.EditMessage
 import dev.xmsg.proto.v1.CommandResult
 import dev.xmsg.proto.v1.FanoutMode
 import dev.xmsg.proto.v1.InboundEvent
@@ -82,6 +84,12 @@ class SequencerTopologyTest {
     private fun kick(channel: Long, actor: Long, user: Long, request: String) =
         send(base(channel, actor, request = request).setMemberKickRequested(MemberKickRequested.newBuilder().setUserId(user)).build())
 
+    private fun edit(channel: Long, actor: Long, msgSeq: Long, body: String) =
+        send(base(channel, actor, dedupe = "edit-$channel-$msgSeq-$body").setEditMessage(EditMessage.newBuilder().setMsgSeq(msgSeq).setMessageId(msgSeq * 1000).setBody(body)).build())
+
+    private fun delete(channel: Long, actor: Long, msgSeq: Long, asAdmin: Boolean) =
+        send(base(channel, actor, dedupe = "delete-$channel-$msgSeq-$actor").setDeleteMessage(DeleteMessage.newBuilder().setMsgSeq(msgSeq).setMessageId(msgSeq * 1000).setAsAdmin(asAdmin)).build())
+
     private fun drain(): List<SequencedEvent> = persisted.readValuesToList().map { SequencedEvent.parseFrom(it) }
 
     private fun drainResults(): Map<String, CommandResult> =
@@ -154,6 +162,38 @@ class SequencerTopologyTest {
         )
         assertTrue(rejected.all { it.eventSeq == 0L })
         assertEquals(2L, events.single { it.hasMessageCreated() }.eventSeq)
+    }
+
+    @Test
+    fun `edits and deletes take an event_seq but no msg_seq, and are checked`() {
+        create(100, alice, ChannelType.CHANNEL_TYPE_PRIVATE, bob)
+        post(100, bob, "helo")
+        drain()
+
+        edit(100, bob, 1, "hello")
+        edit(100, carol, 1, "not mine") // not a member
+        edit(100, bob, 7, "no such message")
+        delete(100, bob, 1, asAdmin = true) // bob isn't an admin
+        delete(100, alice, 1, asAdmin = true)
+        post(100, bob, "next")
+
+        val events = drain()
+        val edited = events.single { it.hasMessageEdited() }
+        assertEquals(3L, edited.eventSeq)
+        assertEquals(0L, edited.msgSeq)
+        assertEquals(1L, edited.messageEdited.msgSeq)
+        assertEquals("hello", edited.messageEdited.body)
+        assertTrue(edited.messageEdited.editedAtMs > 0)
+        assertEquals(
+            listOf(RejectReason.REJECT_REASON_NOT_A_MEMBER, RejectReason.REJECT_REASON_INVALID, RejectReason.REJECT_REASON_FORBIDDEN),
+            events.filter { it.hasRejected() }.map { it.rejected.reason },
+        )
+        val deleted = events.single { it.hasMessageDeleted() }
+        assertEquals(4L, deleted.eventSeq)
+        assertEquals(alice, deleted.actorId)
+        // The next message continues msg_seq where it was: edits and deletes don't count.
+        val next = events.single { it.hasMessageCreated() }
+        assertEquals(5L to 2L, next.eventSeq to next.msgSeq)
     }
 
     @Test

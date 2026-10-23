@@ -6,6 +6,7 @@
 
 pub mod cassandra;
 pub mod config;
+pub mod edits;
 pub mod history;
 pub mod kafka;
 
@@ -28,6 +29,16 @@ pub trait EventLog {
         channel_id: i64,
         event: Vec<u8>,
     ) -> impl Future<Output = Result<(), String>> + Send;
+}
+
+impl<T: EventLog + Sync> EventLog for std::sync::Arc<T> {
+    fn append(
+        &self,
+        channel_id: i64,
+        event: Vec<u8>,
+    ) -> impl Future<Output = Result<(), String>> + Send {
+        (**self).append(channel_id, event)
+    }
 }
 
 /// Early checks. Anything that needs channel state is left to the sequencer.

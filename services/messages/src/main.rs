@@ -60,6 +60,7 @@ async fn main() -> ExitCode {
         };
         let app = Arc::new(history::App {
             store,
+            log: log.clone(),
             verifier: match xmsg_authn::Verifier::from_env(jwks_url).await {
                 Ok(v) => v,
                 Err(e) => return fail(&e),

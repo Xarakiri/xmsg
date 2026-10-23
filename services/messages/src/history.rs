@@ -3,8 +3,9 @@
 //! `event_seq`, rebuilt as the `SequencedEvent`s that were delivered live, so clients
 //! apply them with the same code. Members only.
 //!
-//! `channel_events` holds every event for 30 days; new messages are stored there as
-//! pointers (their `msg_seq`) and filled in from `messages`.
+//! `channel_events` holds every event for 30 days; new messages and edits are stored
+//! there as pointers (their `msg_seq`) and filled in from the current `messages` row, so
+//! they show the latest body, and none once the message is deleted.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,7 +18,11 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use xmsg_authn::{Error as AuthError, Verifier};
 use xmsg_proto::Message;
-use xmsg_proto::v1::{EventPage, MessageCreated, SequencedEvent, sequenced_event::Payload};
+use xmsg_proto::v1::{
+    EventPage, MessageCreated, MessageEdited, SequencedEvent, sequenced_event::Payload,
+};
+
+use crate::EventLog;
 
 /// Rows per `channel_events` / `messages` partition bucket (plan §7.2; same as the persister).
 pub const BUCKET_SIZE: i64 = 10_000;
@@ -44,12 +49,17 @@ pub struct MessageRow {
     pub event_seq: i64,
     pub author_id: i64,
     pub client_msg_id: String,
+    /// Empty once deleted.
     pub body: String,
+    /// 0 if never edited.
+    pub edited_at_ms: i64,
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Head {
     pub event_seq: i64,
+    pub msg_seq: i64,
     pub channel_type: i32,
 }
 
@@ -104,7 +114,7 @@ pub async fn page(
 
     let pointers: Vec<i64> = rows
         .iter()
-        .filter(|r| r.kind == "message.created")
+        .filter(|r| is_pointer(&r.kind))
         .filter_map(pointer)
         .collect();
     let mut bodies: HashMap<i64, MessageRow> = HashMap::new();
@@ -134,6 +144,10 @@ pub async fn page(
     })
 }
 
+fn is_pointer(kind: &str) -> bool {
+    kind == "message.created" || kind == "message.edited"
+}
+
 fn pointer(row: &EventRow) -> Option<i64> {
     <[u8; 8]>::try_from(row.payload.as_slice())
         .ok()
@@ -146,33 +160,54 @@ fn rebuild(
     row: &EventRow,
     bodies: &HashMap<i64, MessageRow>,
 ) -> Option<SequencedEvent> {
-    if row.kind != "message.created" {
+    if !is_pointer(&row.kind) {
         return SequencedEvent::decode(row.payload.as_slice()).ok();
     }
     let m = bodies.get(&pointer(row)?)?;
-    Some(SequencedEvent {
+    let base = SequencedEvent {
         channel_id,
         actor_id: m.author_id,
         event_seq: row.event_seq,
-        msg_seq: m.msg_seq,
-        dedupe_id: m.client_msg_id.clone(),
         channel_type: head.channel_type,
-        payload: Some(Payload::MessageCreated(MessageCreated {
-            message_id: m.message_id,
-            body: m.body.clone(),
-        })),
         ..Default::default()
+    };
+    Some(if row.kind == "message.edited" {
+        SequencedEvent {
+            payload: Some(Payload::MessageEdited(MessageEdited {
+                msg_seq: m.msg_seq,
+                message_id: m.message_id,
+                body: m.body.clone(),
+                edited_at_ms: m.edited_at_ms,
+            })),
+            ..base
+        }
+    } else {
+        SequencedEvent {
+            msg_seq: m.msg_seq,
+            dedupe_id: m.client_msg_id.clone(),
+            payload: Some(Payload::MessageCreated(MessageCreated {
+                message_id: m.message_id,
+                body: m.body.clone(),
+            })),
+            ..base
+        }
     })
 }
 
-pub struct App<S> {
+pub struct App<S, L> {
     pub store: S,
+    /// Where edits and deletes go (`messages.in`).
+    pub log: L,
     pub verifier: Verifier,
 }
 
-pub fn router<S: Store>(app: Arc<App<S>>) -> Router {
+pub fn router<S: Store, L: EventLog + Send + Sync + 'static>(app: Arc<App<S, L>>) -> Router {
     Router::new()
-        .route("/v1/channels/{channel_id}/events", get(events::<S>))
+        .route("/v1/channels/{channel_id}/events", get(events::<S, L>))
+        .route(
+            "/v1/channels/{channel_id}/messages/{msg_seq}",
+            axum::routing::patch(crate::edits::edit::<S, L>).delete(crate::edits::delete::<S, L>),
+        )
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }
@@ -184,28 +219,39 @@ pub struct EventsQuery {
     limit: Option<usize>,
 }
 
-fn error(status: StatusCode, message: &str) -> Response {
+pub(crate) fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
-async fn events<S: Store>(
-    State(app): State<Arc<App<S>>>,
+/// The caller's user ID from the bearer token, or the status and message to answer.
+pub(crate) async fn caller(
+    verifier: &Verifier,
+    headers: &HeaderMap,
+) -> Result<i64, (StatusCode, &'static str)> {
+    const INVALID: (StatusCode, &str) =
+        (StatusCode::UNAUTHORIZED, "invalid or missing access token");
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(INVALID)?;
+    match verifier.verify(auth).await {
+        Ok(p) => Ok(p.user_id),
+        Err(AuthError::KeysUnavailable) => {
+            Err((StatusCode::SERVICE_UNAVAILABLE, "try again later"))
+        }
+        Err(_) => Err(INVALID),
+    }
+}
+
+async fn events<S: Store, L>(
+    State(app): State<Arc<App<S, L>>>,
     headers: HeaderMap,
     Path(channel_id): Path<i64>,
     Query(q): Query<EventsQuery>,
 ) -> Response {
-    let Some(auth) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    else {
-        return error(StatusCode::UNAUTHORIZED, "invalid or missing access token");
-    };
-    let user = match app.verifier.verify(auth).await {
-        Ok(p) => p.user_id,
-        Err(AuthError::KeysUnavailable) => {
-            return error(StatusCode::SERVICE_UNAVAILABLE, "try again later");
-        }
-        Err(_) => return error(StatusCode::UNAUTHORIZED, "invalid or missing access token"),
+    let user = match caller(&app.verifier, &headers).await {
+        Ok(u) => u,
+        Err((status, message)) => return error(status, message),
     };
     if q.after < 0 {
         return error(StatusCode::BAD_REQUEST, "after must be >= 0");
@@ -314,6 +360,8 @@ mod tests {
                 author_id: 5,
                 client_msg_id: format!("c-{msg_seq}"),
                 body: format!("body {msg_seq}"),
+                edited_at_ms: 0,
+                deleted: false,
             },
         )
     }
@@ -323,6 +371,7 @@ mod tests {
         let mut fake = Fake {
             head: Some(Head {
                 event_seq: n + 1,
+                msg_seq: n,
                 channel_type: ChannelType::Private as i32,
             }),
             ..Default::default()
@@ -387,6 +436,64 @@ mod tests {
             !current.truncated && current.events.is_empty(),
             "caught up is not a gap"
         );
+    }
+
+    #[tokio::test]
+    async fn edits_rebuild_from_the_current_row_and_deletes_leave_no_body() {
+        let mut fake = channel(2);
+        // Message 1 was edited (event 4), message 2 deleted (event 5).
+        fake.messages[0].body = "edited 1".into();
+        fake.messages[0].edited_at_ms = 42;
+        fake.messages[1].body = String::new();
+        fake.messages[1].deleted = true;
+        fake.events.push(EventRow {
+            event_seq: 4,
+            kind: "message.edited".into(),
+            payload: 1i64.to_be_bytes().to_vec(),
+        });
+        let deleted = SequencedEvent {
+            channel_id: 7,
+            event_seq: 5,
+            payload: Some(Payload::MessageDeleted(xmsg_proto::v1::MessageDeleted {
+                msg_seq: 2,
+                message_id: 1002,
+            })),
+            ..Default::default()
+        };
+        fake.events.push(EventRow {
+            event_seq: 5,
+            kind: "message.deleted".into(),
+            payload: deleted.encode_to_vec(),
+        });
+        fake.head = Some(Head {
+            event_seq: 5,
+            msg_seq: 2,
+            channel_type: ChannelType::Private as i32,
+        });
+
+        let events = page(&fake, 7, 0, 10).await.unwrap().events;
+        assert_eq!(events.len(), 5);
+        let Some(Payload::MessageCreated(first)) = &events[1].payload else {
+            panic!()
+        };
+        assert_eq!(first.body, "edited 1", "history shows the latest body");
+        let Some(Payload::MessageCreated(second)) = &events[2].payload else {
+            panic!()
+        };
+        assert_eq!(second.body, "", "a deleted message's body is gone");
+        let edited = &events[3];
+        assert_eq!(
+            (edited.event_seq, edited.msg_seq, edited.actor_id),
+            (4, 0, 5)
+        );
+        let Some(Payload::MessageEdited(e)) = &edited.payload else {
+            panic!()
+        };
+        assert_eq!(
+            (e.msg_seq, e.message_id, e.body.as_str(), e.edited_at_ms),
+            (1, 1001, "edited 1", 42)
+        );
+        assert_eq!(events[4], deleted);
     }
 
     #[tokio::test]

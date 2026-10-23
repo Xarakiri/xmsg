@@ -12,6 +12,8 @@ import dev.xmsg.proto.v1.MemberLeft
 import dev.xmsg.proto.v1.MemberRole
 import dev.xmsg.proto.v1.MemberState
 import dev.xmsg.proto.v1.MessageCreated
+import dev.xmsg.proto.v1.MessageDeleted
+import dev.xmsg.proto.v1.MessageEdited
 import dev.xmsg.proto.v1.PartitionState
 import dev.xmsg.proto.v1.RejectReason
 import dev.xmsg.proto.v1.Rejected
@@ -67,6 +69,8 @@ class SequencerProcessor(
             InboundEvent.PayloadCase.SEND_MESSAGE -> sendMessage(event, now)
             InboundEvent.PayloadCase.MEMBER_JOIN_REQUESTED -> join(event, now)
             InboundEvent.PayloadCase.MEMBER_KICK_REQUESTED -> kick(event, now)
+            InboundEvent.PayloadCase.EDIT_MESSAGE -> editMessage(event, now)
+            InboundEvent.PayloadCase.DELETE_MESSAGE -> deleteMessage(event, now)
             else -> reject(event, now, RejectReason.REJECT_REASON_INVALID, "empty payload")
         }
     }
@@ -136,6 +140,52 @@ class SequencerProcessor(
         emit(event, updated, now) {
             it.setMessageCreated(MessageCreated.newBuilder().setMessageId(messageId).setBody(event.sendMessage.body))
         }
+    }
+
+    /**
+     * Edits and deletes take an event_seq but no msg_seq. The messages service has checked
+     * authorship against the stored row; here the actor must still be a member and the
+     * target must exist, and a delete of someone else's message needs the admin role.
+     */
+    private fun editMessage(event: InboundEvent, now: Long) {
+        val edit = event.editMessage
+        val head = targetChannel(event, now, edit.msgSeq) ?: return
+        val updated = head.toBuilder().setEventSeq(head.eventSeq + 1).build()
+        heads.put(event.channelId, updated.toByteArray())
+        emit(event, updated, now) {
+            it.setMessageEdited(
+                MessageEdited.newBuilder()
+                    .setMsgSeq(edit.msgSeq)
+                    .setMessageId(edit.messageId)
+                    .setBody(edit.body)
+                    .setEditedAtMs(now),
+            )
+        }
+    }
+
+    private fun deleteMessage(event: InboundEvent, now: Long) {
+        val delete = event.deleteMessage
+        val head = targetChannel(event, now, delete.msgSeq) ?: return
+        if (delete.asAdmin && role(event.channelId, event.actorId) != MemberRole.MEMBER_ROLE_ADMIN) {
+            return reject(event, now, RejectReason.REJECT_REASON_FORBIDDEN, "only admins delete others' messages")
+        }
+        val updated = head.toBuilder().setEventSeq(head.eventSeq + 1).build()
+        heads.put(event.channelId, updated.toByteArray())
+        emit(event, updated, now) {
+            it.setMessageDeleted(MessageDeleted.newBuilder().setMsgSeq(delete.msgSeq).setMessageId(delete.messageId))
+        }
+    }
+
+    /** The channel's head if the actor is a member and `msgSeq` names a sequenced message; else rejects. */
+    private fun targetChannel(event: InboundEvent, now: Long, msgSeq: Long): ChannelHeadState? {
+        val head = head(event.channelId)
+            ?: return null.also { reject(event, now, RejectReason.REJECT_REASON_UNKNOWN_CHANNEL, "unknown channel") }
+        role(event.channelId, event.actorId)
+            ?: return null.also { reject(event, now, RejectReason.REJECT_REASON_NOT_A_MEMBER, "not a member") }
+        if (msgSeq < 1 || msgSeq > head.msgSeq) {
+            return null.also { reject(event, now, RejectReason.REJECT_REASON_INVALID, "no message $msgSeq") }
+        }
+        return head
     }
 
     private fun join(event: InboundEvent, now: Long) {

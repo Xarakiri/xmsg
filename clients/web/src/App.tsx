@@ -353,6 +353,8 @@ function Conversation({
 }) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
+  // The message being edited: its key, the new text, and the edit_id reused on retries.
+  const [editing, setEditing] = useState<{ key: string; text: string; editId: string } | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   // Block bodies: an effect may only return a cleanup function, and scrollIntoView
   // returns a Promise in browsers with scroll promises.
@@ -361,7 +363,30 @@ function Conversation({
   }, [messages.length, channel.id]);
   useEffect(() => {
     setNote("");
+    setEditing(null);
   }, [channel.id]);
+
+  // Edits and deletes are sequenced like messages; the result arrives as an event.
+  const saveEdit = async (m: Message) => {
+    if (!editing) return;
+    const body = editing.text.trim();
+    if (!body || body === m.body) return setEditing(null);
+    try {
+      await api.editMessage(await session.accessToken(), channel.id, m.msgSeq, body, editing.editId);
+      setEditing(null);
+    } catch (err) {
+      setNote(errorText(err));
+    }
+  };
+
+  const remove = async (m: Message) => {
+    if (!confirm("Delete this message for everyone?")) return;
+    try {
+      await api.deleteMessage(await session.accessToken(), channel.id, m.msgSeq);
+    } catch (err) {
+      setNote(errorText(err));
+    }
+  };
 
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
@@ -420,8 +445,51 @@ function Conversation({
               <time className="muted small">{new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
               {m.status === "pending" && <span className="muted small">sending…</span>}
               {m.status === "sent" && <span className="muted small">sent</span>}
+              {m.editedAt && !m.deleted && <span className="muted small" title={new Date(m.editedAt).toLocaleString()}>(edited)</span>}
+              {m.authorId === me && m.msgSeq > 0 && !m.deleted && editing?.key !== m.key && (
+                <span className="actions small">
+                  <button className="link" onClick={() => setEditing({ key: m.key, text: m.body, editId: crypto.randomUUID() })}>
+                    Edit
+                  </button>
+                  <button className="link" onClick={() => remove(m)}>
+                    Delete
+                  </button>
+                </span>
+              )}
             </div>
-            <div className="body">{m.body}</div>
+            {m.deleted ? (
+              <div className="body muted">This message was deleted.</div>
+            ) : editing?.key === m.key ? (
+              <form
+                className="edit"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void saveEdit(m);
+                }}
+              >
+                <textarea
+                  autoFocus
+                  value={editing.text}
+                  onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setEditing(null);
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void saveEdit(m);
+                    }
+                  }}
+                  rows={2}
+                />
+                <div className="row small">
+                  <button type="submit">Save</button>
+                  <button type="button" className="link" onClick={() => setEditing(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="body">{m.body}</div>
+            )}
             {m.error && (
               <div className="error small">
                 {m.error}

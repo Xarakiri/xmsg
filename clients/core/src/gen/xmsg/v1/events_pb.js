@@ -13,7 +13,7 @@ import { file_xmsg_v1_enums } from "./enums_pb.js";
  * Describes the file xmsg/v1/events.proto.
  */
 export const file_xmsg_v1_events = /*@__PURE__*/
-  fileDesc("ChR4bXNnL3YxL2V2ZW50cy5wcm90bxIHeG1zZy52MSLcAgoMSW5ib3VuZEV2ZW50EhIKCmNoYW5uZWxfaWQYASABKAMSFAoMd29ya3NwYWNlX2lkGAIgASgDEhAKCGFjdG9yX2lkGAMgASgDEhEKCWRlZHVwZV9pZBgEIAEoCRISCgpyZXF1ZXN0X2lkGAUgASgJEiwKDHNlbmRfbWVzc2FnZRgKIAEoCzIULnhtc2cudjEuU2VuZE1lc3NhZ2VIABIyCg9jaGFubmVsX2NyZWF0ZWQYCyABKAsyFy54bXNnLnYxLkNoYW5uZWxDcmVhdGVkSAASPQoVbWVtYmVyX2pvaW5fcmVxdWVzdGVkGAwgASgLMhwueG1zZy52MS5NZW1iZXJKb2luUmVxdWVzdGVkSAASPQoVbWVtYmVyX2tpY2tfcmVxdWVzdGVkGA0gASgLMhwueG1zZy52MS5NZW1iZXJLaWNrUmVxdWVzdGVkSABCCQoHcGF5bG9hZCIbCgtTZW5kTWVzc2FnZRIMCgRib2R5GAEgASgJIoYBCg5DaGFubmVsQ3JlYXRlZBIiCgR0eXBlGAEgASgOMhQueG1zZy52MS5DaGFubmVsVHlwZRIaChJpbml0aWFsX21lbWJlcl9pZHMYAiADKAMSJgoHbWVtYmVycxgDIAMoCzIVLnhtc2cudjEuTWVtYmVySm9pbmVkEgwKBG5hbWUYBCABKAkiJgoTTWVtYmVySm9pblJlcXVlc3RlZBIPCgd1c2VyX2lkGAEgASgDIiYKE01lbWJlcktpY2tSZXF1ZXN0ZWQSDwoHdXNlcl9pZBgBIAEoAyK8BAoOU2VxdWVuY2VkRXZlbnQSEgoKY2hhbm5lbF9pZBgBIAEoAxIUCgx3b3Jrc3BhY2VfaWQYAiABKAMSEAoIYWN0b3JfaWQYAyABKAMSEQoJZXZlbnRfc2VxGAQgASgDEg8KB21zZ19zZXEYBSABKAMSGgoSbWVtYmVyc2hpcF92ZXJzaW9uGAYgASgDEigKC2Zhbm91dF9tb2RlGAcgASgOMhMueG1zZy52MS5GYW5vdXRNb2RlEhEKCWRlZHVwZV9pZBgIIAEoCRISCgpyZXF1ZXN0X2lkGAkgASgJEioKDGNoYW5uZWxfdHlwZRgQIAEoDjIULnhtc2cudjEuQ2hhbm5lbFR5cGUSMgoPbWVzc2FnZV9jcmVhdGVkGAogASgLMhcueG1zZy52MS5NZXNzYWdlQ3JlYXRlZEgAEjIKD2NoYW5uZWxfY3JlYXRlZBgLIAEoCzIXLnhtc2cudjEuQ2hhbm5lbENyZWF0ZWRIABIuCg1tZW1iZXJfam9pbmVkGAwgASgLMhUueG1zZy52MS5NZW1iZXJKb2luZWRIABIqCgttZW1iZXJfbGVmdBgNIAEoCzITLnhtc2cudjEuTWVtYmVyTGVmdEgAEiUKCHJlamVjdGVkGA4gASgLMhEueG1zZy52MS5SZWplY3RlZEgAEjsKFGNoYW5uZWxfbW9kZV9jaGFuZ2VkGA8gASgLMhsueG1zZy52MS5DaGFubmVsTW9kZUNoYW5nZWRIAEIJCgdwYXlsb2FkIjIKDk1lc3NhZ2VDcmVhdGVkEhIKCm1lc3NhZ2VfaWQYASABKAMSDAoEYm9keRgCIAEoCSJCCgxNZW1iZXJKb2luZWQSDwoHdXNlcl9pZBgBIAEoAxIhCgRyb2xlGAIgASgOMhMueG1zZy52MS5NZW1iZXJSb2xlIh0KCk1lbWJlckxlZnQSDwoHdXNlcl9pZBgBIAEoAyI3ChJDaGFubmVsTW9kZUNoYW5nZWQSIQoEbW9kZRgBIAEoDjITLnhtc2cudjEuRmFub3V0TW9kZSJBCghSZWplY3RlZBIlCgZyZWFzb24YASABKA4yFS54bXNnLnYxLlJlamVjdFJlYXNvbhIOCgZkZXRhaWwYAiABKAkigwEKDUNvbW1hbmRSZXN1bHQSEgoKcmVxdWVzdF9pZBgBIAEoCRISCgpjaGFubmVsX2lkGAIgASgDEhAKCGFjY2VwdGVkGAMgASgIEiUKBnJlYXNvbhgEIAEoDjIVLnhtc2cudjEuUmVqZWN0UmVhc29uEhEKCWV2ZW50X3NlcRgFIAEoAyJVCgpTZW5kUmVzdWx0EhAKCGFjY2VwdGVkGAEgASgIEiUKBnJlYXNvbhgCIAEoDjIVLnhtc2cudjEuUmVqZWN0UmVhc29uEg4KBmRldGFpbBgDIAEoCUIVChFkZXYueG1zZy5wcm90by52MVABYgZwcm90bzM", [file_xmsg_v1_enums]);
+  fileDesc("ChR4bXNnL3YxL2V2ZW50cy5wcm90bxIHeG1zZy52MSK8AwoMSW5ib3VuZEV2ZW50EhIKCmNoYW5uZWxfaWQYASABKAMSFAoMd29ya3NwYWNlX2lkGAIgASgDEhAKCGFjdG9yX2lkGAMgASgDEhEKCWRlZHVwZV9pZBgEIAEoCRISCgpyZXF1ZXN0X2lkGAUgASgJEiwKDHNlbmRfbWVzc2FnZRgKIAEoCzIULnhtc2cudjEuU2VuZE1lc3NhZ2VIABIyCg9jaGFubmVsX2NyZWF0ZWQYCyABKAsyFy54bXNnLnYxLkNoYW5uZWxDcmVhdGVkSAASPQoVbWVtYmVyX2pvaW5fcmVxdWVzdGVkGAwgASgLMhwueG1zZy52MS5NZW1iZXJKb2luUmVxdWVzdGVkSAASPQoVbWVtYmVyX2tpY2tfcmVxdWVzdGVkGA0gASgLMhwueG1zZy52MS5NZW1iZXJLaWNrUmVxdWVzdGVkSAASLAoMZWRpdF9tZXNzYWdlGA4gASgLMhQueG1zZy52MS5FZGl0TWVzc2FnZUgAEjAKDmRlbGV0ZV9tZXNzYWdlGA8gASgLMhYueG1zZy52MS5EZWxldGVNZXNzYWdlSABCCQoHcGF5bG9hZCJACgtFZGl0TWVzc2FnZRIPCgdtc2dfc2VxGAEgASgDEhIKCm1lc3NhZ2VfaWQYAiABKAMSDAoEYm9keRgDIAEoCSJGCg1EZWxldGVNZXNzYWdlEg8KB21zZ19zZXEYASABKAMSEgoKbWVzc2FnZV9pZBgCIAEoAxIQCghhc19hZG1pbhgDIAEoCCIbCgtTZW5kTWVzc2FnZRIMCgRib2R5GAEgASgJIoYBCg5DaGFubmVsQ3JlYXRlZBIiCgR0eXBlGAEgASgOMhQueG1zZy52MS5DaGFubmVsVHlwZRIaChJpbml0aWFsX21lbWJlcl9pZHMYAiADKAMSJgoHbWVtYmVycxgDIAMoCzIVLnhtc2cudjEuTWVtYmVySm9pbmVkEgwKBG5hbWUYBCABKAkiJgoTTWVtYmVySm9pblJlcXVlc3RlZBIPCgd1c2VyX2lkGAEgASgDIiYKE01lbWJlcktpY2tSZXF1ZXN0ZWQSDwoHdXNlcl9pZBgBIAEoAyKiBQoOU2VxdWVuY2VkRXZlbnQSEgoKY2hhbm5lbF9pZBgBIAEoAxIUCgx3b3Jrc3BhY2VfaWQYAiABKAMSEAoIYWN0b3JfaWQYAyABKAMSEQoJZXZlbnRfc2VxGAQgASgDEg8KB21zZ19zZXEYBSABKAMSGgoSbWVtYmVyc2hpcF92ZXJzaW9uGAYgASgDEigKC2Zhbm91dF9tb2RlGAcgASgOMhMueG1zZy52MS5GYW5vdXRNb2RlEhEKCWRlZHVwZV9pZBgIIAEoCRISCgpyZXF1ZXN0X2lkGAkgASgJEioKDGNoYW5uZWxfdHlwZRgQIAEoDjIULnhtc2cudjEuQ2hhbm5lbFR5cGUSMgoPbWVzc2FnZV9jcmVhdGVkGAogASgLMhcueG1zZy52MS5NZXNzYWdlQ3JlYXRlZEgAEjIKD2NoYW5uZWxfY3JlYXRlZBgLIAEoCzIXLnhtc2cudjEuQ2hhbm5lbENyZWF0ZWRIABIuCg1tZW1iZXJfam9pbmVkGAwgASgLMhUueG1zZy52MS5NZW1iZXJKb2luZWRIABIqCgttZW1iZXJfbGVmdBgNIAEoCzITLnhtc2cudjEuTWVtYmVyTGVmdEgAEiUKCHJlamVjdGVkGA4gASgLMhEueG1zZy52MS5SZWplY3RlZEgAEjsKFGNoYW5uZWxfbW9kZV9jaGFuZ2VkGA8gASgLMhsueG1zZy52MS5DaGFubmVsTW9kZUNoYW5nZWRIABIwCg5tZXNzYWdlX2VkaXRlZBgRIAEoCzIWLnhtc2cudjEuTWVzc2FnZUVkaXRlZEgAEjIKD21lc3NhZ2VfZGVsZXRlZBgSIAEoCzIXLnhtc2cudjEuTWVzc2FnZURlbGV0ZWRIAEIJCgdwYXlsb2FkIlgKDU1lc3NhZ2VFZGl0ZWQSDwoHbXNnX3NlcRgBIAEoAxISCgptZXNzYWdlX2lkGAIgASgDEgwKBGJvZHkYAyABKAkSFAoMZWRpdGVkX2F0X21zGAQgASgDIjUKDk1lc3NhZ2VEZWxldGVkEg8KB21zZ19zZXEYASABKAMSEgoKbWVzc2FnZV9pZBgCIAEoAyIyCg5NZXNzYWdlQ3JlYXRlZBISCgptZXNzYWdlX2lkGAEgASgDEgwKBGJvZHkYAiABKAkiQgoMTWVtYmVySm9pbmVkEg8KB3VzZXJfaWQYASABKAMSIQoEcm9sZRgCIAEoDjITLnhtc2cudjEuTWVtYmVyUm9sZSIdCgpNZW1iZXJMZWZ0Eg8KB3VzZXJfaWQYASABKAMiNwoSQ2hhbm5lbE1vZGVDaGFuZ2VkEiEKBG1vZGUYASABKA4yEy54bXNnLnYxLkZhbm91dE1vZGUiQQoIUmVqZWN0ZWQSJQoGcmVhc29uGAEgASgOMhUueG1zZy52MS5SZWplY3RSZWFzb24SDgoGZGV0YWlsGAIgASgJIoMBCg1Db21tYW5kUmVzdWx0EhIKCnJlcXVlc3RfaWQYASABKAkSEgoKY2hhbm5lbF9pZBgCIAEoAxIQCghhY2NlcHRlZBgDIAEoCBIlCgZyZWFzb24YBCABKA4yFS54bXNnLnYxLlJlamVjdFJlYXNvbhIRCglldmVudF9zZXEYBSABKAMiVQoKU2VuZFJlc3VsdBIQCghhY2NlcHRlZBgBIAEoCBIlCgZyZWFzb24YAiABKA4yFS54bXNnLnYxLlJlamVjdFJlYXNvbhIOCgZkZXRhaWwYAyABKAlCFQoRZGV2Lnhtc2cucHJvdG8udjFQAWIGcHJvdG8z", [file_xmsg_v1_enums]);
 
 /**
  * Describes the message xmsg.v1.InboundEvent.
@@ -23,86 +23,114 @@ export const InboundEventSchema = /*@__PURE__*/
   messageDesc(file_xmsg_v1_events, 0);
 
 /**
+ * Describes the message xmsg.v1.EditMessage.
+ * Use `create(EditMessageSchema)` to create a new message.
+ */
+export const EditMessageSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_events, 1);
+
+/**
+ * Describes the message xmsg.v1.DeleteMessage.
+ * Use `create(DeleteMessageSchema)` to create a new message.
+ */
+export const DeleteMessageSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_events, 2);
+
+/**
  * Describes the message xmsg.v1.SendMessage.
  * Use `create(SendMessageSchema)` to create a new message.
  */
 export const SendMessageSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 1);
+  messageDesc(file_xmsg_v1_events, 3);
 
 /**
  * Describes the message xmsg.v1.ChannelCreated.
  * Use `create(ChannelCreatedSchema)` to create a new message.
  */
 export const ChannelCreatedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 2);
+  messageDesc(file_xmsg_v1_events, 4);
 
 /**
  * Describes the message xmsg.v1.MemberJoinRequested.
  * Use `create(MemberJoinRequestedSchema)` to create a new message.
  */
 export const MemberJoinRequestedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 3);
+  messageDesc(file_xmsg_v1_events, 5);
 
 /**
  * Describes the message xmsg.v1.MemberKickRequested.
  * Use `create(MemberKickRequestedSchema)` to create a new message.
  */
 export const MemberKickRequestedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 4);
+  messageDesc(file_xmsg_v1_events, 6);
 
 /**
  * Describes the message xmsg.v1.SequencedEvent.
  * Use `create(SequencedEventSchema)` to create a new message.
  */
 export const SequencedEventSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 5);
+  messageDesc(file_xmsg_v1_events, 7);
+
+/**
+ * Describes the message xmsg.v1.MessageEdited.
+ * Use `create(MessageEditedSchema)` to create a new message.
+ */
+export const MessageEditedSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_events, 8);
+
+/**
+ * Describes the message xmsg.v1.MessageDeleted.
+ * Use `create(MessageDeletedSchema)` to create a new message.
+ */
+export const MessageDeletedSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_events, 9);
 
 /**
  * Describes the message xmsg.v1.MessageCreated.
  * Use `create(MessageCreatedSchema)` to create a new message.
  */
 export const MessageCreatedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 6);
+  messageDesc(file_xmsg_v1_events, 10);
 
 /**
  * Describes the message xmsg.v1.MemberJoined.
  * Use `create(MemberJoinedSchema)` to create a new message.
  */
 export const MemberJoinedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 7);
+  messageDesc(file_xmsg_v1_events, 11);
 
 /**
  * Describes the message xmsg.v1.MemberLeft.
  * Use `create(MemberLeftSchema)` to create a new message.
  */
 export const MemberLeftSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 8);
+  messageDesc(file_xmsg_v1_events, 12);
 
 /**
  * Describes the message xmsg.v1.ChannelModeChanged.
  * Use `create(ChannelModeChangedSchema)` to create a new message.
  */
 export const ChannelModeChangedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 9);
+  messageDesc(file_xmsg_v1_events, 13);
 
 /**
  * Describes the message xmsg.v1.Rejected.
  * Use `create(RejectedSchema)` to create a new message.
  */
 export const RejectedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 10);
+  messageDesc(file_xmsg_v1_events, 14);
 
 /**
  * Describes the message xmsg.v1.CommandResult.
  * Use `create(CommandResultSchema)` to create a new message.
  */
 export const CommandResultSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 11);
+  messageDesc(file_xmsg_v1_events, 15);
 
 /**
  * Describes the message xmsg.v1.SendResult.
  * Use `create(SendResultSchema)` to create a new message.
  */
 export const SendResultSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_events, 12);
+  messageDesc(file_xmsg_v1_events, 16);
 

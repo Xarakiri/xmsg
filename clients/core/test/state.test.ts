@@ -221,3 +221,45 @@ test("a failed message that did get through is confirmed by its event", () => {
   s = apply(s, message(1, 101n, "c-1", "hi"));
   assert.deepEqual(s.messages["7"]!.map((m) => [m.key, m.status]), [["c-1", "confirmed"]]);
 });
+
+const edited = (eventSeq: number, msgSeq: number, body: string) =>
+  ev({
+    eventSeq: BigInt(eventSeq),
+    actorId: 102n,
+    payload: { case: "messageEdited", value: { msgSeq: BigInt(msgSeq), messageId: BigInt(1000 + msgSeq), body, editedAtMs: 5n } },
+  });
+
+const deleted = (eventSeq: number, msgSeq: number) =>
+  ev({
+    eventSeq: BigInt(eventSeq),
+    actorId: 102n,
+    payload: { case: "messageDeleted", value: { msgSeq: BigInt(msgSeq), messageId: BigInt(1000 + msgSeq) } },
+  });
+
+test("edits replace the body in place; an older edit redelivered never wins", () => {
+  const s = apply(initialState(ME), created, message(1, 102n, "b-1", "helo"), edited(3, 1, "hello"), edited(4, 1, "hello!"), edited(3, 1, "hello"));
+  const [m] = s.messages["7"]!;
+  assert.equal(m!.body, "hello!");
+  assert.equal(m!.editedAt, 5);
+  assert.equal(s.channels["7"]!.msgSeq, 1, "edits don't count as messages");
+});
+
+test("a deleted message keeps its place with no body, and nothing brings the body back", () => {
+  const s = apply(
+    initialState(ME),
+    created,
+    message(1, 102n, "b-1", "oops"),
+    message(2, 102n, "b-2", "fine"),
+    deleted(4, 1),
+    edited(5, 1, "sneaky"), // sequenced after the delete
+    message(1, 102n, "b-1", "oops"), // history replaying the creation
+  );
+  const list = s.messages["7"]!;
+  assert.deepEqual(
+    list.map((m) => [m.msgSeq, m.body, m.deleted ?? false]),
+    [
+      [1, "", true],
+      [2, "fine", false],
+    ],
+  );
+});

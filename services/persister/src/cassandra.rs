@@ -14,6 +14,9 @@ pub struct Store {
     session: Session,
     insert_message: PreparedStatement,
     insert_channel_event: PreparedStatement,
+    select_deleted: PreparedStatement,
+    update_message_body: PreparedStatement,
+    delete_message: PreparedStatement,
     insert_member_by_channel: PreparedStatement,
     insert_channel_by_user: PreparedStatement,
     delete_member_by_channel: PreparedStatement,
@@ -44,6 +47,20 @@ impl Store {
             insert_message: prepare(format!(
                 "INSERT INTO {k}.messages (channel_id, bucket, msg_seq, message_id, event_seq, author_id, client_msg_id, body, deleted) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)"
+            ))
+            .await?,
+            select_deleted: prepare(format!(
+                "SELECT deleted FROM {k}.messages WHERE channel_id = ? AND bucket = ? AND msg_seq = ? AND message_id = ?"
+            ))
+            .await?,
+            update_message_body: prepare(format!(
+                "UPDATE {k}.messages SET body = ?, edited_at = ? \
+                 WHERE channel_id = ? AND bucket = ? AND msg_seq = ? AND message_id = ?"
+            ))
+            .await?,
+            delete_message: prepare(format!(
+                "UPDATE {k}.messages SET body = null, deleted = true \
+                 WHERE channel_id = ? AND bucket = ? AND msg_seq = ? AND message_id = ?"
             ))
             .await?,
             insert_channel_event: prepare(format!(
@@ -124,6 +141,51 @@ impl Store {
                         client_msg_id,
                         body,
                     ),
+                )
+                .await?;
+            }
+            Write::MessageEdited {
+                channel_id,
+                bucket,
+                msg_seq,
+                message_id,
+                body,
+                edited_at_ms,
+            } => {
+                // The persister is the only writer and applies a channel's events in order,
+                // so reading first is race-free (and avoids mixing LWT with plain writes).
+                let key = (channel_id, bucket, msg_seq, message_id);
+                let deleted = s
+                    .execute_unpaged(&self.select_deleted, key)
+                    .await?
+                    .into_rows_result()?
+                    .maybe_first_row::<(Option<bool>,)>()?
+                    .and_then(|(d,)| d)
+                    .unwrap_or(false);
+                if !deleted {
+                    s.execute_unpaged(
+                        &self.update_message_body,
+                        (
+                            body,
+                            CqlTimestamp(*edited_at_ms),
+                            channel_id,
+                            bucket,
+                            msg_seq,
+                            message_id,
+                        ),
+                    )
+                    .await?;
+                }
+            }
+            Write::MessageDeleted {
+                channel_id,
+                bucket,
+                msg_seq,
+                message_id,
+            } => {
+                s.execute_unpaged(
+                    &self.delete_message,
+                    (channel_id, bucket, msg_seq, message_id),
                 )
                 .await?;
             }

@@ -31,7 +31,25 @@ pub enum Write {
         client_msg_id: String,
         body: String,
     },
-    /// 30-day event log for sync. New messages are stored as pointers (their msg_seq), not bodies.
+    /// Sets the new body unless the message was deleted meanwhile: a delete and an edit
+    /// can both pass the messages service's check and be sequenced delete first.
+    MessageEdited {
+        channel_id: i64,
+        bucket: i32,
+        msg_seq: i64,
+        message_id: i64,
+        body: String,
+        edited_at_ms: i64,
+    },
+    /// Clears the body and marks the row deleted.
+    MessageDeleted {
+        channel_id: i64,
+        bucket: i32,
+        msg_seq: i64,
+        message_id: i64,
+    },
+    /// 30-day event log for sync. New messages and edits are stored as pointers (their
+    /// msg_seq), not bodies, so a delete removes every version from what sync returns.
     ChannelEvent {
         channel_id: i64,
         bucket: i32,
@@ -145,6 +163,30 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
                 payload: event.msg_seq.to_be_bytes().to_vec(),
             });
         }
+        Some(Payload::MessageEdited(edited)) => {
+            out.push(Write::MessageEdited {
+                channel_id: event.channel_id,
+                bucket: bucket(edited.msg_seq),
+                msg_seq: edited.msg_seq,
+                message_id: edited.message_id,
+                body: edited.body.clone(),
+                edited_at_ms: edited.edited_at_ms,
+            });
+            out.push(channel_event(
+                event,
+                "message.edited",
+                edited.msg_seq.to_be_bytes().to_vec(),
+            ));
+        }
+        Some(Payload::MessageDeleted(deleted)) => {
+            out.push(Write::MessageDeleted {
+                channel_id: event.channel_id,
+                bucket: bucket(deleted.msg_seq),
+                msg_seq: deleted.msg_seq,
+                message_id: deleted.message_id,
+            });
+            out.push(channel_event(event, "message.deleted", full_payload()));
+        }
         Some(Payload::ChannelCreated(created)) => {
             out.extend(created.members.iter().map(|m| member(m.user_id, m.role)));
             out.push(channel_event(event, "channel.created", full_payload()));
@@ -197,7 +239,10 @@ fn channel_event(event: &SequencedEvent, kind: &'static str, payload: Vec<u8>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xmsg_proto::v1::{ChannelCreated, MemberJoined, MemberLeft, MessageCreated, Rejected};
+    use xmsg_proto::v1::{
+        ChannelCreated, MemberJoined, MemberLeft, MessageCreated, MessageDeleted, MessageEdited,
+        Rejected,
+    };
 
     fn event(event_seq: i64, payload: Payload) -> SequencedEvent {
         SequencedEvent {
@@ -326,6 +371,77 @@ mod tests {
                 membership_version: 5,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn edits_and_deletes_update_the_row_and_log_without_the_body() {
+        let edited = event(
+            8,
+            Payload::MessageEdited(MessageEdited {
+                msg_seq: 3,
+                message_id: 77,
+                body: "fixed".into(),
+                edited_at_ms: 1_700_000_000_000,
+            }),
+        );
+        let w = writes(&edited, 0);
+        assert_eq!(
+            w[0],
+            Write::MessageEdited {
+                channel_id: 100,
+                bucket: 0,
+                msg_seq: 3,
+                message_id: 77,
+                body: "fixed".into(),
+                edited_at_ms: 1_700_000_000_000,
+            }
+        );
+        // The log keeps a pointer, never the edited body.
+        assert!(
+            matches!(&w[1], Write::ChannelEvent { kind: "message.edited", payload, event_seq: 8, .. } if payload == &3i64.to_be_bytes().to_vec())
+        );
+        assert!(matches!(
+            w[2],
+            Write::Head {
+                msg_seq: None,
+                event_seq: 8,
+                ..
+            }
+        ));
+
+        let deleted = event(
+            9,
+            Payload::MessageDeleted(MessageDeleted {
+                msg_seq: 3,
+                message_id: 77,
+            }),
+        );
+        let w = writes(&deleted, 0);
+        assert_eq!(
+            w[0],
+            Write::MessageDeleted {
+                channel_id: 100,
+                bucket: 0,
+                msg_seq: 3,
+                message_id: 77,
+            }
+        );
+        assert!(matches!(
+            &w[1],
+            Write::ChannelEvent {
+                kind: "message.deleted",
+                event_seq: 9,
+                ..
+            }
+        ));
+        assert!(matches!(
+            w[2],
+            Write::Head {
+                msg_seq: None,
+                event_seq: 9,
+                ..
+            }
         ));
     }
 
