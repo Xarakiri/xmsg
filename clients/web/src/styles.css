@@ -107,3 +107,9 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .mention { font-weight: 600; color: var(--accent); }
 .mention.me { background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 3px; padding: 0 2px; }
 .typing { min-height: 1.4em; padding: 0 20px; }
+.reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.reaction { border: 1px solid var(--border); background: transparent; border-radius: 999px; padding: 0 8px; line-height: 1.6; }
+.reaction.mine { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.reaction.add { opacity: 0; }
+.message:hover .reaction.add, .message:focus-within .reaction.add { opacity: 1; }
+@media (hover: none) { .reaction.add { opacity: 1; } }

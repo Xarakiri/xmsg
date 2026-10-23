@@ -143,7 +143,7 @@ pub async fn plan_delete(
     }))
 }
 
-async fn member_target(
+pub(crate) async fn member_target(
     store: &impl Store,
     user: i64,
     channel_id: i64,

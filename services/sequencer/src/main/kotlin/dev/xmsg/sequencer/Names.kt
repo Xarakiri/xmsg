@@ -26,7 +26,19 @@ object Names {
     const val STORE_DEDUPE = "dedupe"
     const val STORE_PARTITION_STATE = "partition-state"
 
+    /** Phase 2 (ADR-0015): reactions per (channel, message, emoji, user) and their counts. */
+    const val STORE_REACTIONS = "reactions"
+    const val STORE_REACTION_COUNTS = "reaction-counts"
+
+    /** Stores every installation that has processed data must have changelogs for. */
     val ALL_STORES = setOf(STORE_CHANNEL_HEADS, STORE_MEMBERS, STORE_DEDUPE, STORE_PARTITION_STATE)
+
+    /**
+     * Stores added after the first release. An installation upgrading to the version that
+     * adds one has no changelog for it yet and starts it empty, which is correct (nothing
+     * was ever in it), so the startup check doesn't require them. Same names contract.
+     */
+    val ADDED_STORES = setOf(STORE_REACTIONS, STORE_REACTION_COUNTS)
 
     fun changelogTopic(store: String) = "$APPLICATION_ID-$store-changelog"
 }

@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: Apache-2.0
+syntax = "proto3";
+
+package xmsg.v1;
+
+option java_multiple_files = true;
+option java_package = "dev.xmsg.proto.v1";
+
+// One user adding or removing one reaction (ADR-0015). Produced by the messages service
+// to `reactions.in`, keyed by channel_id, so one reaction-batcher instance sees each
+// channel's commands in order.
+message ReactionCommand {
+  int64 channel_id = 1;
+  int64 message_id = 2;
+  int64 msg_seq = 3;
+  int64 user_id = 4;
+  string emoji = 5;
+  bool add = 6;
+  // Client counter per (user, message, emoji), increasing: an operation with a counter
+  // not above the last applied one is ignored, so a late or replayed one can't win.
+  int64 counter = 7;
+}

@@ -26,6 +26,7 @@ message InboundEvent {
     ChannelCreated channel_created = 11;
     MemberJoinRequested member_join_requested = 12;
     MemberKickRequested member_kick_requested = 13;
+    ReactionBatch reaction_batch = 16;
     EditMessage edit_message = 14;
     DeleteMessage delete_message = 15;
   }
@@ -44,6 +45,21 @@ message DeleteMessage {
   int64 msg_seq = 1;
   int64 message_id = 2;
   bool as_admin = 3;
+}
+
+// A second's worth of reaction operations on one (message, emoji), from the
+// reaction-batcher (ADR-0015): at most one per user, the latest by counter.
+message ReactionBatch {
+  int64 message_id = 1;
+  int64 msg_seq = 2;
+  string emoji = 3;
+  repeated ReactionOp ops = 4;
+}
+
+message ReactionOp {
+  int64 user_id = 1;
+  bool add = 2;
+  int64 counter = 3;
 }
 
 message SendMessage {
@@ -94,6 +110,7 @@ message SequencedEvent {
     MemberLeft member_left = 13;
     Rejected rejected = 14;
     ChannelModeChanged channel_mode_changed = 15;
+    ReactionsChanged reactions_changed = 19;
     MessageEdited message_edited = 17;
     MessageDeleted message_deleted = 18;
   }
@@ -132,6 +149,18 @@ message MemberJoined {
 
 message MemberLeft {
   int64 user_id = 1;
+}
+
+// A reaction batch applied by the sequencer: an event_seq, no msg_seq. `count` is the
+// absolute number of users with this reaction now; `added` / `removed` are the users
+// whose reaction actually changed (stale and repeated operations are left out).
+message ReactionsChanged {
+  int64 message_id = 1;
+  int64 msg_seq = 2;
+  string emoji = 3;
+  int64 count = 4;
+  repeated int64 added = 5;
+  repeated int64 removed = 6;
 }
 
 // Emitted when the channel switches between push and pull fan-out (ADR-0008).

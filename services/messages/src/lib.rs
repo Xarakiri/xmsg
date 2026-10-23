@@ -9,6 +9,7 @@ pub mod config;
 pub mod edits;
 pub mod history;
 pub mod kafka;
+pub mod reactions;
 
 use xmsg_proto::Message;
 use xmsg_proto::v1::{InboundEvent, RejectReason, SendResult, inbound_event::Payload};

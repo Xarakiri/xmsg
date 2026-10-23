@@ -13,7 +13,7 @@ import { file_xmsg_v1_enums } from "./enums_pb.js";
  * Describes the file xmsg/v1/sequencer_state.proto.
  */
 export const file_xmsg_v1_sequencer_state = /*@__PURE__*/
-  fileDesc("Ch14bXNnL3YxL3NlcXVlbmNlcl9zdGF0ZS5wcm90bxIHeG1zZy52MSLkAQoQQ2hhbm5lbEhlYWRTdGF0ZRIWCg5mb3JtYXRfdmVyc2lvbhgBIAEoDRIUCgx3b3Jrc3BhY2VfaWQYAiABKAMSIgoEdHlwZRgDIAEoDjIULnhtc2cudjEuQ2hhbm5lbFR5cGUSEQoJZXZlbnRfc2VxGAQgASgDEg8KB21zZ19zZXEYBSABKAMSGgoSbWVtYmVyc2hpcF92ZXJzaW9uGAYgASgDEigKC2Zhbm91dF9tb2RlGAcgASgOMhMueG1zZy52MS5GYW5vdXRNb2RlEhQKDG1lbWJlcl9jb3VudBgIIAEoAyJICgtNZW1iZXJTdGF0ZRIWCg5mb3JtYXRfdmVyc2lvbhgBIAEoDRIhCgRyb2xlGAIgASgOMhMueG1zZy52MS5NZW1iZXJSb2xlIkEKDlBhcnRpdGlvblN0YXRlEhYKDmZvcm1hdF92ZXJzaW9uGAEgASgNEhcKD2xhc3RfbWVzc2FnZV9pZBgCIAEoA0IVChFkZXYueG1zZy5wcm90by52MVABYgZwcm90bzM", [file_xmsg_v1_enums]);
+  fileDesc("Ch14bXNnL3YxL3NlcXVlbmNlcl9zdGF0ZS5wcm90bxIHeG1zZy52MSLkAQoQQ2hhbm5lbEhlYWRTdGF0ZRIWCg5mb3JtYXRfdmVyc2lvbhgBIAEoDRIUCgx3b3Jrc3BhY2VfaWQYAiABKAMSIgoEdHlwZRgDIAEoDjIULnhtc2cudjEuQ2hhbm5lbFR5cGUSEQoJZXZlbnRfc2VxGAQgASgDEg8KB21zZ19zZXEYBSABKAMSGgoSbWVtYmVyc2hpcF92ZXJzaW9uGAYgASgDEigKC2Zhbm91dF9tb2RlGAcgASgOMhMueG1zZy52MS5GYW5vdXRNb2RlEhQKDG1lbWJlcl9jb3VudBgIIAEoAyJICgtNZW1iZXJTdGF0ZRIWCg5mb3JtYXRfdmVyc2lvbhgBIAEoDRIhCgRyb2xlGAIgASgOMhMueG1zZy52MS5NZW1iZXJSb2xlIkEKDlBhcnRpdGlvblN0YXRlEhYKDmZvcm1hdF92ZXJzaW9uGAEgASgNEhcKD2xhc3RfbWVzc2FnZV9pZBgCIAEoAyJJCg1SZWFjdGlvblN0YXRlEhYKDmZvcm1hdF92ZXJzaW9uGAEgASgNEg8KB2NvdW50ZXIYAiABKAMSDwoHcHJlc2VudBgDIAEoCCI7ChJSZWFjdGlvbkNvdW50U3RhdGUSFgoOZm9ybWF0X3ZlcnNpb24YASABKA0SDQoFY291bnQYAiABKANCFQoRZGV2Lnhtc2cucHJvdG8udjFQAWIGcHJvdG8z", [file_xmsg_v1_enums]);
 
 /**
  * Describes the message xmsg.v1.ChannelHeadState.
@@ -35,4 +35,18 @@ export const MemberStateSchema = /*@__PURE__*/
  */
 export const PartitionStateSchema = /*@__PURE__*/
   messageDesc(file_xmsg_v1_sequencer_state, 2);
+
+/**
+ * Describes the message xmsg.v1.ReactionState.
+ * Use `create(ReactionStateSchema)` to create a new message.
+ */
+export const ReactionStateSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_sequencer_state, 3);
+
+/**
+ * Describes the message xmsg.v1.ReactionCountState.
+ * Use `create(ReactionCountStateSchema)` to create a new message.
+ */
+export const ReactionCountStateSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_sequencer_state, 4);
 

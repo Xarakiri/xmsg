@@ -294,3 +294,23 @@ test("mentions of me or @channel count until read; my own @channel doesn't", asy
   assert.equal(mentionCount(s.channels["7"]!), 1);
   assert.deepEqual(s.channels["7"]!.mentions, [5], "read ones are dropped");
 });
+
+const reacted = (eventSeq: number, msgSeq: number, emoji: string, count: number, added: bigint[], removed: bigint[] = []) =>
+  ev({
+    eventSeq: BigInt(eventSeq),
+    actorId: 0n,
+    payload: { case: "reactionsChanged", value: { messageId: BigInt(1000 + msgSeq), msgSeq: BigInt(msgSeq), emoji, count: BigInt(count), added, removed } },
+  });
+
+test("reactions: mine shows at once, the server's absolute count wins, older updates never undo newer", () => {
+  let s = apply(initialState(ME), created, message(1, 102n, "b-1", "lunch?"));
+  s = reduce(s, { type: "react", channelId: "7", msgSeq: 1, emoji: "👍", add: true });
+  assert.deepEqual(s.messages["7"]![0]!.reactions, { "👍": { count: 1, mine: true, seq: 0 } });
+  s = apply(s, reacted(3, 1, "👍", 2, [101n, 102n]), reacted(4, 1, "👍", 1, [], [102n]));
+  assert.deepEqual(s.messages["7"]![0]!.reactions, { "👍": { count: 1, mine: true, seq: 4 } });
+  s = apply(s, reacted(3, 1, "👍", 2, [101n, 102n])); // history replaying an older update
+  assert.equal(s.messages["7"]![0]!.reactions!["👍"]!.count, 1);
+  s = apply(s, reacted(5, 1, "👍", 0, [], [101n]));
+  assert.deepEqual(s.messages["7"]![0]!.reactions, {}, "nobody has it any more");
+  assert.equal(s.channels["7"]!.msgSeq, 1, "reactions don't count as messages");
+});

@@ -202,6 +202,9 @@ async fn run() -> Result<(), String> {
         if let Ok(readstate_url) = std::env::var("XMSG_READSTATE_URL") {
             check_mentions(url, &readstate_url, &mut clients, &users, run_id).await?;
         }
+        if let Ok(messages_url) = std::env::var("XMSG_MESSAGES_URL") {
+            check_reactions(url, &messages_url, &mut clients, &users, run_id).await?;
+        }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
@@ -542,6 +545,104 @@ async fn check_membership_endpoint(
     }
     println!(
         "membership endpoint: the sequencer serves alice and bob at version 6; an unknown channel is 404"
+    );
+    Ok(())
+}
+
+/// Reactions (ADR-0015), in a channel of their own: through `reactions.in`, the
+/// reaction-batcher and the sequencer, which keeps each user's latest operation.
+async fn check_reactions(
+    channels_url: &str,
+    messages_url: &str,
+    clients: &mut [Client; 3],
+    users: &[(i64, String)],
+    run_id: i64,
+) -> Result<(), String> {
+    use sequenced_event::Payload;
+    let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
+    let (status, reply) = call(
+        "POST",
+        &format!("{channels_url}/v1/channels"),
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": format!("e2e-reactions-{run_id}"), "member_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if status != 201 {
+        return Err(format!("reactions: creating the channel: {status} {reply}"));
+    }
+    let channel: i64 = reply["channel_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("reactions: no channel_id")?;
+    send(&mut clients[0].ws, channel, "react-me").await?;
+    expect_ack(&mut clients[0], "react-me").await?;
+    let created = |events: &[SequencedEvent]| {
+        events
+            .iter()
+            .find(|e| e.channel_id == channel && e.dedupe_id == "react-me")
+            .map(|e| e.msg_seq)
+    };
+    wait_events(&mut clients[1], |e| created(e).is_some()).await?;
+    let msg_seq = created(&clients[1].events).ok_or("reactions: bob didn't get the message")?;
+    let url = |emoji: &str, counter: i64| {
+        format!(
+            "{messages_url}/v1/channels/{channel}/messages/{msg_seq}/reactions/{emoji}?counter={counter}"
+        )
+    };
+    let (status, _) = call("PUT", &url("%F0%9F%91%8D", 1), &mallory.1, None).await?;
+    if status != 404 {
+        return Err(format!(
+            "reactions: a non-member's reaction: expected 404, got {status}"
+        ));
+    }
+    // bob reacts and changes his mind; alice reacts. Whatever the batching, the end
+    // state is alice's reaction only.
+    for (who, method, counter) in [(bob, "PUT", 1), (alice, "PUT", 1), (bob, "DELETE", 2)] {
+        let (status, reply) = call(method, &url("%F0%9F%91%8D", counter), &who.1, None).await?;
+        if status != 202 {
+            return Err(format!(
+                "reactions: {method} by {}: {status} {reply}",
+                who.0
+            ));
+        }
+    }
+    // The end state: count 1, reached either by bob's removal or, when everything fell
+    // into one batch, by alice's add alone (bob's add was replaced by his removal).
+    let done = |events: &[SequencedEvent]| {
+        events
+            .iter()
+            .filter(|e| e.channel_id == channel)
+            .any(|e| match &e.payload {
+                Some(Payload::ReactionsChanged(r)) if r.msg_seq == msg_seq && r.emoji == "👍" => {
+                    e.msg_seq == 0
+                        && r.count == 1
+                        && (r.removed.contains(&bob.0)
+                            || (r.added.contains(&alice.0) && !r.added.contains(&bob.0)))
+                }
+                _ => false,
+            })
+    };
+    let started = Instant::now();
+    wait_events(&mut clients[1], done).await?;
+    if !done(&clients[1].events) {
+        let seen: Vec<_> = clients[1]
+            .events
+            .iter()
+            .filter(|e| e.channel_id == channel)
+            .filter_map(|e| match &e.payload {
+                Some(Payload::ReactionsChanged(r)) => {
+                    Some((r.count, r.added.clone(), r.removed.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        return Err(format!(
+            "reactions: bob never saw the end state (count 1, alice only); saw {seen:?}"
+        ));
+    }
+    println!(
+        "reactions: a non-member is refused; bob's add and remove and alice's add end at 1, delivered in {} ms through the batcher",
+        started.elapsed().as_millis()
     );
     Ok(())
 }

@@ -5,6 +5,8 @@ import dev.xmsg.proto.v1.ChannelCreated
 import dev.xmsg.proto.v1.ChannelType
 import dev.xmsg.proto.v1.DeleteMessage
 import dev.xmsg.proto.v1.EditMessage
+import dev.xmsg.proto.v1.ReactionBatch
+import dev.xmsg.proto.v1.ReactionOp
 import dev.xmsg.proto.v1.CommandResult
 import dev.xmsg.proto.v1.FanoutMode
 import dev.xmsg.proto.v1.InboundEvent
@@ -89,6 +91,14 @@ class SequencerTopologyTest {
 
     private fun delete(channel: Long, actor: Long, msgSeq: Long, asAdmin: Boolean) =
         send(base(channel, actor, dedupe = "delete-$channel-$msgSeq-$actor").setDeleteMessage(DeleteMessage.newBuilder().setMsgSeq(msgSeq).setMessageId(msgSeq * 1000).setAsAdmin(asAdmin)).build())
+
+    private fun react(channel: Long, msgSeq: Long, emoji: String, batchId: String, vararg ops: Triple<Long, Boolean, Long>) =
+        send(
+            base(channel, 0, dedupe = "rx-$batchId").setReactionBatch(
+                ReactionBatch.newBuilder().setMessageId(msgSeq * 1000).setMsgSeq(msgSeq).setEmoji(emoji)
+                    .addAllOps(ops.map { (user, add, counter) -> ReactionOp.newBuilder().setUserId(user).setAdd(add).setCounter(counter).build() }),
+            ).build(),
+        )
 
     private fun drain(): List<SequencedEvent> = persisted.readValuesToList().map { SequencedEvent.parseFrom(it) }
 
@@ -175,6 +185,29 @@ class SequencerTopologyTest {
         assertEquals(listOf(alice), second.mentionedUserIdsList)
         assertTrue(!second.mentionsChannel, "bob isn't an admin")
         assertEquals(listOf(5L, 6L), Mentions.users("<@5> <@x> <@6> <@5>"))
+    }
+
+    @Test
+    fun `reaction batches keep absolute counts and ignore stale, repeated and non-member operations`() {
+        create(100, alice, ChannelType.CHANNEL_TYPE_PRIVATE, bob)
+        post(100, bob, "lunch?")
+        drain()
+
+        react(100, 1, "👍", "1", Triple(bob, true, 1), Triple(alice, true, 1), Triple(carol, true, 1))
+        react(100, 1, "👍", "1b", Triple(bob, true, 1)) // a replay: same counter
+        react(100, 1, "👍", "2", Triple(bob, false, 0)) // older than what's applied
+        react(100, 1, "👍", "3", Triple(bob, false, 2))
+        react(100, 7, "👍", "4", Triple(bob, true, 3)) // no such message
+
+        val changes = drain().filter { it.hasReactionsChanged() }
+        assertEquals(2, changes.size, "the replay, the stale op and the unknown message emit nothing")
+        val (first, second) = changes.map { it.reactionsChanged }
+        assertEquals(2L, first.count, "carol isn't a member")
+        assertEquals(listOf(bob, alice), first.addedList)
+        assertEquals(1L, second.count)
+        assertEquals(listOf(bob), second.removedList)
+        assertEquals(listOf(3L, 4L), changes.map { it.eventSeq })
+        assertTrue(changes.all { it.msgSeq == 0L }, "reactions never count as messages")
     }
 
     @Test
@@ -275,7 +308,7 @@ class SequencerTopologyTest {
         for (name in listOf(Names.SOURCE, Names.PROCESSOR, Names.SINK_PERSISTED, Names.SINK_COMMAND_RESULTS)) {
             assertTrue(name in description, "processor $name must keep its name")
         }
-        for (store in Names.ALL_STORES) {
+        for (store in Names.ALL_STORES + Names.ADDED_STORES) {
             assertTrue(store in description, "store $store must keep its name")
         }
         assertEquals("xmsg-sequencer-members-changelog", Names.changelogTopic(Names.STORE_MEMBERS))

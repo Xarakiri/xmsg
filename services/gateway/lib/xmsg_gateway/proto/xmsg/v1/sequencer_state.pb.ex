@@ -41,3 +41,28 @@ defmodule Xmsg.V1.PartitionState do
   field :format_version, 1, type: :uint32, json_name: "formatVersion"
   field :last_message_id, 2, type: :int64, json_name: "lastMessageId"
 end
+
+defmodule Xmsg.V1.ReactionState do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ReactionState",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :format_version, 1, type: :uint32, json_name: "formatVersion"
+  field :counter, 2, type: :int64
+  field :present, 3, type: :bool
+end
+
+defmodule Xmsg.V1.ReactionCountState do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ReactionCountState",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :format_version, 1, type: :uint32, json_name: "formatVersion"
+  field :count, 2, type: :int64
+end

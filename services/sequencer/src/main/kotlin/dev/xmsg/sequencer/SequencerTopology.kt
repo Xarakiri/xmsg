@@ -64,6 +64,17 @@ object SequencerTopology {
             Names.PROCESSOR,
         )
 
+        for (store in listOf(Names.STORE_REACTIONS, Names.STORE_REACTION_COUNTS)) {
+            topology.addStateStore(
+                Stores.keyValueStoreBuilder(
+                    Stores.persistentKeyValueStore(store),
+                    Serdes.String(),
+                    Serdes.ByteArray(),
+                ),
+                Names.PROCESSOR,
+            )
+        }
+
         topology.addSink(
             Names.SINK_PERSISTED,
             Names.TOPIC_PERSISTED,

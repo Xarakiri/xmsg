@@ -31,6 +31,15 @@ pub enum Write {
         client_msg_id: String,
         body: String,
     },
+    /// A reaction batch's result (ADR-0015): the absolute count, and who added or removed.
+    Reactions {
+        channel_id: i64,
+        message_id: i64,
+        emoji: String,
+        count: i64,
+        added: Vec<i64>,
+        removed: Vec<i64>,
+    },
     /// An `@channel` / `@here`: one `channel_mentions` row however big the channel is
     /// (ADR-0012), and the head's `last_mention_seq`, so readers skip channels with none new.
     ChannelMention { channel_id: i64, msg_seq: i64 },
@@ -195,6 +204,17 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
                 message_id: deleted.message_id,
             });
             out.push(channel_event(event, "message.deleted", full_payload()));
+        }
+        Some(Payload::ReactionsChanged(r)) => {
+            out.push(Write::Reactions {
+                channel_id: event.channel_id,
+                message_id: r.message_id,
+                emoji: r.emoji.clone(),
+                count: r.count,
+                added: r.added.clone(),
+                removed: r.removed.clone(),
+            });
+            out.push(channel_event(event, "reactions.changed", full_payload()));
         }
         Some(Payload::ChannelCreated(created)) => {
             out.extend(created.members.iter().map(|m| member(m.user_id, m.role)));
