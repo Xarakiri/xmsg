@@ -1,0 +1,104 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- if .Values.init.enabled }}
+{{- $full := include "xmsg.fullname" . -}}
+{{- $cql := splitList ":" (first (splitList "," (required "cassandra.nodes is required" .Values.cassandra.nodes))) -}}
+{{- $cqlPort := "9042" -}}{{- if gt (len $cql) 1 -}}{{- $cqlPort = index $cql 1 -}}{{- end -}}
+# Topics, keyspace and Postgres schema, before anything else starts: every service exits
+# at startup if its topics are missing (ADR-0021). The scripts are the compose ones
+# (files/ is kept identical to deploy/compose/init; CI checks).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $full }}-init
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+{{ (.Files.Glob "files/*").AsConfig | indent 2 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $full }}-init-kafka
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: topics
+          image: {{ .Values.init.kafkaImage }}
+          command: [bash, /init/create-topics.sh]
+          env:
+            - { name: BOOTSTRAP, value: {{ .Values.kafka.bootstrap | quote }} }
+            - { name: XMSG_PARTITIONS, value: {{ .Values.partitions | quote }} }
+            - { name: REPLICATION_FACTOR, value: {{ .Values.kafka.replicationFactor | quote }} }
+          volumeMounts: [{ name: init, mountPath: /init }]
+      volumes: [{ name: init, configMap: { name: {{ $full }}-init } }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $full }}-init-cassandra
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: schema
+          image: {{ .Values.init.cassandraImage }}
+          # The keyspace's data center and replication come from values.
+          command:
+            - sh
+            - -c
+            - >-
+              sed -e "s/'dc1': 1/'{{ .Values.cassandra.datacenter }}': {{ .Values.cassandra.replicationFactor }}/"
+              -e "s/\bxmsg\b/{{ .Values.cassandra.keyspace }}/g" /init/001_schema.cql > /tmp/schema.cql
+              && cqlsh {{ index $cql 0 }} {{ $cqlPort }} -f /tmp/schema.cql
+          volumeMounts: [{ name: init, mountPath: /init }]
+      volumes: [{ name: init, configMap: { name: {{ $full }}-init } }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $full }}-init-postgres
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+  annotations:
+    # The base schema isn't idempotent: it runs once, at install. Later changes ship as
+    # their own idempotent files (002_push.sql, ...), applied on upgrade too.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: schema
+          image: {{ .Values.init.postgresImage }}
+          command:
+            - sh
+            - -c
+            - >-
+              if [ "$(psql "$XMSG_DATABASE_URL" -tAc "select to_regclass('public.users') is not null")" != t ];
+              then psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-001_schema.sql; fi
+              && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-002_push.sql
+          envFrom:
+            - secretRef: { name: {{ include "xmsg.secretName" . }} }
+          volumeMounts: [{ name: init, mountPath: /init }]
+      volumes: [{ name: init, configMap: { name: {{ $full }}-init } }]
+{{- end }}

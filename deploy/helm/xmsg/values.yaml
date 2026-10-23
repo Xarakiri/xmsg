@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# xmsg, Medium tier (plan §12.1): 3+ nodes, the customer's own backends.
+
+image:
+  # Images are <registry>/<name>:<tag> for services, sequencer, gateway and web.
+  registry: ghcr.io/xarakiri/xmsg
+  tag: ""                       # default: the chart's appVersion
+  pullPolicy: IfNotPresent
+
+# Fixed per installation (ADR-0021): Medium uses 64. Never change it in place.
+partitions: 64
+
+kafka:
+  bootstrap: ""                 # required, e.g. kafka-0.kafka:9092,kafka-1.kafka:9092
+  replicationFactor: 3
+
+cassandra:
+  nodes: ""                     # required, e.g. cassandra-0.cassandra:9042,cassandra-1.cassandra:9042
+  keyspace: xmsg
+  datacenter: dc1
+  replicationFactor: 3
+
+postgres:
+  # A libpq URL (postgres://user:password@host:5432/xmsg). Stored in the chart's Secret,
+  # or read from secrets.existingSecret (key XMSG_DATABASE_URL).
+  url: ""
+
+opensearch:
+  url: ""                       # empty: search is off (Small and Medium may run without it)
+
+# Bundled for convenience (one pod each); point url at your own to use that instead.
+nats:
+  bundled: true
+  url: ""                       # when not bundled, e.g. nats://nats:4222
+valkey:
+  bundled: true
+  url: ""                       # when not bundled, e.g. redis://valkey:6379
+
+secrets:
+  # An existing Secret with XMSG_DATABASE_URL, XMSG_AUTH_KEY and XMSG_PUSH_VAPID_PRIVATE_KEY.
+  # When empty, the chart creates one from the values below.
+  existingSecret: ""
+  authKey: ""                   # 32 random bytes, base64 (openssl rand -base64 32)
+  vapidPrivateKey: ""           # P-256 private key, raw 32 bytes, base64url (see services/push)
+
+outbox:
+  mode: relay                   # relay (the Rust poller) or cleanup (when Debezium relays)
+
+push:
+  enabled: true
+  subject: "mailto:admin@example.com"
+
+# Replicas and resources per Rust service (defaults below apply to all).
+services:
+  defaults:
+    replicas: 2
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { memory: 512Mi }
+  # Single active instances by design: the outbox relay holds a Postgres advisory lock
+  # (standbys wait), the others are Kafka consumer groups (extra instances share load).
+  overrides:
+    outbox-relay: { replicas: 2 }
+
+sequencer:
+  replicas: 3
+  standbyReplicas: 1
+  storage: 10Gi
+  storageClassName: ""
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 2Gi }
+
+gateway:
+  replicas: 2
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+web:
+  replicas: 2
+  resources:
+    requests: { cpu: 50m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+ingress:
+  enabled: false
+  className: ""
+  host: chat.example.com
+  annotations: {}
+  tls: []                       # [{ secretName: chat-tls, hosts: [chat.example.com] }]
+
+# Topics, keyspace and Postgres schema, as pre-install hooks.
+init:
+  enabled: true
+  kafkaImage: apache/kafka:3.9.1
+  cassandraImage: cassandra:5.0
+  postgresImage: postgres:17

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Values for rendering and validating the chart in CI (not a real installation).
+kafka: { bootstrap: "kafka-0.kafka:9092,kafka-1.kafka:9092,kafka-2.kafka:9092" }
+cassandra: { nodes: "cassandra-0.cassandra:9042,cassandra-1.cassandra:9042" }
+postgres: { url: "postgres://xmsg:secret@postgres:5432/xmsg" }
+opensearch: { url: "http://opensearch:9200" }
+secrets: { authKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", vapidPrivateKey: "test-key" }
+ingress: { enabled: true, className: nginx, host: chat.example.com }

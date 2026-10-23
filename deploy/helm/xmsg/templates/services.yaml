@@ -1,0 +1,58 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- $full := include "xmsg.fullname" . -}}
+{{- $root := . -}}
+{{- range $c := (include "xmsg.components" . | fromJsonArray) }}
+{{- $o := merge (deepCopy (default dict (index $root.Values.services.overrides $c.name))) $root.Values.services.defaults }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-{{ $c.name }}
+  labels: {{- include "xmsg.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $c.name }}
+spec:
+  replicas: {{ $o.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ $root.Release.Name }}, app.kubernetes.io/component: {{ $c.name }} }
+  template:
+    metadata:
+      labels: {{- include "xmsg.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $c.name }}
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: {{ $c.name }}
+          image: {{ include "xmsg.image" (list $root "services") }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          command: [{{ $c.bin | quote }}]
+          envFrom:
+            - configMapRef: { name: {{ $full }}-env }
+            - secretRef: { name: {{ include "xmsg.secretName" $root }} }
+          {{- if gt (int $c.port) 0 }}
+          env:
+            - { name: {{ $c.portEnv }}, value: {{ $c.port | quote }} }
+          ports:
+            - { name: http, containerPort: {{ $c.port }} }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          {{- end }}
+          resources: {{- toYaml $o.resources | nindent 12 }}
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+{{- if gt (int $c.port) 0 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-{{ $c.name }}
+  labels: {{- include "xmsg.labels" $root | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ $root.Release.Name }}, app.kubernetes.io/component: {{ $c.name }} }
+  ports:
+    - { name: http, port: {{ $c.port }}, targetPort: http }
+{{- end }}
+{{- end }}

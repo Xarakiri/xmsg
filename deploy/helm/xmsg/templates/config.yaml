@@ -1,0 +1,50 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- $full := include "xmsg.fullname" . -}}
+# Settings every service reads (each ignores what it doesn't use). Hooks too, so the
+# init jobs, which run before the rest of the release, can read them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $full }}-env
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  XMSG_PARTITIONS: {{ .Values.partitions | quote }}
+  XMSG_KAFKA_BOOTSTRAP: {{ required "kafka.bootstrap is required" .Values.kafka.bootstrap | quote }}
+  XMSG_REPLICATION_FACTOR: {{ .Values.kafka.replicationFactor | quote }}
+  XMSG_CQL_NODES: {{ required "cassandra.nodes is required" .Values.cassandra.nodes | quote }}
+  XMSG_CQL_KEYSPACE: {{ .Values.cassandra.keyspace | quote }}
+  XMSG_NATS_URL: {{ include "xmsg.natsUrl" . | quote }}
+  XMSG_AUTH_JWKS_URL: "http://{{ $full }}-auth:8081/.well-known/jwks.json"
+  XMSG_SEQUENCER_URL: "http://{{ $full }}-sequencer:8090"
+  XMSG_OUTBOX_MODE: {{ .Values.outbox.mode | quote }}
+  XMSG_PUSH_SUBJECT: {{ .Values.push.subject | quote }}
+  {{- with (include "xmsg.valkeyUrl" .) }}
+  XMSG_VALKEY_URL: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.opensearch.url }}
+  XMSG_SEARCH_URL: {{ . | quote }}
+  XMSG_OPENSEARCH_URL: {{ . | quote }}
+  {{- end }}
+{{- if not .Values.secrets.existingSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "xmsg.secretName" . }}
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+type: Opaque
+stringData:
+  XMSG_DATABASE_URL: {{ required "postgres.url is required (or secrets.existingSecret)" .Values.postgres.url | quote }}
+  XMSG_AUTH_KEY: {{ required "secrets.authKey is required (or secrets.existingSecret)" .Values.secrets.authKey | quote }}
+  {{- if .Values.push.enabled }}
+  XMSG_PUSH_VAPID_PRIVATE_KEY: {{ required "secrets.vapidPrivateKey is required when push is enabled" .Values.secrets.vapidPrivateKey | quote }}
+  {{- end }}
+{{- end }}
