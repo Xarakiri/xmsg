@@ -12,7 +12,7 @@ First Phase 1a service ([plan §5.5](../../docs/architecture-plan.md)). Receives
 - **Edits and deletes** (§5.5), over the same HTTP server, bearer token required:
   - `PATCH /v1/channels/{id}/messages/{msg_seq}` with `{body, edit_id}`: only the author edits a message that isn't deleted (else 403 / 404). `edit_id` makes a retried request count once (dedupe `edit:{msg_seq}:{edit_id}`).
   - `DELETE /v1/channels/{id}/messages/{msg_seq}`: the author deletes their own; anyone else's goes out with `as_admin`, and the sequencer refuses it unless the actor is a channel admin (the refusal reaches the actor as a rejection). Already deleted: 202 `already_deleted`.
-  - The target is read at LOCAL_QUORUM; if it's within the channel head but not visible yet, the read is retried for up to 200 ms. Non-members get 404.
+  - The target is read at LOCAL_QUORUM. Members see messages live before the persister writes them, so a target that isn't visible yet is retried for up to 1 s before the answer is 404. Non-members get 404 at once.
   - The answer is 202: the change is sequenced (an `event_seq`, no `msg_seq`) and reaches every member, the caller included, as `message.edited` / `message.deleted`.
   - History rebuilds edits from the current row too, so it shows the latest body, and none once deleted.
 - **Startup check:** exits with code 2 if `messages.in` is missing or its partition count differs from `XMSG_PARTITIONS` (ADR-0021).

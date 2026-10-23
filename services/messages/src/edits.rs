@@ -3,9 +3,10 @@
 //!
 //! - Only the author edits. The author deletes their own message; a delete of anyone
 //!   else's goes out with `as_admin`, and the sequencer checks the actor's role.
-//! - The target is read at LOCAL_QUORUM. If it isn't there yet but its `msg_seq` is at or
-//!   below the channel head (the persister is a moment behind), the read is retried for
-//!   up to ~200 ms.
+//! - The target is read at LOCAL_QUORUM. Members get messages live before the persister
+//!   has written them, so a target that isn't visible yet is retried for up to 1 s before
+//!   the answer is 404. (The persister writes rows before the head, so the head can't
+//!   tell a lagging message from a missing one.)
 //! - The answer is 202: the change is sequenced like any event and reaches every member,
 //!   the caller included, through fan-out.
 
@@ -23,8 +24,8 @@ use xmsg_proto::v1::{DeleteMessage, EditMessage, InboundEvent, inbound_event::Pa
 use crate::history::{App, MessageRow, Store, bucket, caller, error};
 use crate::{EventLog, MAX_BODY_CHARS};
 
-/// How long a target that the head says exists may take to appear.
-pub const TARGET_WAIT: Duration = Duration::from_millis(200);
+/// How long a target that isn't visible yet may take to appear (persister lag).
+pub const TARGET_WAIT: Duration = Duration::from_secs(1);
 pub const MAX_EDIT_ID_LEN: usize = 64;
 
 #[derive(Deserialize)]
@@ -56,8 +57,8 @@ impl IntoResponse for Refused {
     }
 }
 
-/// The message at `msg_seq`, waiting briefly if the head says it exists but the row
-/// isn't visible yet. `None`: there is no such message.
+/// The message at `msg_seq`, waiting up to TARGET_WAIT for the persister if the row isn't
+/// visible yet. `None`: there is no such message (or it still isn't stored).
 pub async fn target(
     store: &impl Store,
     channel_id: i64,
@@ -71,8 +72,7 @@ pub async fn target(
         if let Some(row) = rows.into_iter().next() {
             return Ok(Some(row));
         }
-        let head = store.head(channel_id).await?.map_or(0, |h| h.msg_seq);
-        if msg_seq > head || tokio::time::Instant::now() >= deadline {
+        if tokio::time::Instant::now() >= deadline {
             return Ok(None);
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -349,16 +349,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_target_the_head_promises_is_waited_for_briefly() {
-        // msg_seq 4 is within the head but its row never shows up: gives up after ~200 ms.
-        let mut s = store();
-        s.head_msg_seq = 4;
+    async fn a_target_not_stored_yet_is_waited_for_then_given_up() {
+        // Past the head: the persister may simply be behind (members see messages live
+        // first), so it's waited for, but not forever.
         let started = std::time::Instant::now();
-        assert_eq!(target(&s, 9, 4).await, Ok(None));
+        assert_eq!(target(&store(), 9, 8).await, Ok(None));
         assert!(started.elapsed() >= TARGET_WAIT);
-        // Past the head: no wait.
+        // A stored one is answered at once.
         let started = std::time::Instant::now();
-        assert_eq!(target(&s, 9, 8).await, Ok(None));
+        assert!(target(&store(), 9, 1).await.unwrap().is_some());
         assert!(started.elapsed() < Duration::from_millis(50));
     }
 }

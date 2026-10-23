@@ -129,7 +129,7 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
 }
 
 function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry } = useChat(me, initial);
+  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping } = useChat(me, initial);
   const names = useNames(me);
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
@@ -209,6 +209,8 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
             onSend={(b) => send(current.id, b)}
             onToggleMute={() => setMuted(current.id, !current.muted)}
             onRetry={retry}
+            typing={typingIn(current.id)}
+            onTyping={() => notifyTyping(current.id)}
           />
         ) : (
           <div className="center muted">{channels.length ? "Pick a conversation" : "Create a channel or start a DM"}</div>
@@ -345,6 +347,8 @@ function Conversation({
   onSend,
   onToggleMute,
   onRetry,
+  typing,
+  onTyping,
 }: {
   channel: Channel;
   me: string;
@@ -353,6 +357,8 @@ function Conversation({
   onSend: (body: string) => void;
   onToggleMute: () => void;
   onRetry: (key: string) => void;
+  typing: string[];
+  onTyping: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
@@ -510,10 +516,16 @@ function Conversation({
         ))}
         <div ref={bottom} />
       </ol>
+      <div className="typing muted small" aria-live="polite">
+        {typing.length > 0 && typingText(typing.map((u) => names.label(u)))}
+      </div>
       <form className="composer" onSubmit={submit}>
         <textarea
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            if (e.target.value.trim()) onTyping();
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) submit(e);
           }}
@@ -567,4 +579,11 @@ function renderBody(body: string, me: string, names: Directory): ReactNode[] {
     }
     return part;
   });
+}
+
+/** "Ann is typing…", "Ann and Bo are typing…", "Several people are typing…". */
+function typingText(who: string[]): string {
+  if (who.length === 1) return `${who[0]} is typing…`;
+  if (who.length === 2) return `${who[0]} and ${who[1]} are typing…`;
+  return "Several people are typing…";
 }

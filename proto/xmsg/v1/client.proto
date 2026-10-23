@@ -16,6 +16,7 @@ message ClientFrame {
     Connect connect = 1;
     SendMessageRequest send_message = 2;
     Ping ping = 3;
+    Typing typing = 4;
   }
 }
 
@@ -32,6 +33,12 @@ message SendMessageRequest {
   string body = 3;
 }
 
+// "I'm typing in this channel." Best-effort: the gateway passes on at most one per
+// channel every 3 s, and nothing stores it (plan §5.9).
+message Typing {
+  int64 channel_id = 1;
+}
+
 message Ping {
   int64 sent_at_ms = 1;
 }
@@ -44,6 +51,7 @@ message ServerFrame {
     Resync resync = 4;
     Pong pong = 5;
     SendRejected send_rejected = 6;
+    TypingIndicator typing = 7;
   }
 }
 
@@ -55,6 +63,13 @@ message Welcome {
 
 // The send was refused before reaching the sequencer (invalid, too large...).
 // The client shows it as an error and does not retry it automatically.
+// Someone else is typing in a channel you're in. Show it for a few seconds; there is
+// no "stopped typing" (the next message, or silence, ends it).
+message TypingIndicator {
+  int64 channel_id = 1;
+  int64 user_id = 2;
+}
+
 message SendRejected {
   string client_msg_id = 1;
   RejectReason reason = 2;

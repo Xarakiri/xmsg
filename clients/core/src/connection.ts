@@ -11,6 +11,38 @@ import type { RejectReason } from "./gen/xmsg/v1/enums_pb.js";
 
 export const PROTOCOL_VERSION = 1;
 
+/** Typing notices go out at most this often per channel (plan §5.9). */
+export const TYPING_EVERY_MS = 3_000;
+/** A typing indicator shows this long after the last notice (a bit over the send interval). */
+export const TYPING_SHOWN_MS = 5_000;
+
+/**
+ * Who is typing where: notices keep someone listed for TYPING_SHOWN_MS, and their next
+ * message ends it at once. In memory only; never saved.
+ */
+export class TypingTracker {
+  private readonly until = new Map<string, Map<string, number>>();
+
+  note(channelId: string, userId: string, now = Date.now()): void {
+    const channel = this.until.get(channelId) ?? new Map<string, number>();
+    channel.set(userId, now + TYPING_SHOWN_MS);
+    this.until.set(channelId, channel);
+  }
+
+  /** They sent a message: they're done typing. */
+  stop(channelId: string, userId: string): void {
+    this.until.get(channelId)?.delete(userId);
+  }
+
+  /** Who is typing in the channel now, in the order they started. */
+  who(channelId: string, now = Date.now()): string[] {
+    const channel = this.until.get(channelId);
+    if (!channel) return [];
+    for (const [user, until] of channel) if (until <= now) channel.delete(user);
+    return [...channel.keys()];
+  }
+}
+
 export type ConnectionStatus = "connecting" | "online" | "offline" | "unauthorized";
 
 export interface ConnectionHandlers {
@@ -23,6 +55,8 @@ export interface ConnectionHandlers {
    * names the only affected partition; undefined means everything.
    */
   onResync?(partition: number | undefined): void;
+  /** Someone else is typing in a channel (best-effort; show it for a few seconds). */
+  onTyping?(channelId: string, userId: string): void;
 }
 
 export interface ConnectionOptions extends ConnectionHandlers {
@@ -95,6 +129,21 @@ export class Connection {
     return this.partitions;
   }
 
+  /**
+   * Tells the channel I'm typing: call it on every keystroke. Sent at most once per
+   * TYPING_EVERY_MS per channel (the gateway enforces the same), never queued offline.
+   */
+  typing(channelId: string, now = Date.now()): void {
+    if (!this.online || !this.ws) return;
+    if (now - (this.typedAt.get(channelId) ?? -Infinity) < TYPING_EVERY_MS) return;
+    this.typedAt.set(channelId, now);
+    this.ws.send(
+      toBinary(ClientFrameSchema, create(ClientFrameSchema, { frame: { case: "typing", value: { channelId: BigInt(channelId) } } })) as Frame,
+    );
+  }
+
+  private readonly typedAt = new Map<string, number>();
+
   /** Sends if online; returns false otherwise (the message stays in the caller's outbox). */
   send(channelId: string, clientMsgId: string, body: string): boolean {
     if (!this.online || !this.ws) return false;
@@ -157,6 +206,9 @@ export class Connection {
         break;
       case "resync":
         this.opts.onResync?.(frame.frame.value.partition);
+        break;
+      case "typing":
+        this.opts.onTyping?.(frame.frame.value.channelId.toString(), frame.frame.value.userId.toString());
         break;
       default:
         break; // pong

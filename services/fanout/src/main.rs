@@ -13,10 +13,11 @@ use xmsg_fanout::sequencer::Sequencer;
 use xmsg_fanout::sessions::SessionMap;
 use xmsg_fanout::store::Store;
 use xmsg_fanout::streams::Streams;
-use xmsg_fanout::{by_gateway, recipients};
+use xmsg_fanout::{by_gateway, recipients, typing_recipients};
 use xmsg_proto::Message;
 use xmsg_proto::v1::{
-    Delivery, GatewayBatch, SequencedEvent, ServerFrame, SessionEvent, server_frame,
+    Delivery, GatewayBatch, SequencedEvent, ServerFrame, SessionEvent, TypingIndicator,
+    server_frame,
 };
 
 const EVENTS_TOPIC: &str = "messages.persisted";
@@ -26,14 +27,29 @@ const USERS_EVENTS_TOPIC: &str = "users.events";
 /// Records partitions assigned in a rebalance, so their streams get a new epoch.
 struct Ctx {
     assigned: Arc<Mutex<Vec<i32>>>,
+    /// Partitions this instance owns now: typing for any other is someone else's.
+    owned: Arc<Mutex<std::collections::HashSet<i32>>>,
 }
 impl ClientContext for Ctx {}
 impl ConsumerContext for Ctx {
     fn post_rebalance(&self, _consumer: &BaseConsumer<Self>, rebalance: &Rebalance<'_>) {
-        if let Rebalance::Assign(tpl) = rebalance {
-            let mut assigned = self.assigned.lock().unwrap();
-            assigned.extend(tpl.elements().iter().map(|e| e.partition()));
-            tracing::info!(partitions = ?tpl.elements().iter().map(|e| e.partition()).collect::<Vec<_>>(), "partitions assigned");
+        match rebalance {
+            Rebalance::Assign(tpl) => {
+                let mut assigned = self.assigned.lock().unwrap();
+                assigned.extend(tpl.elements().iter().map(|e| e.partition()));
+                self.owned
+                    .lock()
+                    .unwrap()
+                    .extend(tpl.elements().iter().map(|e| e.partition()));
+                tracing::info!(partitions = ?tpl.elements().iter().map(|e| e.partition()).collect::<Vec<_>>(), "partitions assigned");
+            }
+            Rebalance::Revoke(tpl) => {
+                let mut owned = self.owned.lock().unwrap();
+                for e in tpl.elements() {
+                    owned.remove(&e.partition());
+                }
+            }
+            Rebalance::Error(_) => {}
         }
     }
 }
@@ -143,6 +159,7 @@ async fn main() -> ExitCode {
     );
 
     let assigned = Arc::new(Mutex::new(Vec::new()));
+    let owned = Arc::new(Mutex::new(std::collections::HashSet::new()));
     let consumer: StreamConsumer<Ctx> = match ClientConfig::new()
         .set("bootstrap.servers", &config.kafka_bootstrap)
         .set("group.id", &config.group_id)
@@ -153,6 +170,7 @@ async fn main() -> ExitCode {
         .set("partition.assignment.strategy", "cooperative-sticky")
         .create_with_context(Ctx {
             assigned: assigned.clone(),
+            owned: owned.clone(),
         }) {
         Ok(c) => c,
         Err(e) => return fail(&format!("creating Kafka consumer: {e}")),
@@ -174,6 +192,12 @@ async fn main() -> ExitCode {
     if let Err(e) = consumer.subscribe(&[EVENTS_TOPIC]) {
         return fail(&format!("subscribing to {EVENTS_TOPIC}: {e}"));
     }
+    // Typing (plan §5.9): every instance hears all partitions and keeps its own. Best-effort:
+    // dropped unless the channel's members are already in memory.
+    let mut typing = match nats.subscribe("typing.*").await {
+        Ok(s) => s,
+        Err(e) => return fail(&format!("subscribing to typing.*: {e}")),
+    };
     let mut membership = Membership::default();
     let mut streams = Streams::default();
     let mut heads_tick = tokio::time::interval(Duration::from_secs(1));
@@ -189,6 +213,28 @@ async fn main() -> ExitCode {
                 for gateway in streams.gateways() {
                     let heads = streams.heads_for(&gateway).encode_to_vec();
                     let _ = nats.publish(format!("stream_heads.{gateway}"), heads.into()).await;
+                }
+                continue;
+            }
+            Some(msg) = futures_util::StreamExt::next(&mut typing) => {
+                let partition = msg.subject.rsplit('.').next().and_then(|p| p.parse::<i32>().ok());
+                if partition.is_some_and(|p| owned.lock().unwrap().contains(&p))
+                    && let Ok(notice) = TypingIndicator::decode(msg.payload.as_ref())
+                    && let Some(members) = membership.get(notice.channel_id)
+                    && let Some(to) = typing_recipients(members, notice.user_id)
+                {
+                    let frame = ServerFrame {
+                        frame: Some(server_frame::Frame::Typing(notice)),
+                    }
+                    .encode_to_vec();
+                    // Bound first, so the sessions lock is released before any await.
+                    let grouped = by_gateway(&to, &sessions.read().unwrap());
+                    for (gateway, user_ids) in grouped {
+                        let delivery = Delivery { user_ids, server_frame: frame.clone() };
+                        let _ = nats
+                            .publish(format!("gw.{gateway}.ephemeral"), delivery.encode_to_vec().into())
+                            .await;
+                    }
                 }
                 continue;
             }

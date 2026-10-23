@@ -13,6 +13,7 @@ defmodule Xmsg.V1.ClientFrame do
   field :connect, 1, type: Xmsg.V1.Connect, oneof: 0
   field :send_message, 2, type: Xmsg.V1.SendMessageRequest, json_name: "sendMessage", oneof: 0
   field :ping, 3, type: Xmsg.V1.Ping, oneof: 0
+  field :typing, 4, type: Xmsg.V1.Typing, oneof: 0
 end
 
 defmodule Xmsg.V1.Connect do
@@ -39,6 +40,14 @@ defmodule Xmsg.V1.SendMessageRequest do
   field :body, 3, type: :string
 end
 
+defmodule Xmsg.V1.Typing do
+  @moduledoc false
+
+  use Protobuf, full_name: "xmsg.v1.Typing", protoc_gen_elixir_version: "0.17.1", syntax: :proto3
+
+  field :channel_id, 1, type: :int64, json_name: "channelId"
+end
+
 defmodule Xmsg.V1.Ping do
   @moduledoc false
 
@@ -63,6 +72,7 @@ defmodule Xmsg.V1.ServerFrame do
   field :resync, 4, type: Xmsg.V1.Resync, oneof: 0
   field :pong, 5, type: Xmsg.V1.Pong, oneof: 0
   field :send_rejected, 6, type: Xmsg.V1.SendRejected, json_name: "sendRejected", oneof: 0
+  field :typing, 7, type: Xmsg.V1.TypingIndicator, oneof: 0
 end
 
 defmodule Xmsg.V1.Welcome do
@@ -72,6 +82,18 @@ defmodule Xmsg.V1.Welcome do
 
   field :resume_token, 1, type: :string, json_name: "resumeToken"
   field :partition_count, 2, type: :uint32, json_name: "partitionCount"
+end
+
+defmodule Xmsg.V1.TypingIndicator do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.TypingIndicator",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_id, 1, type: :int64, json_name: "channelId"
+  field :user_id, 2, type: :int64, json_name: "userId"
 end
 
 defmodule Xmsg.V1.SendRejected do
