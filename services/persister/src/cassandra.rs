@@ -16,6 +16,9 @@ pub struct Store {
     insert_channel_event: PreparedStatement,
     select_deleted: PreparedStatement,
     insert_channel_mention: PreparedStatement,
+    set_reaction_count: PreparedStatement,
+    insert_reaction: PreparedStatement,
+    delete_reaction: PreparedStatement,
     update_head_mention: PreparedStatement,
     update_message_body: PreparedStatement,
     delete_message: PreparedStatement,
@@ -49,6 +52,18 @@ impl Store {
             insert_message: prepare(format!(
                 "INSERT INTO {k}.messages (channel_id, bucket, msg_seq, message_id, event_seq, author_id, client_msg_id, body, deleted) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)"
+            ))
+            .await?,
+            set_reaction_count: prepare(format!(
+                "UPDATE {k}.reaction_counts SET count = ? WHERE channel_id = ? AND message_id = ? AND emoji = ?"
+            ))
+            .await?,
+            insert_reaction: prepare(format!(
+                "INSERT INTO {k}.reactions (channel_id, message_id, emoji, user_id) VALUES (?, ?, ?, ?)"
+            ))
+            .await?,
+            delete_reaction: prepare(format!(
+                "DELETE FROM {k}.reactions WHERE channel_id = ? AND message_id = ? AND emoji = ? AND user_id = ?"
             ))
             .await?,
             insert_channel_mention: prepare(format!(
@@ -186,6 +201,29 @@ impl Store {
                     )
                     .await?;
                 }
+            }
+            Write::Reactions {
+                channel_id,
+                message_id,
+                emoji,
+                count,
+                added,
+                removed,
+            } => {
+                for user in added {
+                    s.execute_unpaged(&self.insert_reaction, (channel_id, message_id, emoji, user))
+                        .await?;
+                }
+                for user in removed {
+                    s.execute_unpaged(&self.delete_reaction, (channel_id, message_id, emoji, user))
+                        .await?;
+                }
+                // Absolute, from the sequencer: a replay sets the same value again.
+                s.execute_unpaged(
+                    &self.set_reaction_count,
+                    (*count as i32, channel_id, message_id, emoji),
+                )
+                .await?;
             }
             Write::ChannelMention {
                 channel_id,

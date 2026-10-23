@@ -15,10 +15,11 @@ First Phase 1a service ([plan §5.5](../../docs/architecture-plan.md)). Receives
   - The target is read at LOCAL_QUORUM. Members see messages live before the persister writes them, so a target that isn't visible yet is retried for up to 1 s before the answer is 404. Non-members get 404 at once.
   - The answer is 202: the change is sequenced (an `event_seq`, no `msg_seq`) and reaches every member, the caller included, as `message.edited` / `message.deleted`.
   - History rebuilds edits from the current row too, so it shows the latest body, and none once deleted.
+- **Reactions** (§6.8, ADR-0015): `PUT` / `DELETE /v1/channels/{id}/messages/{msg_seq}/reactions/{emoji}?counter=N` checks the caller is a member and the message exists and isn't deleted, then produces a `ReactionCommand` to `reactions.in` (keyed by channel) for the [reaction-batcher](../reaction-batcher). `counter` increases per (user, message, emoji); a timestamp will do. 202; the result reaches members as `reactions.changed`.
 - **Startup check:** exits with code 2 if `messages.in` is missing or its partition count differs from `XMSG_PARTITIONS` (ADR-0021).
 
 ## Not yet
-- Membership and permission pre-checks from a Redis cache, `@channel` rules, rate limits, reactions, threads.
+- Membership and permission pre-checks from a Redis cache, `@channel` rules, rate limits, threads.
 - Reading backwards (older pages by `msg_seq`), the latest page for a channel far behind, and Redis `chan_head` with sync tokens (Phase 1b).
 
 ## Configuration

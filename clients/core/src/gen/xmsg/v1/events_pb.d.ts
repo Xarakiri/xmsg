@@ -83,6 +83,12 @@ export declare type InboundEvent = Message<"xmsg.v1.InboundEvent"> & {
     case: "memberKickRequested";
   } | {
     /**
+     * @generated from field: xmsg.v1.ReactionBatch reaction_batch = 16;
+     */
+    value: ReactionBatch;
+    case: "reactionBatch";
+  } | {
+    /**
      * @generated from field: xmsg.v1.EditMessage edit_message = 14;
      */
     value: EditMessage;
@@ -158,6 +164,66 @@ export declare type DeleteMessage = Message<"xmsg.v1.DeleteMessage"> & {
  * Use `create(DeleteMessageSchema)` to create a new message.
  */
 export declare const DeleteMessageSchema: GenMessage<DeleteMessage>;
+
+/**
+ * A second's worth of reaction operations on one (message, emoji), from the
+ * reaction-batcher (ADR-0015): at most one per user, the latest by counter.
+ *
+ * @generated from message xmsg.v1.ReactionBatch
+ */
+export declare type ReactionBatch = Message<"xmsg.v1.ReactionBatch"> & {
+  /**
+   * @generated from field: int64 message_id = 1;
+   */
+  messageId: bigint;
+
+  /**
+   * @generated from field: int64 msg_seq = 2;
+   */
+  msgSeq: bigint;
+
+  /**
+   * @generated from field: string emoji = 3;
+   */
+  emoji: string;
+
+  /**
+   * @generated from field: repeated xmsg.v1.ReactionOp ops = 4;
+   */
+  ops: ReactionOp[];
+};
+
+/**
+ * Describes the message xmsg.v1.ReactionBatch.
+ * Use `create(ReactionBatchSchema)` to create a new message.
+ */
+export declare const ReactionBatchSchema: GenMessage<ReactionBatch>;
+
+/**
+ * @generated from message xmsg.v1.ReactionOp
+ */
+export declare type ReactionOp = Message<"xmsg.v1.ReactionOp"> & {
+  /**
+   * @generated from field: int64 user_id = 1;
+   */
+  userId: bigint;
+
+  /**
+   * @generated from field: bool add = 2;
+   */
+  add: boolean;
+
+  /**
+   * @generated from field: int64 counter = 3;
+   */
+  counter: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.ReactionOp.
+ * Use `create(ReactionOpSchema)` to create a new message.
+ */
+export declare const ReactionOpSchema: GenMessage<ReactionOp>;
 
 /**
  * @generated from message xmsg.v1.SendMessage
@@ -351,6 +417,12 @@ export declare type SequencedEvent = Message<"xmsg.v1.SequencedEvent"> & {
     case: "channelModeChanged";
   } | {
     /**
+     * @generated from field: xmsg.v1.ReactionsChanged reactions_changed = 19;
+     */
+    value: ReactionsChanged;
+    case: "reactionsChanged";
+  } | {
+    /**
      * @generated from field: xmsg.v1.MessageEdited message_edited = 17;
      */
     value: MessageEdited;
@@ -501,6 +573,51 @@ export declare type MemberLeft = Message<"xmsg.v1.MemberLeft"> & {
  * Use `create(MemberLeftSchema)` to create a new message.
  */
 export declare const MemberLeftSchema: GenMessage<MemberLeft>;
+
+/**
+ * A reaction batch applied by the sequencer: an event_seq, no msg_seq. `count` is the
+ * absolute number of users with this reaction now; `added` / `removed` are the users
+ * whose reaction actually changed (stale and repeated operations are left out).
+ *
+ * @generated from message xmsg.v1.ReactionsChanged
+ */
+export declare type ReactionsChanged = Message<"xmsg.v1.ReactionsChanged"> & {
+  /**
+   * @generated from field: int64 message_id = 1;
+   */
+  messageId: bigint;
+
+  /**
+   * @generated from field: int64 msg_seq = 2;
+   */
+  msgSeq: bigint;
+
+  /**
+   * @generated from field: string emoji = 3;
+   */
+  emoji: string;
+
+  /**
+   * @generated from field: int64 count = 4;
+   */
+  count: bigint;
+
+  /**
+   * @generated from field: repeated int64 added = 5;
+   */
+  added: bigint[];
+
+  /**
+   * @generated from field: repeated int64 removed = 6;
+   */
+  removed: bigint[];
+};
+
+/**
+ * Describes the message xmsg.v1.ReactionsChanged.
+ * Use `create(ReactionsChangedSchema)` to create a new message.
+ */
+export declare const ReactionsChangedSchema: GenMessage<ReactionsChanged>;
 
 /**
  * Emitted when the channel switches between push and pull fan-out (ADR-0008).

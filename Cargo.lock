@@ -4061,6 +4061,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmsg-reaction-batcher"
+version = "0.0.0"
+dependencies = [
+ "futures-util",
+ "rdkafka",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "xmsg-partition",
+ "xmsg-proto",
+]
+
+[[package]]
 name = "xmsg-readstate"
 version = "0.0.0"
 dependencies = [

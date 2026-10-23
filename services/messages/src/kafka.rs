@@ -9,6 +9,8 @@ use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use crate::EventLog;
 
 pub const TOPIC_IN: &str = "messages.in";
+/// Reaction commands, keyed by channel like `messages.in` (ADR-0015).
+pub const TOPIC_REACTIONS: &str = "reactions.in";
 
 pub struct KafkaLog {
     producer: FutureProducer,

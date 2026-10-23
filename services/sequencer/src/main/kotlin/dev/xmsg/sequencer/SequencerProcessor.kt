@@ -15,6 +15,9 @@ import dev.xmsg.proto.v1.MessageCreated
 import dev.xmsg.proto.v1.MessageDeleted
 import dev.xmsg.proto.v1.MessageEdited
 import dev.xmsg.proto.v1.PartitionState
+import dev.xmsg.proto.v1.ReactionCountState
+import dev.xmsg.proto.v1.ReactionState
+import dev.xmsg.proto.v1.ReactionsChanged
 import dev.xmsg.proto.v1.RejectReason
 import dev.xmsg.proto.v1.Rejected
 import dev.xmsg.proto.v1.SequencedEvent
@@ -40,6 +43,8 @@ class SequencerProcessor(
     private lateinit var members: KeyValueStore<String, ByteArray>
     private lateinit var dedupe: WindowStore<String, Long>
     private lateinit var partitionState: KeyValueStore<Int, ByteArray>
+    private lateinit var reactions: KeyValueStore<String, ByteArray>
+    private lateinit var reactionCounts: KeyValueStore<String, ByteArray>
 
     override fun init(context: ProcessorContext<Any, ByteArray>) {
         this.context = context
@@ -47,6 +52,8 @@ class SequencerProcessor(
         members = context.getStateStore(Names.STORE_MEMBERS)
         dedupe = context.getStateStore(Names.STORE_DEDUPE)
         partitionState = context.getStateStore(Names.STORE_PARTITION_STATE)
+        reactions = context.getStateStore(Names.STORE_REACTIONS)
+        reactionCounts = context.getStateStore(Names.STORE_REACTION_COUNTS)
     }
 
     override fun process(record: Record<Long, ByteArray>) {
@@ -69,6 +76,7 @@ class SequencerProcessor(
             InboundEvent.PayloadCase.SEND_MESSAGE -> sendMessage(event, now)
             InboundEvent.PayloadCase.MEMBER_JOIN_REQUESTED -> join(event, now)
             InboundEvent.PayloadCase.MEMBER_KICK_REQUESTED -> kick(event, now)
+            InboundEvent.PayloadCase.REACTION_BATCH -> reactionBatch(event, now)
             InboundEvent.PayloadCase.EDIT_MESSAGE -> editMessage(event, now)
             InboundEvent.PayloadCase.DELETE_MESSAGE -> deleteMessage(event, now)
             else -> reject(event, now, RejectReason.REJECT_REASON_INVALID, "empty payload")
@@ -200,6 +208,56 @@ class SequencerProcessor(
             return null.also { reject(event, now, RejectReason.REJECT_REASON_INVALID, "no message $msgSeq") }
         }
         return head
+    }
+
+    /**
+     * A reaction batch (ADR-0015). Each user's operation applies only if its counter is
+     * above the last applied one and the user is still a member, so a replayed or late
+     * batch changes nothing. The count is kept absolute; nothing is emitted if no
+     * reaction actually changed.
+     */
+    private fun reactionBatch(event: InboundEvent, now: Long) {
+        val batch = event.reactionBatch
+        val head = head(event.channelId) ?: return // unknown channel: nobody to tell
+        if (batch.msgSeq < 1 || batch.msgSeq > head.msgSeq || batch.emoji.isEmpty()) return
+        val countKey = "${event.channelId}:${batch.messageId}:${batch.emoji}"
+        var count = reactionCounts.get(countKey)?.let { ReactionCountState.parseFrom(it).count } ?: 0L
+        val added = mutableListOf<Long>()
+        val removed = mutableListOf<Long>()
+        for (op in batch.opsList) {
+            if (role(event.channelId, op.userId) == null) continue
+            val key = "$countKey:${op.userId}"
+            val current = reactions.get(key)?.let { ReactionState.parseFrom(it) }
+            if (current != null && op.counter <= current.counter) continue
+            val was = current?.present ?: false
+            reactions.put(
+                key,
+                ReactionState.newBuilder().setFormatVersion(STATE_FORMAT).setCounter(op.counter).setPresent(op.add)
+                    .build().toByteArray(),
+            )
+            if (op.add && !was) {
+                count++
+                added += op.userId
+            } else if (!op.add && was) {
+                count--
+                removed += op.userId
+            }
+        }
+        if (added.isEmpty() && removed.isEmpty()) return
+        reactionCounts.put(countKey, ReactionCountState.newBuilder().setFormatVersion(STATE_FORMAT).setCount(count).build().toByteArray())
+        val updated = head.toBuilder().setEventSeq(head.eventSeq + 1).build()
+        heads.put(event.channelId, updated.toByteArray())
+        emit(event, updated, now) {
+            it.setReactionsChanged(
+                ReactionsChanged.newBuilder()
+                    .setMessageId(batch.messageId)
+                    .setMsgSeq(batch.msgSeq)
+                    .setEmoji(batch.emoji)
+                    .setCount(count)
+                    .addAllAdded(added)
+                    .addAllRemoved(removed),
+            )
+        }
     }
 
     private fun join(event: InboundEvent, now: Long) {

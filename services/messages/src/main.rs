@@ -8,7 +8,7 @@ use tracing_subscriber::EnvFilter;
 use xmsg_messages::cassandra::Cassandra;
 use xmsg_messages::config::Config;
 use xmsg_messages::history;
-use xmsg_messages::kafka::{KafkaLog, TOPIC_IN};
+use xmsg_messages::kafka::{KafkaLog, TOPIC_IN, TOPIC_REACTIONS};
 use xmsg_messages::{QUEUE_GROUP, SEND_SUBJECT, handle};
 
 #[tokio::main]
@@ -58,9 +58,29 @@ async fn main() -> ExitCode {
             Ok(s) => s,
             Err(e) => return fail(&e),
         };
+        let reactions = match KafkaLog::with_topic(
+            &config.kafka_bootstrap,
+            Duration::from_millis(config.append_timeout_ms),
+            TOPIC_REACTIONS,
+        ) {
+            Ok(l) => Arc::new(l),
+            Err(e) => return fail(&e),
+        };
+        // Same check as messages.in: reactions.in is keyed by channel with the same count.
+        match reactions.partition_count(TOPIC_REACTIONS) {
+            Ok(n) if n == config.partitions => {}
+            Ok(n) => {
+                return fail(&format!(
+                    "{TOPIC_REACTIONS} has {n} partitions but XMSG_PARTITIONS is {} (ADR-0021)",
+                    config.partitions
+                ));
+            }
+            Err(e) => return fail(&e),
+        }
         let app = Arc::new(history::App {
             store,
             log: log.clone(),
+            reactions,
             verifier: match xmsg_authn::Verifier::from_env(jwks_url).await {
                 Ok(v) => v,
                 Err(e) => return fail(&e),

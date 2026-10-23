@@ -33,3 +33,17 @@ message PartitionState {
   // Last issued Snowflake message_id for this partition.
   int64 last_message_id = 2;
 }
+
+// One user's reaction on one (message, emoji): store `reactions` (ADR-0015).
+message ReactionState {
+  uint32 format_version = 1;
+  // The counter of the last applied operation; older ones are ignored.
+  int64 counter = 2;
+  bool present = 3;
+}
+
+// How many users have one reaction on one message: store `reaction-counts`.
+message ReactionCountState {
+  uint32 format_version = 1;
+  int64 count = 2;
+}

@@ -195,6 +195,17 @@ export class Api {
     });
   }
 
+  /**
+   * Add or remove a reaction (ADR-0015). `counter` must increase per (message, emoji) for
+   * this user; a timestamp will do. The result arrives as a `reactionsChanged` event.
+   */
+  async react(token: string, channelId: string, msgSeq: number, emoji: string, add: boolean, counter = Date.now()): Promise<void> {
+    await call(
+      `${this.endpoints.messages}/v1/channels/${channelId}/messages/${msgSeq}/reactions/${encodeURIComponent(emoji)}?counter=${counter}`,
+      { method: add ? "PUT" : "DELETE", token },
+    );
+  }
+
   /** Delete your own message, or anyone's as a channel admin (checked by the sequencer). */
   async deleteMessage(token: string, channelId: string, msgSeq: number): Promise<void> {
     await call(`${this.endpoints.messages}/v1/channels/${channelId}/messages/${msgSeq}`, { method: "DELETE", token });

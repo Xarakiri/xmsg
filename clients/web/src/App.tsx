@@ -129,7 +129,7 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
 }
 
 function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping } = useChat(me, initial);
+  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react } = useChat(me, initial);
   const names = useNames(me);
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
@@ -211,6 +211,7 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
             onRetry={retry}
             typing={typingIn(current.id)}
             onTyping={() => notifyTyping(current.id)}
+            onReact={(msgSeq, emoji, add) => react(current.id, msgSeq, emoji, add)}
           />
         ) : (
           <div className="center muted">{channels.length ? "Pick a conversation" : "Create a channel or start a DM"}</div>
@@ -349,6 +350,7 @@ function Conversation({
   onRetry,
   typing,
   onTyping,
+  onReact,
 }: {
   channel: Channel;
   me: string;
@@ -359,6 +361,7 @@ function Conversation({
   onRetry: (key: string) => void;
   typing: string[];
   onTyping: () => void;
+  onReact: (msgSeq: number, emoji: string, add: boolean) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
@@ -499,6 +502,7 @@ function Conversation({
             ) : (
               <div className="body">{renderBody(m.body, me, names)}</div>
             )}
+            {m.msgSeq > 0 && !m.deleted && <Reactions reactions={m.reactions ?? {}} onToggle={(emoji, add) => onReact(m.msgSeq, emoji, add)} />}
             {m.error && (
               <div className="error small">
                 {m.error}
@@ -586,4 +590,51 @@ function typingText(who: string[]): string {
   if (who.length === 1) return `${who[0]} is typing…`;
   if (who.length === 2) return `${who[0]} and ${who[1]} are typing…`;
   return "Several people are typing…";
+}
+
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "👀"];
+
+/** A message's reactions as toggles, plus a small picker for the common ones. */
+function Reactions({
+  reactions,
+  onToggle,
+}: {
+  reactions: Record<string, { count: number; mine: boolean }>;
+  onToggle: (emoji: string, add: boolean) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const shown = Object.entries(reactions);
+  return (
+    <div className="reactions">
+      {shown.map(([emoji, r]) => (
+        <button
+          key={emoji}
+          className={`reaction ${r.mine ? "mine" : ""}`}
+          aria-pressed={r.mine}
+          aria-label={`${emoji} ${r.count}${r.mine ? ", including you" : ""}`}
+          onClick={() => onToggle(emoji, !r.mine)}
+        >
+          {emoji} <span className="small">{r.count}</span>
+        </button>
+      ))}
+      {picking ? (
+        QUICK_REACTIONS.filter((e) => !reactions[e]?.mine).map((emoji) => (
+          <button
+            key={emoji}
+            className="reaction"
+            onClick={() => {
+              onToggle(emoji, true);
+              setPicking(false);
+            }}
+          >
+            {emoji}
+          </button>
+        ))
+      ) : (
+        <button className="reaction add" aria-label="Add a reaction" onClick={() => setPicking(true)}>
+          +
+        </button>
+      )}
+    </div>
+  );
 }

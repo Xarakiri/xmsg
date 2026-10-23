@@ -110,3 +110,56 @@ export declare type PartitionState = Message<"xmsg.v1.PartitionState"> & {
  */
 export declare const PartitionStateSchema: GenMessage<PartitionState>;
 
+/**
+ * One user's reaction on one (message, emoji): store `reactions` (ADR-0015).
+ *
+ * @generated from message xmsg.v1.ReactionState
+ */
+export declare type ReactionState = Message<"xmsg.v1.ReactionState"> & {
+  /**
+   * @generated from field: uint32 format_version = 1;
+   */
+  formatVersion: number;
+
+  /**
+   * The counter of the last applied operation; older ones are ignored.
+   *
+   * @generated from field: int64 counter = 2;
+   */
+  counter: bigint;
+
+  /**
+   * @generated from field: bool present = 3;
+   */
+  present: boolean;
+};
+
+/**
+ * Describes the message xmsg.v1.ReactionState.
+ * Use `create(ReactionStateSchema)` to create a new message.
+ */
+export declare const ReactionStateSchema: GenMessage<ReactionState>;
+
+/**
+ * How many users have one reaction on one message: store `reaction-counts`.
+ *
+ * @generated from message xmsg.v1.ReactionCountState
+ */
+export declare type ReactionCountState = Message<"xmsg.v1.ReactionCountState"> & {
+  /**
+   * @generated from field: uint32 format_version = 1;
+   */
+  formatVersion: number;
+
+  /**
+   * @generated from field: int64 count = 2;
+   */
+  count: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.ReactionCountState.
+ * Use `create(ReactionCountStateSchema)` to create a new message.
+ */
+export declare const ReactionCountStateSchema: GenMessage<ReactionCountState>;
+

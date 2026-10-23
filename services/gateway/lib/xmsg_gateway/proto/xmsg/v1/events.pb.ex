@@ -28,6 +28,7 @@ defmodule Xmsg.V1.InboundEvent do
     json_name: "memberKickRequested",
     oneof: 0
 
+  field :reaction_batch, 16, type: Xmsg.V1.ReactionBatch, json_name: "reactionBatch", oneof: 0
   field :edit_message, 14, type: Xmsg.V1.EditMessage, json_name: "editMessage", oneof: 0
   field :delete_message, 15, type: Xmsg.V1.DeleteMessage, json_name: "deleteMessage", oneof: 0
 end
@@ -56,6 +57,33 @@ defmodule Xmsg.V1.DeleteMessage do
   field :msg_seq, 1, type: :int64, json_name: "msgSeq"
   field :message_id, 2, type: :int64, json_name: "messageId"
   field :as_admin, 3, type: :bool, json_name: "asAdmin"
+end
+
+defmodule Xmsg.V1.ReactionBatch do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ReactionBatch",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :message_id, 1, type: :int64, json_name: "messageId"
+  field :msg_seq, 2, type: :int64, json_name: "msgSeq"
+  field :emoji, 3, type: :string
+  field :ops, 4, repeated: true, type: Xmsg.V1.ReactionOp
+end
+
+defmodule Xmsg.V1.ReactionOp do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ReactionOp",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :user_id, 1, type: :int64, json_name: "userId"
+  field :add, 2, type: :bool
+  field :counter, 3, type: :int64
 end
 
 defmodule Xmsg.V1.SendMessage do
@@ -136,6 +164,11 @@ defmodule Xmsg.V1.SequencedEvent do
     json_name: "channelModeChanged",
     oneof: 0
 
+  field :reactions_changed, 19,
+    type: Xmsg.V1.ReactionsChanged,
+    json_name: "reactionsChanged",
+    oneof: 0
+
   field :message_edited, 17, type: Xmsg.V1.MessageEdited, json_name: "messageEdited", oneof: 0
   field :message_deleted, 18, type: Xmsg.V1.MessageDeleted, json_name: "messageDeleted", oneof: 0
 end
@@ -201,6 +234,22 @@ defmodule Xmsg.V1.MemberLeft do
     syntax: :proto3
 
   field :user_id, 1, type: :int64, json_name: "userId"
+end
+
+defmodule Xmsg.V1.ReactionsChanged do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ReactionsChanged",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :message_id, 1, type: :int64, json_name: "messageId"
+  field :msg_seq, 2, type: :int64, json_name: "msgSeq"
+  field :emoji, 3, type: :string
+  field :count, 4, type: :int64
+  field :added, 5, repeated: true, type: :int64
+  field :removed, 6, repeated: true, type: :int64
 end
 
 defmodule Xmsg.V1.ChannelModeChanged do

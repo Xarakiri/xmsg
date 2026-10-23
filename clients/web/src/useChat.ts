@@ -140,6 +140,16 @@ export function useChat(me: string, initial: ChatState) {
       .catch(() => dispatch({ type: "settings", settings: [{ channelId, muted: !muted, notifyLevel }] }));
   };
 
+  // Reactions (ADR-0015): shown at once, the server's count follows within ~1 s; a
+  // refused request is rolled back.
+  const react = (channelId: string, msgSeq: number, emoji: string, add: boolean) => {
+    dispatch({ type: "react", channelId, msgSeq, emoji, add });
+    void session
+      .accessToken()
+      .then((token) => api.react(token, channelId, msgSeq, emoji, add))
+      .catch(() => dispatch({ type: "react", channelId, msgSeq, emoji, add: !add }));
+  };
+
   // A failed message goes out again under a new client_msg_id: the old one may still
   // be in the sequencer's dedupe window, which would drop the retry silently.
   const retry = (oldKey: string) => {
@@ -152,5 +162,5 @@ export function useChat(me: string, initial: ChatState) {
     conn.current?.send(message.channelId, newKey, message.body);
   };
 
-  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping };
+  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react };
 }

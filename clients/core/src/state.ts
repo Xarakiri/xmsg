@@ -59,6 +59,17 @@ export interface Message {
   editSeq?: number;
   /** Deleted messages keep their place with no body. */
   deleted?: boolean;
+  /** Reactions by emoji (ADR-0015); absent until the first one. */
+  reactions?: Record<string, Reaction>;
+}
+
+export interface Reaction {
+  /** Users with this reaction, from the server (or adjusted locally until it answers). */
+  count: number;
+  /** Whether I reacted. */
+  mine: boolean;
+  /** event_seq of the server update this comes from (0: only a local change so far). */
+  seq: number;
 }
 
 export interface ChatState {
@@ -89,6 +100,8 @@ export type Action =
   | { type: "history"; channelId: string; events: SequencedEvent[]; through: number; at: number }
   /** The server says we're no longer a member (history refused). */
   | { type: "lostAccess"; channelId: string }
+  /** I added or removed a reaction: shown at once, the server's count follows (~1 s). */
+  | { type: "react"; channelId: string; msgSeq: number; emoji: string; add: boolean }
   /** Unread mentions from the server (sync); merged as a set, so repeats change nothing. */
   | { type: "mentions"; mentions: { channelId: string; msgSeqs: number[] }[] };
 
@@ -188,6 +201,17 @@ export function reduce(state: ChatState, action: Action): ChatState {
         next = withChannel(next, { ...channel, syncedSeq: action.through, eventSeq: Math.max(channel.eventSeq, action.through) });
       }
       return next;
+    }
+    case "react": {
+      return withMessages(state, action.channelId, (list) =>
+        list.map((m) => {
+          if (m.msgSeq !== action.msgSeq || m.deleted) return m;
+          const current = m.reactions?.[action.emoji] ?? { count: 0, mine: false, seq: 0 };
+          if (current.mine === action.add) return m;
+          const next = { ...current, mine: action.add, count: Math.max(0, current.count + (action.add ? 1 : -1)) };
+          return { ...m, reactions: withReaction(m.reactions, action.emoji, next) };
+        }),
+      );
     }
     case "mentions": {
       let next = state;
@@ -355,6 +379,22 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
         ),
       );
     }
+    case "reactionsChanged": {
+      const r = payload.value;
+      const target = Number(r.msgSeq);
+      const next = withChannel(state, channel);
+      return withMessages(next, channelId, (list) =>
+        list.map((m) => {
+          if (m.msgSeq !== target) return m;
+          const current = m.reactions?.[r.emoji];
+          // A replayed older update (history after live) never undoes a newer one.
+          if (current && current.seq >= eventSeq) return m;
+          const me = (ids: bigint[]) => ids.some((u) => u.toString() === state.me);
+          const mine = me(r.added) ? true : me(r.removed) ? false : (current?.mine ?? false);
+          return { ...m, reactions: withReaction(m.reactions, r.emoji, { count: Number(r.count), mine, seq: eventSeq }) };
+        }),
+      );
+    }
     case "messageDeleted": {
       const target = Number(payload.value.msgSeq);
       const next = withChannel(state, channel);
@@ -365,6 +405,14 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
     default:
       return withChannel(state, channel);
   }
+}
+
+/** Sets one emoji's reaction; an emoji nobody has any more is dropped. */
+function withReaction(reactions: Record<string, Reaction> | undefined, emoji: string, r: Reaction): Record<string, Reaction> {
+  const next = { ...reactions };
+  if (r.count > 0 || r.mine) next[emoji] = r;
+  else delete next[emoji];
+  return next;
 }
 
 /** Ordered by msg_seq; pending messages (0) stay at the end in send order. */

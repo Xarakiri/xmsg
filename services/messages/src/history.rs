@@ -199,6 +199,8 @@ pub struct App<S, L> {
     pub store: S,
     /// Where edits and deletes go (`messages.in`).
     pub log: L,
+    /// Where reactions go (`reactions.in`, ADR-0015).
+    pub reactions: L,
     pub verifier: Verifier,
 }
 
@@ -208,6 +210,11 @@ pub fn router<S: Store, L: EventLog + Send + Sync + 'static>(app: Arc<App<S, L>>
         .route(
             "/v1/channels/{channel_id}/messages/{msg_seq}",
             axum::routing::patch(crate::edits::edit::<S, L>).delete(crate::edits::delete::<S, L>),
+        )
+        .route(
+            "/v1/channels/{channel_id}/messages/{msg_seq}/reactions/{emoji}",
+            axum::routing::put(crate::reactions::add::<S, L>)
+                .delete(crate::reactions::remove::<S, L>),
         )
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
