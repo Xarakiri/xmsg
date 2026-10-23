@@ -437,7 +437,15 @@ async fn check_workspace_removal(
         e.iter().any(|e| e.dedupe_id == "after-removal")
     })
     .await?;
-    // Whatever mallory's socket receives for the next 3 s must contain nothing of the channel.
+    // Whatever mallory's socket receives for the next 3 s must contain nothing of the
+    // channel sequenced after the removal. Events sequenced before it (her own join, say)
+    // may still arrive late on this new socket; they aren't leaks.
+    let cutoff = alice_ws
+        .events
+        .iter()
+        .find(|e| e.dedupe_id == "after-removal")
+        .map(|e| e.event_seq)
+        .ok_or("alice's message after the removal never arrived")?;
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         let _ = tokio::time::timeout(Duration::from_millis(300), next_frame(&mut mallory_ws)).await;
@@ -445,7 +453,7 @@ async fn check_workspace_removal(
     if let Some(leak) = mallory_ws
         .events
         .iter()
-        .find(|e| e.channel_id == channel_id)
+        .find(|e| e.channel_id == channel_id && e.event_seq >= cutoff)
     {
         return Err(format!(
             "removed member received {:?} of the workspace's channel",
