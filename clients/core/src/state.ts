@@ -31,6 +31,8 @@ export interface Channel {
   left: boolean;
   /** msg_seqs of messages mentioning me (or `@channel`); those after readSeq are unread. */
   mentions: number[];
+  /** DMs: how far each other member has read (read receipts, ADR-0012). */
+  seenBy?: Record<string, number>;
 }
 
 export type MessageStatus = "pending" | "sent" | "confirmed" | "rejected" | "failed";
@@ -121,6 +123,8 @@ export type Action =
   | { type: "history"; channelId: string; events: SequencedEvent[]; through: number; at: number }
   /** The server says we're no longer a member (history refused). */
   | { type: "lostAccess"; channelId: string }
+  /** Another member read a DM up to `msgSeq` (a read receipt). */
+  | { type: "receipt"; channelId: string; userId: string; msgSeq: number }
   /** I added or removed a reaction: shown at once, the server's count follows (~1 s). */
   | { type: "react"; channelId: string; msgSeq: number; emoji: string; add: boolean }
   /** Unread mentions from the server (sync); merged as a set, so repeats change nothing. */
@@ -251,6 +255,11 @@ export function reduce(state: ChatState, action: Action): ChatState {
         next = withChannel(next, { ...channel, syncedSeq: action.through, eventSeq: Math.max(channel.eventSeq, action.through) });
       }
       return next;
+    }
+    case "receipt": {
+      const channel = state.channels[action.channelId];
+      if (!channel || action.userId === state.me || action.msgSeq <= (channel.seenBy?.[action.userId] ?? 0)) return state;
+      return withChannel(state, { ...channel, seenBy: { ...channel.seenBy, [action.userId]: action.msgSeq } });
     }
     case "react": {
       return withMessages(state, action.channelId, (list) =>

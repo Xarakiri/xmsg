@@ -20,6 +20,7 @@ message ClientFrame {
     Typing typing = 4;
     WatchPresence watch_presence = 5;
     Activity activity = 6;
+    Receipt receipt = 7;
   }
 }
 
@@ -52,6 +53,13 @@ message WatchPresence {
   repeated int64 user_ids = 1;
 }
 
+// "I've read this DM up to here" (ADR-0012): shown to the other members as a read
+// receipt. DMs and group DMs only; best-effort, never stored or sequenced.
+message Receipt {
+  int64 channel_id = 1;
+  int64 msg_seq = 2;
+}
+
 // Whether the user is active on this connection (the app is in front and used
 // recently) or idle. Connections start active.
 message Activity {
@@ -72,6 +80,7 @@ message ServerFrame {
     SendRejected send_rejected = 6;
     TypingIndicator typing = 7;
     PresenceUpdates presence = 8;
+    ReadReceipt receipt = 9;
   }
 }
 
@@ -88,6 +97,14 @@ message Welcome {
 message TypingIndicator {
   int64 channel_id = 1;
   int64 user_id = 2;
+}
+
+// Someone else in a DM read it up to `msg_seq`. Also what gateways publish on
+// `receipts.{partition}` for the owning fan-out.
+message ReadReceipt {
+  int64 channel_id = 1;
+  int64 user_id = 2;
+  int64 msg_seq = 3;
 }
 
 // Statuses of watched users: the current ones after a WatchPresence, then changes.

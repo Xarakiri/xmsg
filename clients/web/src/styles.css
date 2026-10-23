@@ -120,3 +120,4 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .presence.online { background: #2f9e44; border-color: #2f9e44; }
 .presence.away { background: transparent; border-color: #2f9e44; }
 .presence.offline { opacity: 0.45; }
+.message .seen { text-align: right; margin-top: 2px; }

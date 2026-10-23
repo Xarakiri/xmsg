@@ -52,9 +52,9 @@ use tokio_tungstenite::{connect_async, tungstenite::Message as Ws};
 use xmsg_proto::Message;
 use xmsg_proto::v1::{
     Activity, ChannelCreated, ChannelType, ClientFrame, Connect, InboundEvent, PresenceStatus,
-    PresenceUpdate, RejectReason, SendMessageRequest, SequencedEvent, ServerFrame, ThreadRoot,
-    Typing, TypingIndicator, WatchPresence, client_frame, inbound_event, sequenced_event,
-    server_frame,
+    PresenceUpdate, ReadReceipt, Receipt, RejectReason, SendMessageRequest, SequencedEvent,
+    ServerFrame, ThreadRoot, Typing, TypingIndicator, WatchPresence, client_frame, inbound_event,
+    sequenced_event, server_frame,
 };
 
 type Socket =
@@ -207,6 +207,7 @@ async fn run() -> Result<(), String> {
         if let Ok(messages_url) = std::env::var("XMSG_MESSAGES_URL") {
             check_reactions(url, &messages_url, &mut clients, &users, run_id).await?;
             check_threads(url, &messages_url, &mut clients, &users, run_id).await?;
+            check_receipts(url, &mut clients, &users, channel).await?;
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
@@ -549,6 +550,92 @@ async fn check_membership_endpoint(
     println!(
         "membership endpoint: the sequencer serves alice and bob at version 6; an unknown channel is 404"
     );
+    Ok(())
+}
+
+/// Read receipts (ADR-0012): in a DM, bob's receipt reaches alice; in a channel, nobody's.
+async fn check_receipts(
+    channels_url: &str,
+    clients: &mut [Client; 3],
+    users: &[(i64, String)],
+    channel: i64,
+) -> Result<(), String> {
+    use sequenced_event::Payload;
+    let (alice, bob) = (&users[0], &users[1]);
+    let (status, reply) = call(
+        "POST",
+        &format!("{channels_url}/v1/dms"),
+        &alice.1,
+        Some(serde_json::json!({"user_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if status != 200 && status != 201 {
+        return Err(format!("receipts: opening the DM: {status} {reply}"));
+    }
+    let dm: i64 = reply["channel_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("receipts: no channel_id")?;
+    // A message, so the DM is live in fan-out (it learns the channel's type from events).
+    send(&mut clients[0].ws, dm, "dm-hello").await?;
+    expect_ack(&mut clients[0], "dm-hello").await?;
+    let sent = |events: &[SequencedEvent]| {
+        events
+            .iter()
+            .find(|e| {
+                e.channel_id == dm
+                    && e.dedupe_id == "dm-hello"
+                    && matches!(e.payload, Some(Payload::MessageCreated(_)))
+            })
+            .map(|e| e.msg_seq)
+    };
+    wait_events(&mut clients[1], |e| sent(e).is_some()).await?;
+    let msg_seq = sent(&clients[1].events).ok_or("receipts: bob didn't get the DM")?;
+    async fn receipt_seen(client: &mut Client, within: Duration) -> Option<ReadReceipt> {
+        let deadline = tokio::time::Instant::now() + within;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, next_frame(client)).await {
+                Ok(Ok(server_frame::Frame::Receipt(r))) => return Some(r),
+                Ok(Ok(_)) => {}
+                _ => break,
+            }
+        }
+        None
+    }
+    let receipt = |channel_id: i64, msg_seq: i64| {
+        ClientFrame {
+            frame: Some(client_frame::Frame::Receipt(Receipt {
+                channel_id,
+                msg_seq,
+            })),
+        }
+        .encode_to_vec()
+    };
+    let [alice_ws, bob_ws, _] = clients;
+    // In a channel (not a DM): dropped.
+    bob_ws
+        .ws
+        .send(Ws::Binary(receipt(channel, 1).into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(r) = receipt_seen(alice_ws, Duration::from_secs(2)).await {
+        return Err(format!("receipts: a channel receipt reached alice: {r:?}"));
+    }
+    bob_ws
+        .ws
+        .send(Ws::Binary(receipt(dm, msg_seq).into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    let got = receipt_seen(alice_ws, Duration::from_secs(10)).await;
+    let want = ReadReceipt {
+        channel_id: dm,
+        user_id: bob.0,
+        msg_seq,
+    };
+    if got.as_ref() != Some(&want) {
+        return Err(format!("receipts: alice expected {want:?}, got {got:?}"));
+    }
+    println!("receipts: bob's DM receipt reached alice; a receipt in a channel reached nobody");
     Ok(())
 }
 

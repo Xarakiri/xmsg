@@ -29,7 +29,6 @@ Clients show changes at once; the owner applies them a few milliseconds later. A
 - `read_state.last_mention_seq` (set by the owner), so the mentions read can skip channels with nothing new without reading their rows; today it reads each channel's `user_mentions` partition, and `channel_mentions` only when the head has a newer `@channel`.
 - Mentions in thread replies and in edits.
 - Thread read state.
-- Read receipts in DMs (`receipts.{partition}` via fan-out).
 - Mark-read through the gateway socket instead of HTTP.
 - An owner-side cache (today each event costs one read and one write).
 

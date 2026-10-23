@@ -60,6 +60,7 @@ export function useChat(me: string, initial: ChatState) {
         }
         dispatch({ type: "event", event, at: Date.now() });
       },
+      onReceipt: (channelId, userId, msgSeq) => dispatch({ type: "receipt", channelId, userId, msgSeq }),
       onPresence: (updates) =>
         setPresence((p) => {
           const next = { ...p };
@@ -161,6 +162,8 @@ export function useChat(me: string, initial: ChatState) {
     if (!channel || channel.msgSeq <= channel.readSeq) return;
     const msgSeq = channel.msgSeq;
     dispatch({ type: "markRead", channelId, msgSeq });
+    // DMs: the other members see "Seen" (ADR-0012; the fan-out ignores other channels).
+    if (channel.kind === "dm" || channel.kind === "group_dm") conn.current?.receipt(channelId, msgSeq);
     void session
       .accessToken()
       .then((token) => api.markRead(token, channelId, msgSeq))

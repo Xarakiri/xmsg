@@ -418,6 +418,12 @@ function Conversation({
   const [note, setNote] = useState("");
   // The message being edited: its key, the new text, and the edit_id reused on retries.
   const [editing, setEditing] = useState<{ key: string; text: string; editId: string } | null>(null);
+  // Read receipts (DMs): "Seen" under my latest message the others have read.
+  const isDm = channel.kind === "dm" || channel.kind === "group_dm";
+  const lastMine = isDm ? [...messages].reverse().find((m) => m.authorId === me && m.msgSeq > 0) : undefined;
+  const readers = lastMine ? Object.entries(channel.seenBy ?? {}).filter(([, seq]) => seq >= lastMine.msgSeq).length : 0;
+  const lastSeenKey = lastMine?.key;
+  const seenText = readers === 0 ? "" : channel.kind === "dm" ? "Seen" : `Seen by ${readers}`;
   const bottom = useRef<HTMLDivElement>(null);
   // Block bodies: an effect may only return a cleanup function, and scrollIntoView
   // returns a Promise in browsers with scroll promises.
@@ -559,6 +565,7 @@ function Conversation({
                 {m.replyCount ? `${m.replyCount} ${m.replyCount === 1 ? "reply" : "replies"}` : "Reply"}
               </button>
             )}
+            {m.key === lastSeenKey && seenText && <div className="seen muted small">{seenText}</div>}
             {m.msgSeq > 0 && !m.deleted && <Reactions reactions={m.reactions ?? {}} onToggle={(emoji, add) => onReact(m.msgSeq, emoji, add)} />}
             {m.error && (
               <div className="error small">

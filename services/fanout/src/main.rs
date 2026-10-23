@@ -16,8 +16,8 @@ use xmsg_fanout::streams::Streams;
 use xmsg_fanout::{by_gateway, recipients, typing_recipients};
 use xmsg_proto::Message;
 use xmsg_proto::v1::{
-    Delivery, GatewayBatch, SequencedEvent, ServerFrame, SessionEvent, TypingIndicator,
-    server_frame,
+    Delivery, GatewayBatch, ReadReceipt, SequencedEvent, ServerFrame, SessionEvent,
+    TypingIndicator, server_frame,
 };
 
 const EVENTS_TOPIC: &str = "messages.persisted";
@@ -198,6 +198,11 @@ async fn main() -> ExitCode {
         Ok(s) => s,
         Err(e) => return fail(&format!("subscribing to typing.*: {e}")),
     };
+    // Read receipts (ADR-0012): the same path, for DMs and group DMs only.
+    let mut receipts = match nats.subscribe("receipts.*").await {
+        Ok(s) => s,
+        Err(e) => return fail(&format!("subscribing to receipts.*: {e}")),
+    };
     let mut membership = Membership::default();
     let mut streams = Streams::default();
     let mut heads_tick = tokio::time::interval(Duration::from_secs(1));
@@ -223,18 +228,21 @@ async fn main() -> ExitCode {
                     && let Some(members) = membership.get(notice.channel_id)
                     && let Some(to) = typing_recipients(members, notice.user_id)
                 {
-                    let frame = ServerFrame {
-                        frame: Some(server_frame::Frame::Typing(notice)),
-                    }
-                    .encode_to_vec();
-                    // Bound first, so the sessions lock is released before any await.
-                    let grouped = by_gateway(&to, &sessions.read().unwrap());
-                    for (gateway, user_ids) in grouped {
-                        let delivery = Delivery { user_ids, server_frame: frame.clone() };
-                        let _ = nats
-                            .publish(format!("gw.{gateway}.ephemeral"), delivery.encode_to_vec().into())
-                            .await;
-                    }
+                    let frame = server_frame::Frame::Typing(notice);
+                    relay_ephemeral(&nats, &sessions, &to, frame).await;
+                }
+                continue;
+            }
+            Some(msg) = futures_util::StreamExt::next(&mut receipts) => {
+                let partition = msg.subject.rsplit('.').next().and_then(|p| p.parse::<i32>().ok());
+                if partition.is_some_and(|p| owned.lock().unwrap().contains(&p))
+                    && let Ok(receipt) = ReadReceipt::decode(msg.payload.as_ref())
+                    && receipt.msg_seq > 0
+                    && membership.is_dm(receipt.channel_id)
+                    && let Some(members) = membership.get(receipt.channel_id)
+                    && let Some(to) = typing_recipients(members, receipt.user_id)
+                {
+                    relay_ephemeral(&nats, &sessions, &to, server_frame::Frame::Receipt(receipt)).await;
                 }
                 continue;
             }
@@ -311,6 +319,31 @@ async fn main() -> ExitCode {
     }
     let _ = nats.flush().await;
     ExitCode::SUCCESS
+}
+
+/// Sends a best-effort frame (typing, receipts) to `to` on their gateways' unsequenced
+/// `gw.{id}.ephemeral` subjects: a lost one is never a delivery gap.
+async fn relay_ephemeral(
+    nats: &async_nats::Client,
+    sessions: &RwLock<SessionMap>,
+    to: &std::collections::HashSet<i64>,
+    frame: server_frame::Frame,
+) {
+    let frame = ServerFrame { frame: Some(frame) }.encode_to_vec();
+    // Bound first, so the sessions lock is released before any await.
+    let grouped = by_gateway(to, &sessions.read().unwrap());
+    for (gateway, user_ids) in grouped {
+        let delivery = Delivery {
+            user_ids,
+            server_frame: frame.clone(),
+        };
+        let _ = nats
+            .publish(
+                format!("gw.{gateway}.ephemeral"),
+                delivery.encode_to_vec().into(),
+            )
+            .await;
+    }
 }
 
 /// Follows `topic` from the beginning on a background thread, calling `apply(key, payload)`

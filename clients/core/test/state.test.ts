@@ -345,3 +345,11 @@ test("thread replies live under the thread, count on the root, and never move ms
   s = reduce(s, { type: "threadLoaded", channelId: "7", root, replies: [{ replySeq: 3, messageId: "5003", authorId: "102", body: "late" }] });
   assert.deepEqual(s.messages[key]!.map((m) => m.msgSeq), [1, 2, 3]);
 });
+
+test("read receipts only move forward and never come from me", () => {
+  let s = apply(initialState(ME), created);
+  for (const [userId, msgSeq] of [["102", 3], ["102", 2], ["101", 9], ["102", 5]] as const) {
+    s = reduce(s, { type: "receipt", channelId: "7", userId, msgSeq });
+  }
+  assert.deepEqual(s.channels["7"]!.seenBy, { "102": 5 });
+});
