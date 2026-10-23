@@ -282,6 +282,9 @@ pub fn summary(e: &SequencedEvent) -> String {
         Some(Payload::MemberLeft(l)) => format!("left {}", l.user_id),
         Some(Payload::Rejected(r)) => format!("rejected {} {:?}", e.dedupe_id, r.reason),
         Some(Payload::ChannelModeChanged(m)) => format!("mode {:?}", m.mode),
+        // History rebuilds an edit from the current row, so the body isn't compared.
+        Some(Payload::MessageEdited(m)) => format!("edited msg_seq={}", m.msg_seq),
+        Some(Payload::MessageDeleted(m)) => format!("deleted msg_seq={}", m.msg_seq),
         None => "empty".into(),
     }
 }
