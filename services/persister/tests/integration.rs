@@ -221,8 +221,19 @@ async fn sequenced_events_become_rows_and_replays_change_nothing() {
         .unwrap()
         .into_rows_result()
         .unwrap()
-        .maybe_first_row::<(i64, i64, i64, String, String)>()
+        // Polled while the persister writes: right after channel.created the head has no
+        // msg_seq yet (null), which is a "not there yet", not an error.
+        .maybe_first_row::<(Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<String>)>()
         .unwrap()
+        .map(|(e, m, v, f, t)| {
+            (
+                e.unwrap_or_default(),
+                m.unwrap_or_default(),
+                v.unwrap_or_default(),
+                f.unwrap_or_default(),
+                t.unwrap_or_default(),
+            )
+        })
         .unwrap_or_default()
     };
     wait_for(
