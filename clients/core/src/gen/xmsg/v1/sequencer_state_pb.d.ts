@@ -163,3 +163,33 @@ export declare type ReactionCountState = Message<"xmsg.v1.ReactionCountState"> &
  */
 export declare const ReactionCountStateSchema: GenMessage<ReactionCountState>;
 
+/**
+ * One thread, by its root (channel, msg_seq): store `threads` (ADR-0005).
+ *
+ * @generated from message xmsg.v1.ThreadState
+ */
+export declare type ThreadState = Message<"xmsg.v1.ThreadState"> & {
+  /**
+   * @generated from field: uint32 format_version = 1;
+   */
+  formatVersion: number;
+
+  /**
+   * Pinned by the first reply; later replies must name the same root.
+   *
+   * @generated from field: int64 root_message_id = 2;
+   */
+  rootMessageId: bigint;
+
+  /**
+   * @generated from field: int64 reply_count = 3;
+   */
+  replyCount: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.ThreadState.
+ * Use `create(ThreadStateSchema)` to create a new message.
+ */
+export declare const ThreadStateSchema: GenMessage<ThreadState>;
+

@@ -15,6 +15,7 @@ import {
   type Action,
   type ChatState,
   type ConnectionStatus,
+  type ThreadRootRef,
 } from "@xmsg/client-core";
 import { api, gatewayUrl, session } from "./session.ts";
 import { saveState } from "./storage.ts";
@@ -64,7 +65,7 @@ export function useChat(me: string, initial: ChatState) {
         if (s !== "online") return;
         // Back online: resend the outbox (the sequencer drops repeats), then catch up on
         // what happened meanwhile. Live events keep flowing during the sync.
-        for (const m of unsent(latest.current)) connection.send(m.channelId, m.key, m.body);
+        for (const m of unsent(latest.current)) connection.send(m.channelId, m.key, m.body, m.threadRoot);
         scheduler.request();
       },
       onResync: (partition) =>
@@ -108,11 +109,20 @@ export function useChat(me: string, initial: ChatState) {
   /** Call on every keystroke in the composer; the connection throttles. */
   const notifyTyping = (channelId: string) => conn.current?.typing(channelId);
 
-  const send = (channelId: string, body: string) => {
+  /** A message, or a thread reply when `threadRoot` is given (ADR-0005). */
+  const send = (channelId: string, body: string, threadRoot?: ThreadRootRef) => {
     const clientMsgId = crypto.randomUUID();
-    dispatch({ type: "send", channelId, clientMsgId, body, at: Date.now() });
-    conn.current?.send(channelId, clientMsgId, body); // if offline it goes out on reconnect
+    dispatch({ type: "send", channelId, clientMsgId, body, at: Date.now(), threadRoot });
+    conn.current?.send(channelId, clientMsgId, body, threadRoot); // if offline it goes out on reconnect
   };
+
+  /** Loads a thread's replies (live ones keep arriving as events). */
+  const openThread = (channelId: string, root: ThreadRootRef) =>
+    void session
+      .accessToken()
+      .then((token) => api.thread(token, channelId, root.msgSeq))
+      .then(({ replies }) => dispatch({ type: "threadLoaded", channelId, root, replies }))
+      .catch(() => undefined); // shown from what we have; the next open tries again
 
   const nameChannel = (channelId: string, name: string) => dispatch({ type: "channelNamed", channelId, name });
 
@@ -159,8 +169,8 @@ export function useChat(me: string, initial: ChatState) {
     if (!message) return;
     const newKey = crypto.randomUUID();
     dispatch({ type: "retry", oldKey, newKey, at: Date.now() });
-    conn.current?.send(message.channelId, newKey, message.body);
+    conn.current?.send(message.channelId, newKey, message.body, message.threadRoot);
   };
 
-  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react };
+  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread };
 }

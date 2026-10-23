@@ -30,6 +30,9 @@ object Names {
     const val STORE_REACTIONS = "reactions"
     const val STORE_REACTION_COUNTS = "reaction-counts"
 
+    /** Phase 2 (ADR-0005): reply counts per thread root. */
+    const val STORE_THREADS = "threads"
+
     /** Stores every installation that has processed data must have changelogs for. */
     val ALL_STORES = setOf(STORE_CHANNEL_HEADS, STORE_MEMBERS, STORE_DEDUPE, STORE_PARTITION_STATE)
 
@@ -38,7 +41,7 @@ object Names {
      * adds one has no changelog for it yet and starts it empty, which is correct (nothing
      * was ever in it), so the startup check doesn't require them. Same names contract.
      */
-    val ADDED_STORES = setOf(STORE_REACTIONS, STORE_REACTION_COUNTS)
+    val ADDED_STORES = setOf(STORE_REACTIONS, STORE_REACTION_COUNTS, STORE_THREADS)
 
     fun changelogTopic(store: String) = "$APPLICATION_ID-$store-changelog"
 }

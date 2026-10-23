@@ -8,7 +8,7 @@ use scylla::statement::Consistency;
 use scylla::statement::prepared::PreparedStatement;
 use xmsg_proto::v1::ChannelType;
 
-use crate::history::{EventRow, Head, MessageRow, Store};
+use crate::history::{EventRow, Head, MessageRow, ReplyRow, Store};
 
 pub struct Cassandra {
     session: Session,
@@ -16,6 +16,7 @@ pub struct Cassandra {
     head: PreparedStatement,
     events: PreparedStatement,
     messages: PreparedStatement,
+    thread: PreparedStatement,
 }
 
 fn channel_type(name: &str) -> i32 {
@@ -58,6 +59,11 @@ impl Cassandra {
                  WHERE channel_id = ? AND bucket = ? AND msg_seq >= ? AND msg_seq <= ?"
             ))
             .await?,
+            thread: prepare(format!(
+                "SELECT reply_seq, message_id, author_id, body FROM {k}.thread_messages \
+                 WHERE channel_id = ? AND thread_root = ? AND reply_seq > ? ORDER BY reply_seq ASC LIMIT ?"
+            ))
+            .await?,
             session,
         })
     }
@@ -68,6 +74,36 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 impl Store for Cassandra {
+    async fn thread(
+        &self,
+        channel_id: i64,
+        root_msg_seq: i64,
+        after: i64,
+        limit: usize,
+    ) -> Result<Vec<ReplyRow>, String> {
+        self.session
+            .execute_unpaged(
+                &self.thread,
+                (channel_id, root_msg_seq, after, limit as i32),
+            )
+            .await
+            .map_err(err)?
+            .into_rows_result()
+            .map_err(err)?
+            .rows::<(i64, i64, Option<i64>, Option<String>)>()
+            .map_err(err)?
+            .map(|r| {
+                r.map(|(reply_seq, message_id, author_id, body)| ReplyRow {
+                    reply_seq,
+                    message_id,
+                    author_id: author_id.unwrap_or_default(),
+                    body: body.unwrap_or_default(),
+                })
+                .map_err(err)
+            })
+            .collect()
+    }
+
     async fn is_member(&self, channel_id: i64, user_id: i64) -> Result<bool, String> {
         let rows = self
             .session

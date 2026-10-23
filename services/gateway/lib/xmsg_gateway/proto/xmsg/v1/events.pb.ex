@@ -86,6 +86,18 @@ defmodule Xmsg.V1.ReactionOp do
   field :counter, 3, type: :int64
 end
 
+defmodule Xmsg.V1.ThreadRoot do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ThreadRoot",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :msg_seq, 1, type: :int64, json_name: "msgSeq"
+  field :message_id, 2, type: :int64, json_name: "messageId"
+end
+
 defmodule Xmsg.V1.SendMessage do
   @moduledoc false
 
@@ -95,6 +107,7 @@ defmodule Xmsg.V1.SendMessage do
     syntax: :proto3
 
   field :body, 1, type: :string
+  field :thread_root, 2, type: Xmsg.V1.ThreadRoot, json_name: "threadRoot"
 end
 
 defmodule Xmsg.V1.ChannelCreated do
@@ -169,6 +182,7 @@ defmodule Xmsg.V1.SequencedEvent do
     json_name: "reactionsChanged",
     oneof: 0
 
+  field :thread_reply, 20, type: Xmsg.V1.ThreadReply, json_name: "threadReply", oneof: 0
   field :message_edited, 17, type: Xmsg.V1.MessageEdited, json_name: "messageEdited", oneof: 0
   field :message_deleted, 18, type: Xmsg.V1.MessageDeleted, json_name: "messageDeleted", oneof: 0
 end
@@ -234,6 +248,23 @@ defmodule Xmsg.V1.MemberLeft do
     syntax: :proto3
 
   field :user_id, 1, type: :int64, json_name: "userId"
+end
+
+defmodule Xmsg.V1.ThreadReply do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ThreadReply",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :message_id, 1, type: :int64, json_name: "messageId"
+  field :body, 2, type: :string
+  field :root_msg_seq, 3, type: :int64, json_name: "rootMsgSeq"
+  field :root_message_id, 4, type: :int64, json_name: "rootMessageId"
+  field :reply_seq, 5, type: :int64, json_name: "replySeq"
+  field :reply_count, 6, type: :int64, json_name: "replyCount"
+  field :mentioned_user_ids, 7, repeated: true, type: :int64, json_name: "mentionedUserIds"
 end
 
 defmodule Xmsg.V1.ReactionsChanged do

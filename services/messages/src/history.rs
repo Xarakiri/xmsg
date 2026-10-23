@@ -41,6 +41,15 @@ pub struct EventRow {
     pub payload: Vec<u8>,
 }
 
+/// One `thread_messages` row: a reply.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplyRow {
+    pub reply_seq: i64,
+    pub message_id: i64,
+    pub author_id: i64,
+    pub body: String,
+}
+
 /// One `messages` row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageRow {
@@ -86,6 +95,16 @@ pub trait Store: Send + Sync + 'static {
         from: i64,
         to: i64,
     ) -> impl Future<Output = Result<Vec<MessageRow>, String>> + Send;
+    /// A thread's replies after `after`, in reply_seq order, at most `limit`.
+    fn thread(
+        &self,
+        _channel_id: i64,
+        _root_msg_seq: i64,
+        _after: i64,
+        _limit: usize,
+    ) -> impl Future<Output = Result<Vec<ReplyRow>, String>> + Send {
+        async { Ok(Vec::new()) }
+    }
 }
 
 /// Reads up to `limit` events after `after` and rebuilds them.
@@ -207,6 +226,10 @@ pub struct App<S, L> {
 pub fn router<S: Store, L: EventLog + Send + Sync + 'static>(app: Arc<App<S, L>>) -> Router {
     Router::new()
         .route("/v1/channels/{channel_id}/events", get(events::<S, L>))
+        .route(
+            "/v1/channels/{channel_id}/threads/{root_msg_seq}",
+            get(crate::threads::replies::<S, L>),
+        )
         .route(
             "/v1/channels/{channel_id}/messages/{msg_seq}",
             axum::routing::patch(crate::edits::edit::<S, L>).delete(crate::edits::delete::<S, L>),

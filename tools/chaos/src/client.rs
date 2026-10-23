@@ -126,6 +126,7 @@ fn send_frame(id: &str, channel: i64, body: &str) -> Ws {
         channel_id: channel,
         client_msg_id: id.into(),
         body: body.into(),
+        ..Default::default()
     }))
 }
 

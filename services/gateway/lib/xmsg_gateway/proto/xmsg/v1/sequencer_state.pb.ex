@@ -66,3 +66,16 @@ defmodule Xmsg.V1.ReactionCountState do
   field :format_version, 1, type: :uint32, json_name: "formatVersion"
   field :count, 2, type: :int64
 end
+
+defmodule Xmsg.V1.ThreadState do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ThreadState",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :format_version, 1, type: :uint32, json_name: "formatVersion"
+  field :root_message_id, 2, type: :int64, json_name: "rootMessageId"
+  field :reply_count, 3, type: :int64, json_name: "replyCount"
+end

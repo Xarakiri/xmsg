@@ -47,3 +47,11 @@ message ReactionCountState {
   uint32 format_version = 1;
   int64 count = 2;
 }
+
+// One thread, by its root (channel, msg_seq): store `threads` (ADR-0005).
+message ThreadState {
+  uint32 format_version = 1;
+  // Pinned by the first reply; later replies must name the same root.
+  int64 root_message_id = 2;
+  int64 reply_count = 3;
+}

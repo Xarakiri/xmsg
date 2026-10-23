@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, mentionCount, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
+import { ApiError, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
@@ -129,7 +129,9 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
 }
 
 function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react } = useChat(me, initial);
+  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread } = useChat(me, initial);
+  // The thread open next to the conversation: its root message's msg_seq.
+  const [threadOf, setThreadOf] = useState<number | null>(null);
   const names = useNames(me);
   const [selected, setSelected] = useState<string | null>(null);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
@@ -212,10 +214,30 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
             typing={typingIn(current.id)}
             onTyping={() => notifyTyping(current.id)}
             onReact={(msgSeq, emoji, add) => react(current.id, msgSeq, emoji, add)}
+            onOpenThread={(m) => {
+              setThreadOf(m.msgSeq);
+              openThread(current.id, { msgSeq: m.msgSeq, messageId: messageIdOf(m) });
+            }}
           />
         ) : (
           <div className="center muted">{channels.length ? "Pick a conversation" : "Create a channel or start a DM"}</div>
         )}
+        {current && threadOf !== null && (() => {
+          const root = (state.messages[current.id] ?? []).find((m) => m.msgSeq === threadOf);
+          if (!root) return null;
+          const ref = { msgSeq: root.msgSeq, messageId: messageIdOf(root) };
+          return (
+            <ThreadPanel
+              root={root}
+              replies={state.messages[threadKey(current.id, root.msgSeq)] ?? []}
+              me={me}
+              names={names}
+              onSend={(b) => send(current.id, b, ref)}
+              onRetry={retry}
+              onClose={() => setThreadOf(null)}
+            />
+          );
+        })()}
       </main>
     </div>
   );
@@ -351,6 +373,7 @@ function Conversation({
   typing,
   onTyping,
   onReact,
+  onOpenThread,
 }: {
   channel: Channel;
   me: string;
@@ -362,6 +385,7 @@ function Conversation({
   typing: string[];
   onTyping: () => void;
   onReact: (msgSeq: number, emoji: string, add: boolean) => void;
+  onOpenThread: (root: Message) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
@@ -502,6 +526,11 @@ function Conversation({
             ) : (
               <div className="body">{renderBody(m.body, me, names)}</div>
             )}
+            {m.msgSeq > 0 && !m.deleted && messageIdOf(m) && (
+              <button className="link small thread-link" onClick={() => onOpenThread(m)}>
+                {m.replyCount ? `${m.replyCount} ${m.replyCount === 1 ? "reply" : "replies"}` : "Reply"}
+              </button>
+            )}
             {m.msgSeq > 0 && !m.deleted && <Reactions reactions={m.reactions ?? {}} onToggle={(emoji, add) => onReact(m.msgSeq, emoji, add)} />}
             {m.error && (
               <div className="error small">
@@ -636,5 +665,91 @@ function Reactions({
         </button>
       )}
     </div>
+  );
+}
+
+/** A sequenced message's message_id (needed to reply in its thread), if this client knows it. */
+function messageIdOf(m: Message): string {
+  return m.messageId ?? "";
+}
+
+/** A thread next to the conversation: the root, its replies and a composer. */
+function ThreadPanel({
+  root,
+  replies,
+  me,
+  names,
+  onSend,
+  onRetry,
+  onClose,
+}: {
+  root: Message;
+  replies: Message[];
+  me: string;
+  names: Directory;
+  onSend: (body: string) => void;
+  onRetry: (key: string) => void;
+  onClose: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const submit = (e?: FormEvent) => {
+    e?.preventDefault();
+    const body = draft.trim();
+    if (!body) return;
+    onSend(body);
+    setDraft("");
+  };
+  const who = (id: string) => (id === me ? "You" : names.label(id));
+  return (
+    <aside className="thread" aria-label="Thread">
+      <header className="conv-header">
+        <div className="strong">Thread</div>
+        <button className="link" onClick={onClose} aria-label="Close thread">
+          Close
+        </button>
+      </header>
+      <ol className="messages">
+        <li className="message root">
+          <div className="meta">
+            <span className="strong">{who(root.authorId)}</span>
+          </div>
+          <div className="body">{root.deleted ? "This message was deleted." : renderBody(root.body, me, names)}</div>
+        </li>
+        {replies.map((r) => (
+          <li key={r.key} className={`message ${r.authorId === me ? "own" : ""} ${r.status}`}>
+            <div className="meta">
+              <span className="strong">{who(r.authorId)}</span>
+              {r.status === "pending" && <span className="muted small">sending…</span>}
+            </div>
+            <div className="body">{renderBody(r.body, me, names)}</div>
+            {r.error && (
+              <div className="error small">
+                {r.error}
+                {r.status === "failed" && (
+                  <>
+                    {" · "}
+                    <button className="link" onClick={() => onRetry(r.key)}>
+                      Retry
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+      <form className="composer" onSubmit={submit}>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) submit(e);
+          }}
+          placeholder="Reply…"
+          rows={2}
+        />
+        <button type="submit">Send</button>
+      </form>
+    </aside>
   );
 }

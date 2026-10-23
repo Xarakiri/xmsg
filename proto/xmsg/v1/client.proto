@@ -31,6 +31,9 @@ message SendMessageRequest {
   int64 channel_id = 1;
   string client_msg_id = 2;
   string body = 3;
+  // A thread reply: the root message's msg_seq and message_id (ADR-0005). Unset for a
+  // top-level message.
+  ThreadRoot thread_root = 4;
 }
 
 // "I'm typing in this channel." Best-effort: the gateway passes on at most one per

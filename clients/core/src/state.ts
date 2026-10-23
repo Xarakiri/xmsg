@@ -50,6 +50,8 @@ export interface Message {
   body: string;
   /** 0 until the sequencer has ordered it. */
   msgSeq: number;
+  /** The sequencer's message_id, once known (a thread reply names its root by it). */
+  messageId?: string;
   status: MessageStatus;
   error?: string;
   at: number;
@@ -61,6 +63,23 @@ export interface Message {
   deleted?: boolean;
   /** Reactions by emoji (ADR-0015); absent until the first one. */
   reactions?: Record<string, Reaction>;
+  /** Replies in its thread (root messages only; absent until the first one). */
+  replyCount?: number;
+  /**
+   * Set on thread replies: the root they belong to. A reply lives in the messages list
+   * under `threadKey(channelId, root.msgSeq)`, and its `msgSeq` holds its reply_seq.
+   */
+  threadRoot?: ThreadRootRef;
+}
+
+export interface ThreadRootRef {
+  msgSeq: number;
+  messageId: string;
+}
+
+/** Where a thread's replies are kept in `ChatState.messages`. */
+export function threadKey(channelId: string, rootMsgSeq: number): string {
+  return `${channelId}#${rootMsgSeq}`;
 }
 
 export interface Reaction {
@@ -80,7 +99,9 @@ export interface ChatState {
 
 export type Action =
   | { type: "event"; event: SequencedEvent; at: number }
-  | { type: "send"; channelId: string; clientMsgId: string; body: string; at: number }
+  | { type: "send"; channelId: string; clientMsgId: string; body: string; at: number; threadRoot?: ThreadRootRef }
+  /** A thread's replies from the server (opening the thread). */
+  | { type: "threadLoaded"; channelId: string; root: ThreadRootRef; replies: LoadedReply[] }
   | { type: "ack"; clientMsgId: string }
   | { type: "sendRejected"; clientMsgId: string; reason: RejectReason; detail: string }
   | { type: "channelNamed"; channelId: string; name: string }
@@ -104,6 +125,13 @@ export type Action =
   | { type: "react"; channelId: string; msgSeq: number; emoji: string; add: boolean }
   /** Unread mentions from the server (sync); merged as a set, so repeats change nothing. */
   | { type: "mentions"; mentions: { channelId: string; msgSeqs: number[] }[] };
+
+export interface LoadedReply {
+  replySeq: number;
+  messageId: string;
+  authorId: string;
+  body: string;
+}
 
 export interface ListedChannel {
   id: string;
@@ -162,8 +190,30 @@ export function reduce(state: ChatState, action: Action): ChatState {
         msgSeq: 0,
         status: "pending",
         at: action.at,
+        ...(action.threadRoot && { threadRoot: action.threadRoot }),
       };
-      return withMessages(state, action.channelId, (list) => [...list, message]);
+      const listKey = action.threadRoot ? threadKey(action.channelId, action.threadRoot.msgSeq) : action.channelId;
+      return withMessages(state, listKey, (list) => [...list, message]);
+    }
+    case "threadLoaded": {
+      const key = threadKey(action.channelId, action.root.msgSeq);
+      return withMessages(state, key, (list) => {
+        const known = new Set(list.filter((m) => m.msgSeq > 0).map((m) => m.msgSeq));
+        const loaded: Message[] = action.replies
+          .filter((r) => !known.has(r.replySeq))
+          .map((r) => ({
+            key: `reply:${r.replySeq}`,
+            channelId: action.channelId,
+            authorId: r.authorId,
+            body: r.body,
+            msgSeq: r.replySeq,
+            messageId: r.messageId,
+            status: "confirmed",
+            at: 0,
+            threadRoot: action.root,
+          }));
+        return loaded.length ? sortMessages([...list, ...loaded]) : list;
+      });
     }
     case "ack":
       return updateOwn(state, action.clientMsgId, (m) => (m.status === "pending" ? { ...m, status: "sent" } : m));
@@ -344,6 +394,7 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
         authorId: actor,
         body: payload.value.body,
         msgSeq,
+        messageId: payload.value.messageId.toString(),
         status: "confirmed",
         at,
       };
@@ -378,6 +429,35 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
             : m,
         ),
       );
+    }
+    case "threadReply": {
+      const r = payload.value;
+      const root: ThreadRootRef = { msgSeq: Number(r.rootMsgSeq), messageId: r.rootMessageId.toString() };
+      const replySeq = Number(r.replySeq);
+      const own = actor === state.me && e.dedupeId !== "";
+      const incoming: Message = {
+        key: own ? e.dedupeId : `reply:${replySeq}`,
+        channelId,
+        authorId: actor,
+        body: r.body,
+        msgSeq: replySeq,
+        messageId: r.messageId.toString(),
+        status: "confirmed",
+        at,
+        threadRoot: root,
+      };
+      // The root shows how many replies it has (absolute, so repeats change nothing).
+      let next = withMessages(withChannel(state, channel), channelId, (list) =>
+        list.map((m) =>
+          m.msgSeq === root.msgSeq && (m.replyCount ?? 0) < Number(r.replyCount) ? { ...m, replyCount: Number(r.replyCount) } : m,
+        ),
+      );
+      next = withMessages(next, threadKey(channelId, root.msgSeq), (list) => {
+        const rest = list.filter((m) => m.key !== incoming.key && !(m.msgSeq !== 0 && m.msgSeq === replySeq));
+        const mine = list.find((m) => m.key === incoming.key);
+        return sortMessages([...rest, mine ? { ...incoming, at: mine.at } : incoming]);
+      });
+      return next;
     }
     case "reactionsChanged": {
       const r = payload.value;

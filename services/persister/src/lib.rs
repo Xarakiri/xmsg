@@ -31,6 +31,20 @@ pub enum Write {
         client_msg_id: String,
         body: String,
     },
+    /// A thread reply (ADR-0005): its `thread_messages` row, then the root's absolute
+    /// `reply_count` and `last_reply_at`, only if the root row exists (read first: the
+    /// persister is the only writer, and a bad root id must not create a ghost row).
+    ThreadReply {
+        channel_id: i64,
+        root_msg_seq: i64,
+        root_message_id: i64,
+        reply_seq: i64,
+        message_id: i64,
+        author_id: i64,
+        body: String,
+        reply_count: i64,
+        at_ms: i64,
+    },
     /// A reaction batch's result (ADR-0015): the absolute count, and who added or removed.
     Reactions {
         channel_id: i64,
@@ -205,6 +219,22 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
             });
             out.push(channel_event(event, "message.deleted", full_payload()));
         }
+        Some(Payload::ThreadReply(r)) => {
+            out.push(Write::ThreadReply {
+                channel_id: event.channel_id,
+                root_msg_seq: r.root_msg_seq,
+                root_message_id: r.root_message_id,
+                reply_seq: r.reply_seq,
+                message_id: r.message_id,
+                author_id: event.actor_id,
+                body: r.body.clone(),
+                reply_count: r.reply_count,
+                at_ms: event_time_ms,
+            });
+            // The whole reply, so sync rebuilds it as delivered (replies can't be edited
+            // or deleted yet; when they can, this becomes a pointer like messages).
+            out.push(channel_event(event, "thread.reply", full_payload()));
+        }
         Some(Payload::ReactionsChanged(r)) => {
             out.push(Write::Reactions {
                 channel_id: event.channel_id,
@@ -270,7 +300,7 @@ mod tests {
     use super::*;
     use xmsg_proto::v1::{
         ChannelCreated, MemberJoined, MemberLeft, MessageCreated, MessageDeleted, MessageEdited,
-        Rejected,
+        Rejected, ThreadReply,
     };
 
     fn event(event_seq: i64, payload: Payload) -> SequencedEvent {
@@ -512,6 +542,53 @@ mod tests {
                 .iter()
                 .any(|w| matches!(w, Write::ChannelMention { .. }))
         );
+    }
+
+    #[test]
+    fn a_thread_reply_writes_its_row_and_never_moves_msg_seq() {
+        let e = event(
+            15,
+            Payload::ThreadReply(ThreadReply {
+                message_id: 900,
+                body: "agreed".into(),
+                root_msg_seq: 4,
+                root_message_id: 404,
+                reply_seq: 2,
+                reply_count: 2,
+                mentioned_user_ids: vec![],
+            }),
+        );
+        let w = writes(&e, 7);
+        assert_eq!(
+            w[0],
+            Write::ThreadReply {
+                channel_id: 100,
+                root_msg_seq: 4,
+                root_message_id: 404,
+                reply_seq: 2,
+                message_id: 900,
+                author_id: 1,
+                body: "agreed".into(),
+                reply_count: 2,
+                at_ms: 7,
+            }
+        );
+        assert!(matches!(
+            &w[1],
+            Write::ChannelEvent {
+                kind: "thread.reply",
+                event_seq: 15,
+                ..
+            }
+        ));
+        assert!(matches!(
+            w[2],
+            Write::Head {
+                msg_seq: None,
+                event_seq: 15,
+                ..
+            }
+        ));
     }
 
     #[test]

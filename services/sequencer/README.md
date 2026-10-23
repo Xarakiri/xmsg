@@ -11,6 +11,7 @@ Reads `messages.in`, writes `messages.persisted` and `commands.results`, with `e
 - Membership enforcement on posts; membership commands (join, invite, leave, kick) validated against its own state; `membership_version` on every event.
 - Dedupe of `dedupe_id` within 15 minutes of **event time**.
 - Push/pull fan-out mode with hysteresis and an ordered `channel_mode_changed` event.
+- **Threads** (ADR-0005): a `send_message` with a `thread_root` becomes `thread_reply`: an `event_seq` and the thread's next `reply_seq`, no `msg_seq` (so replies never count as unread channel messages). The root must be a sequenced message; the `threads` store (an added store) pins its `message_id` on the first reply and refuses later replies naming another one, and keeps the absolute `reply_count`. Same membership and broadcast rules as posts; mentions are parsed the same way.
 - **Reactions** (ADR-0015): `reaction_batch` from the reaction-batcher. Each user's operation applies only if its counter is above the last applied one and the user is a member; counts stay absolute (stores `reactions`, `reaction-counts`, listed in `Names.ADDED_STORES`: an upgraded installation starts them empty, so the startup check doesn't require their changelogs). Emits `reactions_changed` with an `event_seq`, no `msg_seq`, or nothing when no reaction changed.
 - **Mentions:** clients write `<@user_id>` and `<!channel>` / `<!here>` in the body. The sequencer keeps members only, never the author, at most 50 (`mentioned_user_ids`), and sets `mentions_channel` only for admins outside broadcast channels; anyone else's `@channel` posts without the mention.
 - **Edits and deletes** (`edit_message`, `delete_message`): an `event_seq` but no `msg_seq` (ADR-0005). The actor must be a member and the target `msg_seq` must exist; deleting someone else's message (`as_admin`) needs the admin role. Authorship is checked by the messages service.
@@ -19,7 +20,7 @@ Reads `messages.in`, writes `messages.persisted` and `commands.results`, with `e
 - **Membership endpoint** (plan §5.6, [`MembershipEndpoint.kt`](src/main/kotlin/dev/xmsg/sequencer/MembershipEndpoint.kt)): `GET /v1/channels/{id}/members` on `XMSG_SEQUENCER_HTTP_PORT` (default 8090) answers a protobuf `ChannelMembers` (members and `membership_version`) straight from the stores, via Kafka Streams Interactive Queries. A channel owned by another instance gets a 307 to that instance (`application.server` = `XMSG_ADVERTISED_HOST:port`, default the hostname); 503 while rebalancing, 404 for an unknown channel. HTTP + protobuf rather than gRPC: one small read, no extra runtime. Fan-out uses it when its Cassandra snapshot is behind.
 
 ## Not yet (later in Phase 0 / Phase 1a)
-- Threads, `last_mention_seq`.
+- Thread followers and `thread.followed` / `thread.unfollowed`; replies also sent to the channel; `last_mention_seq`.
 - Recovery mode after Kafka disaster recovery (ADR-0014).
 - Commit-latency benchmark at scale (cloud spike), and running "version N" from a previous release artifact in the upgrade test once releases exist.
 

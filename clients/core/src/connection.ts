@@ -71,11 +71,17 @@ export interface ConnectionOptions extends ConnectionHandlers {
 /** Frames as sent over the socket (WebSocket.send wants an ArrayBuffer-backed view). */
 export type Frame = Uint8Array<ArrayBuffer>;
 
-export function encodeSend(channelId: string, clientMsgId: string, body: string): Frame {
+export function encodeSend(
+  channelId: string,
+  clientMsgId: string,
+  body: string,
+  threadRoot?: { msgSeq: number; messageId: string },
+): Frame {
+  const root = threadRoot && { msgSeq: BigInt(threadRoot.msgSeq), messageId: BigInt(threadRoot.messageId) };
   return toBinary(
     ClientFrameSchema,
     create(ClientFrameSchema, {
-      frame: { case: "sendMessage", value: { channelId: BigInt(channelId), clientMsgId, body } },
+      frame: { case: "sendMessage", value: { channelId: BigInt(channelId), clientMsgId, body, ...(root && { threadRoot: root }) } },
     }),
   ) as Frame;
 }
@@ -145,9 +151,9 @@ export class Connection {
   private readonly typedAt = new Map<string, number>();
 
   /** Sends if online; returns false otherwise (the message stays in the caller's outbox). */
-  send(channelId: string, clientMsgId: string, body: string): boolean {
+  send(channelId: string, clientMsgId: string, body: string, threadRoot?: { msgSeq: number; messageId: string }): boolean {
     if (!this.online || !this.ws) return false;
-    this.ws.send(encodeSend(channelId, clientMsgId, body));
+    this.ws.send(encodeSend(channelId, clientMsgId, body, threadRoot));
     return true;
   }
 

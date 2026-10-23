@@ -3,7 +3,7 @@
 
 import { fromBinary } from "@bufbuild/protobuf";
 import { EventPageSchema, type EventPage } from "./gen/xmsg/v1/sync_pb.js";
-import type { ChannelKind, ListedChannel, NotifyLevel } from "./state.ts";
+import type { ChannelKind, ListedChannel, LoadedReply, NotifyLevel } from "./state.ts";
 
 export interface Tokens {
   access_token: string;
@@ -204,6 +204,18 @@ export class Api {
       `${this.endpoints.messages}/v1/channels/${channelId}/messages/${msgSeq}/reactions/${encodeURIComponent(emoji)}?counter=${counter}`,
       { method: add ? "PUT" : "DELETE", token },
     );
+  }
+
+  /** A thread's replies, oldest first (ADR-0005). */
+  async thread(token: string, channelId: string, rootMsgSeq: number, after = 0): Promise<{ replies: LoadedReply[]; hasMore: boolean }> {
+    const reply = await call<{ replies: { reply_seq: string; message_id: string; author_id: string; body: string }[]; has_more: boolean }>(
+      `${this.endpoints.messages}/v1/channels/${channelId}/threads/${rootMsgSeq}?after=${after}`,
+      { method: "GET", token },
+    );
+    return {
+      replies: reply.replies.map((r) => ({ replySeq: Number(r.reply_seq), messageId: r.message_id, authorId: r.author_id, body: r.body })),
+      hasMore: reply.has_more,
+    };
   }
 
   /** Delete your own message, or anyone's as a channel admin (checked by the sequencer). */

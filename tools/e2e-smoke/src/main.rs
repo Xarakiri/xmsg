@@ -52,8 +52,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message as Ws};
 use xmsg_proto::Message;
 use xmsg_proto::v1::{
     ChannelCreated, ChannelType, ClientFrame, Connect, InboundEvent, RejectReason,
-    SendMessageRequest, SequencedEvent, ServerFrame, Typing, TypingIndicator, client_frame,
-    inbound_event, sequenced_event, server_frame,
+    SendMessageRequest, SequencedEvent, ServerFrame, ThreadRoot, Typing, TypingIndicator,
+    client_frame, inbound_event, sequenced_event, server_frame,
 };
 
 type Socket =
@@ -204,6 +204,7 @@ async fn run() -> Result<(), String> {
         }
         if let Ok(messages_url) = std::env::var("XMSG_MESSAGES_URL") {
             check_reactions(url, &messages_url, &mut clients, &users, run_id).await?;
+            check_threads(url, &messages_url, &mut clients, &users, run_id).await?;
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
@@ -545,6 +546,123 @@ async fn check_membership_endpoint(
     }
     println!(
         "membership endpoint: the sequencer serves alice and bob at version 6; an unknown channel is 404"
+    );
+    Ok(())
+}
+
+/// Threads (ADR-0005), in a channel of their own: a reply takes a reply_seq and no
+/// msg_seq, reaches the members live, and is listed by the thread API; a reply naming the
+/// wrong root id is refused.
+async fn check_threads(
+    channels_url: &str,
+    messages_url: &str,
+    clients: &mut [Client; 3],
+    users: &[(i64, String)],
+    run_id: i64,
+) -> Result<(), String> {
+    use sequenced_event::Payload;
+    let (alice, bob) = (&users[0], &users[1]);
+    let (status, reply) = call(
+        "POST",
+        &format!("{channels_url}/v1/channels"),
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": format!("e2e-threads-{run_id}"), "member_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if status != 201 {
+        return Err(format!("threads: creating the channel: {status} {reply}"));
+    }
+    let channel: i64 = reply["channel_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("threads: no channel_id")?;
+    send(&mut clients[0].ws, channel, "thread-root").await?;
+    expect_ack(&mut clients[0], "thread-root").await?;
+    let root = |events: &[SequencedEvent]| {
+        events.iter().find_map(|e| match &e.payload {
+            Some(Payload::MessageCreated(m))
+                if e.channel_id == channel && e.dedupe_id == "thread-root" =>
+            {
+                Some((e.msg_seq, m.message_id))
+            }
+            _ => None,
+        })
+    };
+    wait_events(&mut clients[1], |e| root(e).is_some()).await?;
+    let (root_seq, root_id) = root(&clients[1].events).ok_or("threads: bob didn't get the root")?;
+    let reply_frame = |id: &str, root_message_id: i64| ClientFrame {
+        frame: Some(client_frame::Frame::SendMessage(SendMessageRequest {
+            channel_id: channel,
+            client_msg_id: id.into(),
+            body: format!("reply {id}"),
+            thread_root: Some(ThreadRoot {
+                msg_seq: root_seq,
+                message_id: root_message_id,
+            }),
+        })),
+    };
+    for (id, root_message_id) in [("thread-reply", root_id), ("thread-bad", root_id + 1)] {
+        clients[1]
+            .ws
+            .send(Ws::Binary(
+                reply_frame(id, root_message_id).encode_to_vec().into(),
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        expect_ack(&mut clients[1], id).await?;
+    }
+    let replied = |events: &[SequencedEvent]| {
+        events.iter().find_map(|e| match &e.payload {
+            Some(Payload::ThreadReply(r))
+                if e.channel_id == channel && e.dedupe_id == "thread-reply" =>
+            {
+                Some((e.msg_seq, r.root_msg_seq, r.reply_seq, r.reply_count))
+            }
+            _ => None,
+        })
+    };
+    wait_events(&mut clients[0], |e| replied(e).is_some()).await?;
+    match replied(&clients[0].events) {
+        Some((0, r, 1, 1)) if r == root_seq => {}
+        other => {
+            return Err(format!(
+                "threads: alice expected reply 1 of root {root_seq} with no msg_seq, got {other:?}"
+            ));
+        }
+    }
+    let refused = |events: &[SequencedEvent]| {
+        events.iter().any(|e| {
+            e.dedupe_id == "thread-bad"
+                && matches!(&e.payload, Some(Payload::Rejected(r)) if r.reason == RejectReason::Invalid as i32)
+        })
+    };
+    wait_events(&mut clients[1], refused).await?;
+    if !refused(&clients[1].events) {
+        return Err("threads: a reply naming the wrong root id wasn't refused".into());
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let (status, page) = call(
+            "GET",
+            &format!("{messages_url}/v1/channels/{channel}/threads/{root_seq}"),
+            &alice.1,
+            None,
+        )
+        .await?;
+        let bodies: Vec<&str> = page["replies"]
+            .as_array()
+            .map(|r| r.iter().filter_map(|x| x["body"].as_str()).collect())
+            .unwrap_or_default();
+        if status == 200 && bodies == ["reply thread-reply"] {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err(format!("threads: the thread API shows {status} {page}"));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    println!(
+        "threads: bob's reply reached alice as reply 1 with no msg_seq; the thread API lists it; a wrong root id is refused"
     );
     Ok(())
 }
@@ -1519,6 +1637,7 @@ async fn send_body(
             channel_id: channel,
             client_msg_id: client_msg_id.into(),
             body: body.into(),
+            ..Default::default()
         })),
     };
     ws.send(Ws::Binary(frame.encode_to_vec().into()))

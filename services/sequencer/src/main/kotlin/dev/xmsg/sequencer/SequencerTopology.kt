@@ -64,7 +64,7 @@ object SequencerTopology {
             Names.PROCESSOR,
         )
 
-        for (store in listOf(Names.STORE_REACTIONS, Names.STORE_REACTION_COUNTS)) {
+        for (store in listOf(Names.STORE_REACTIONS, Names.STORE_REACTION_COUNTS, Names.STORE_THREADS)) {
             topology.addStateStore(
                 Stores.keyValueStoreBuilder(
                     Stores.persistentKeyValueStore(store),

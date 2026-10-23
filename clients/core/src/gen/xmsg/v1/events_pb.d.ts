@@ -226,6 +226,29 @@ export declare type ReactionOp = Message<"xmsg.v1.ReactionOp"> & {
 export declare const ReactionOpSchema: GenMessage<ReactionOp>;
 
 /**
+ * The message a thread reply belongs to: its msg_seq and message_id.
+ *
+ * @generated from message xmsg.v1.ThreadRoot
+ */
+export declare type ThreadRoot = Message<"xmsg.v1.ThreadRoot"> & {
+  /**
+   * @generated from field: int64 msg_seq = 1;
+   */
+  msgSeq: bigint;
+
+  /**
+   * @generated from field: int64 message_id = 2;
+   */
+  messageId: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.ThreadRoot.
+ * Use `create(ThreadRootSchema)` to create a new message.
+ */
+export declare const ThreadRootSchema: GenMessage<ThreadRoot>;
+
+/**
  * @generated from message xmsg.v1.SendMessage
  */
 export declare type SendMessage = Message<"xmsg.v1.SendMessage"> & {
@@ -233,6 +256,13 @@ export declare type SendMessage = Message<"xmsg.v1.SendMessage"> & {
    * @generated from field: string body = 1;
    */
   body: string;
+
+  /**
+   * Set for a thread reply (ADR-0005).
+   *
+   * @generated from field: xmsg.v1.ThreadRoot thread_root = 2;
+   */
+  threadRoot?: ThreadRoot | undefined;
 };
 
 /**
@@ -423,6 +453,12 @@ export declare type SequencedEvent = Message<"xmsg.v1.SequencedEvent"> & {
     case: "reactionsChanged";
   } | {
     /**
+     * @generated from field: xmsg.v1.ThreadReply thread_reply = 20;
+     */
+    value: ThreadReply;
+    case: "threadReply";
+  } | {
+    /**
      * @generated from field: xmsg.v1.MessageEdited message_edited = 17;
      */
     value: MessageEdited;
@@ -573,6 +609,58 @@ export declare type MemberLeft = Message<"xmsg.v1.MemberLeft"> & {
  * Use `create(MemberLeftSchema)` to create a new message.
  */
 export declare const MemberLeftSchema: GenMessage<MemberLeft>;
+
+/**
+ * A reply in a thread (ADR-0005): an event_seq and its own reply_seq, but no msg_seq, so
+ * it never counts as an unread channel message. `reply_count` is the root's absolute
+ * count after it. The actor is the author; dedupe_id is their client_msg_id.
+ *
+ * @generated from message xmsg.v1.ThreadReply
+ */
+export declare type ThreadReply = Message<"xmsg.v1.ThreadReply"> & {
+  /**
+   * @generated from field: int64 message_id = 1;
+   */
+  messageId: bigint;
+
+  /**
+   * @generated from field: string body = 2;
+   */
+  body: string;
+
+  /**
+   * @generated from field: int64 root_msg_seq = 3;
+   */
+  rootMsgSeq: bigint;
+
+  /**
+   * @generated from field: int64 root_message_id = 4;
+   */
+  rootMessageId: bigint;
+
+  /**
+   * @generated from field: int64 reply_seq = 5;
+   */
+  replySeq: bigint;
+
+  /**
+   * @generated from field: int64 reply_count = 6;
+   */
+  replyCount: bigint;
+
+  /**
+   * As for MessageCreated: members only, never the author, at most 50.
+   *
+   * @generated from field: repeated int64 mentioned_user_ids = 7;
+   */
+  mentionedUserIds: bigint[];
+};
+
+/**
+ * Describes the message xmsg.v1.ThreadReply.
+ * Use `create(ThreadReplySchema)` to create a new message.
+ */
+export declare const ThreadReplySchema: GenMessage<ThreadReply>;
 
 /**
  * A reaction batch applied by the sequencer: an event_seq, no msg_seq. `count` is the
