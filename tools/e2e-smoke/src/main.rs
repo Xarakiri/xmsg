@@ -209,6 +209,9 @@ async fn run() -> Result<(), String> {
             check_threads(url, &messages_url, &mut clients, &users, run_id).await?;
             check_receipts(url, &mut clients, &users, channel).await?;
             check_search(&messages_url, &mut clients, &users, channel, run_id).await?;
+            if let Ok(push_url) = std::env::var("XMSG_PUSH_URL") {
+                check_push(&push_url, url, &mut clients, &users, run_id).await?;
+            }
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
@@ -550,6 +553,212 @@ async fn check_membership_endpoint(
     }
     println!(
         "membership endpoint: the sequencer serves alice and bob at version 6; an unknown channel is 404"
+    );
+    Ok(())
+}
+
+/// One request a stand-in push service received.
+#[derive(Debug, Clone)]
+struct PushRequest {
+    path: String,
+    headers: Vec<(String, String)>,
+    body_len: usize,
+}
+
+/// A stand-in push service (what a browser vendor runs): records each POST and answers 201.
+async fn mock_push_service()
+-> Result<(u16, std::sync::Arc<std::sync::Mutex<Vec<PushRequest>>>), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                // Headers, then Content-Length bytes of body.
+                let (head_end, length) = loop {
+                    let Ok(n) = socket.read(&mut chunk).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..i]).to_string();
+                        let length = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        break (i + 4, length);
+                    }
+                };
+                while buf.len() < head_end + length {
+                    let Ok(n) = socket.read(&mut chunk).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                let mut lines = head.lines();
+                let path = lines
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("")
+                    .to_string();
+                let headers = lines
+                    .filter_map(|l| {
+                        l.split_once(':')
+                            .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+                    })
+                    .collect();
+                log.lock().unwrap().push(PushRequest {
+                    path,
+                    headers,
+                    body_len: buf.len() - head_end,
+                });
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 201 Created\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                    )
+                    .await;
+            });
+        }
+    });
+    Ok((port, seen))
+}
+
+/// Web Push (plan §5.11): bob subscribes with a stand-in push service. While he's active
+/// in the app, alice's message pushes nothing; once he's idle, it arrives encrypted
+/// (aes128gcm) and VAPID-signed.
+async fn check_push(
+    push_url: &str,
+    channels_url: &str,
+    clients: &mut [Client; 3],
+    users: &[(i64, String)],
+    run_id: i64,
+) -> Result<(), String> {
+    let (alice, bob) = (&users[0], &users[1]);
+    let (port, seen) = mock_push_service().await?;
+    let (status, key) = call(
+        "GET",
+        &format!("{push_url}/v1/push/vapid-public-key"),
+        &bob.1,
+        None,
+    )
+    .await?;
+    if status != 200 || key["key"].as_str().is_none_or(str::is_empty) {
+        return Err(format!("push: VAPID key: {status} {key}"));
+    }
+    // The browser key and auth secret from RFC 8291's example (Appendix A).
+    let subscription = serde_json::json!({
+        "endpoint": format!("http://127.0.0.1:{port}/push/bob-{run_id}"),
+        "keys": {
+            "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+            "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+        }
+    });
+    let (status, reply) = call(
+        "POST",
+        &format!("{push_url}/v1/push/subscriptions"),
+        &bob.1,
+        Some(subscription),
+    )
+    .await?;
+    if status != 201 {
+        return Err(format!("push: subscribing: {status} {reply}"));
+    }
+    let (status, reply) = call(
+        "POST",
+        &format!("{channels_url}/v1/channels"),
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": format!("e2e-push-{run_id}"), "member_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if status != 201 {
+        return Err(format!("push: creating the channel: {status} {reply}"));
+    }
+    let channel: i64 = reply["channel_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("push: no channel_id")?;
+    // Wait for the channel to reach bob, so membership is stored before the first message.
+    let created = |events: &[SequencedEvent]| events.iter().any(|e| e.channel_id == channel);
+    wait_events(&mut clients[1], created).await?;
+
+    // bob is active in the app: nothing is pushed.
+    send(&mut clients[0].ws, channel, "push-while-active").await?;
+    expect_ack(&mut clients[0], "push-while-active").await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    if !seen.lock().unwrap().is_empty() {
+        return Err(format!(
+            "push: pushed while bob was active: {:?}",
+            seen.lock().unwrap()
+        ));
+    }
+
+    // bob goes idle (away): the next message is pushed.
+    let idle = ClientFrame {
+        frame: Some(client_frame::Frame::Activity(Activity { active: false })),
+    };
+    clients[1]
+        .ws
+        .send(Ws::Binary(idle.encode_to_vec().into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    send(&mut clients[0].ws, channel, "push-while-away").await?;
+    expect_ack(&mut clients[0], "push-while-away").await?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let got = loop {
+        if let Some(r) = seen.lock().unwrap().first().cloned() {
+            break r;
+        }
+        if Instant::now() > deadline {
+            return Err("push: nothing reached bob's push service while he was away".into());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let header = |k: &str| {
+        got.headers
+            .iter()
+            .find(|(name, _)| name == k)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    if got.path != format!("/push/bob-{run_id}")
+        || header("content-encoding") != "aes128gcm"
+        || !header("authorization").starts_with("vapid t=")
+        || header("ttl").is_empty()
+        || got.body_len == 0
+    {
+        return Err(format!("push: unexpected request {got:?}"));
+    }
+    // Back to active, as the other checks expect.
+    let active = ClientFrame {
+        frame: Some(client_frame::Frame::Activity(Activity { active: true })),
+    };
+    clients[1]
+        .ws
+        .send(Ws::Binary(active.encode_to_vec().into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    println!(
+        "push: nothing while bob is active; once away, alice's message reached his push service encrypted (aes128gcm, {} bytes) and VAPID-signed",
+        got.body_len
     );
     Ok(())
 }

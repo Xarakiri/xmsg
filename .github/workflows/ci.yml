@@ -222,7 +222,7 @@ jobs:
           init/debezium/register.sh
       - name: Build
         run: |
-          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-search-indexer -p xmsg-e2e-smoke
+          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-search-indexer -p xmsg-push -p xmsg-e2e-smoke
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
       - name: Messages service integration tests (real Kafka + NATS)
@@ -291,6 +291,13 @@ jobs:
           ./target/release/xmsg-reaction-batcher > logs/reaction-batcher.log 2>&1 &
           ./target/release/xmsg-presence > logs/presence.log 2>&1 &
           XMSG_OPENSEARCH_URL=http://localhost:9200 ./target/release/xmsg-search-indexer > logs/search-indexer.log 2>&1 &
+          # A fresh VAPID key: the raw 32-byte P-256 private key, base64url (SEC1 DER bytes 8-39).
+          openssl ecparam -genkey -name prime256v1 -noout -out "$RUNNER_TEMP/vapid.pem"
+          VAPID=$(openssl ec -in "$RUNNER_TEMP/vapid.pem" -outform DER 2>/dev/null | tail -c +8 | head -c 32 | base64 | tr '/+' '_-' | tr -d '=\n')
+          XMSG_PUSH_VAPID_PRIVATE_KEY=$VAPID XMSG_PUSH_ALLOW_HTTP=true XMSG_VALKEY_URL=redis://localhost:6379 \
+            XMSG_DATABASE_URL=postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg \
+            XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
+            ./target/release/xmsg-push > logs/push.log 2>&1 &
           XMSG_SEQUENCER_URL=http://localhost:8090 ./target/release/xmsg-fanout > logs/fanout.log 2>&1 &
           (cd services/gateway && MIX_ENV=prod XMSG_GATEWAY_ID=ci \
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
@@ -309,6 +316,7 @@ jobs:
               && grep -q 'reaction-batcher ready' logs/reaction-batcher.log \
               && grep -q 'presence ready' logs/presence.log \
               && grep -q 'search indexer ready' logs/search-indexer.log \
+              && grep -q 'push ready' logs/push.log \
               && grep -q 'fanout ready' logs/fanout.log \
               && grep -q 'REBALANCING to RUNNING' logs/sequencer.log && exit 0
             sleep 2
@@ -321,6 +329,7 @@ jobs:
           XMSG_MESSAGES_URL: http://localhost:8083
           XMSG_READSTATE_URL: http://localhost:8085
           XMSG_SEQUENCER_URL: http://localhost:8090
+          XMSG_PUSH_URL: http://localhost:8086
           XMSG_EXPECT_OUTBOX_RELAY: "true"
           XMSG_EXPECT_REVOCATION: "true"
           XMSG_EXPECT_WORKSPACE_REMOVAL: "true"

@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
+import { disablePush, enablePush, pushState, type PushState } from "./push.ts";
 import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
 import { useNames } from "./useNames.ts";
@@ -148,7 +149,15 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
   // The thread open next to the conversation: its root message's msg_seq.
   const [threadOf, setThreadOf] = useState<number | null>(null);
   const names = useNames(me);
-  const [selected, setSelected] = useState<string | null>(null);
+  // A notification click opens its channel: `?channel=` in a new window, a message otherwise.
+  const [selected, setSelected] = useState<string | null>(() => new URLSearchParams(location.search).get("channel"));
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type === "open-channel" && typeof e.data.channelId === "string") setSelected(e.data.channelId);
+    };
+    navigator.serviceWorker?.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker?.removeEventListener("message", onMessage);
+  }, []);
   const [panel, setPanel] = useState<"none" | "channel" | "dm">("none");
 
   const channels = useMemo(() => Object.values(state.channels).filter((c) => !c.left), [state.channels]);
@@ -231,6 +240,7 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
           })}
         </Section>
         <footer>
+          <NotificationsToggle />
           <button className="link" onClick={onSignOut}>
             Sign out
           </button>
@@ -881,5 +891,37 @@ function SearchResults({
         ))}
       </ol>
     </section>
+  );
+}
+
+/** Browser notifications for new messages (Web Push): off until the user turns them on. */
+function NotificationsToggle() {
+  const [state, setState] = useState<PushState | "busy">("busy");
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    void pushState().then(setState).catch(() => setState("unsupported"));
+  }, []);
+  if (state === "unsupported") return null;
+  const toggle = async () => {
+    setNote("");
+    setState("busy");
+    try {
+      setState(state === "on" ? await disablePush() : await enablePush());
+    } catch (err) {
+      setState("off");
+      setNote(errorText(err));
+    }
+  };
+  return (
+    <div className="notifications">
+      {state === "blocked" ? (
+        <span className="muted small">Notifications are blocked in this browser's settings</span>
+      ) : (
+        <button className="link" disabled={state === "busy"} onClick={() => void toggle()}>
+          {state === "on" ? "Turn off notifications" : "Enable notifications"}
+        </button>
+      )}
+      {note && <div className="error small">{note}</div>}
+    </div>
   );
 }
