@@ -28,6 +28,8 @@ function fakeApi(calls: string[]): Api {
     myChannels: async () => listed,
     readState: async () => [{ channelId: "7", msgSeq: 400 }],
     settings: async () => [{ channelId: "7", muted: true, notifyLevel: "mentions" }],
+    // 399 is before the read position (already read); 420 is unread.
+    mentions: async () => [{ channelId: "7", msgSeqs: [399, 420] }],
     events: async (_t: string, id: string, after: number, limit: number): Promise<EventPage> => {
       calls.push(`${id}@${after}`);
       if (id === "8") throw new ApiError(404, "unknown channel");
@@ -53,6 +55,7 @@ test("sync pages through moved channels and marks refused ones as left", async (
   assert.equal(state.channels["8"]!.left, true);
   assert.equal(state.channels["7"]!.readSeq, 400, "read positions come with the sync");
   assert.equal(state.channels["7"]!.muted, true, "and personal settings");
+  assert.deepEqual(state.channels["7"]!.mentions, [420], "and unread mentions");
 
   // Nothing moved: a second sync fetches no events.
   calls.length = 0;

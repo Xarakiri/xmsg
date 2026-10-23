@@ -188,6 +188,7 @@ fn rebuild(
             payload: Some(Payload::MessageCreated(MessageCreated {
                 message_id: m.message_id,
                 body: m.body.clone(),
+                ..Default::default()
             })),
             ..base
         }

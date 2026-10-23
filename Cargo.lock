@@ -4065,6 +4065,7 @@ name = "xmsg-readstate"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "futures-util",
  "http-body-util",
  "rdkafka",
  "scylla",

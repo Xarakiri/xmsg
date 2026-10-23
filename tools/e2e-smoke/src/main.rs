@@ -198,6 +198,9 @@ async fn run() -> Result<(), String> {
         if let Ok(messages_url) = std::env::var("XMSG_MESSAGES_URL") {
             check_edits(url, &messages_url, &mut clients, &users, run_id).await?;
         }
+        if let Ok(readstate_url) = std::env::var("XMSG_READSTATE_URL") {
+            check_mentions(url, &readstate_url, &mut clients, &users, run_id).await?;
+        }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
@@ -530,6 +533,123 @@ async fn check_membership_endpoint(
     }
     println!(
         "membership endpoint: the sequencer serves alice and bob at version 6; an unknown channel is 404"
+    );
+    Ok(())
+}
+
+/// Mentions (ADR-0012), in a channel of their own: the sequencer keeps members only and
+/// `@channel` only from admins; the readstate feeder records them; reading clears them.
+async fn check_mentions(
+    channels_url: &str,
+    readstate_url: &str,
+    clients: &mut [Client; 3],
+    users: &[(i64, String)],
+    run_id: i64,
+) -> Result<(), String> {
+    use sequenced_event::Payload;
+    let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
+    let (status, reply) = call(
+        "POST",
+        &format!("{channels_url}/v1/channels"),
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": format!("e2e-mentions-{run_id}"), "member_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if status != 201 {
+        return Err(format!("mentions: creating the channel: {status} {reply}"));
+    }
+    let channel: i64 = reply["channel_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("mentions: no channel_id")?;
+    // bob (a plain member) tries @here first: the message goes through, the channel
+    // mention doesn't. Then alice (the creator, so an admin) mentions bob, mallory (not a
+    // member) and everyone. bob's own send marks only what came before it read.
+    send_body(&mut clients[1].ws, channel, "mention-b", "<!here> lunch?").await?;
+    expect_ack(&mut clients[1], "mention-b").await?;
+    let created = |events: &[SequencedEvent], id: &str| {
+        events.iter().find_map(|e| match &e.payload {
+            Some(Payload::MessageCreated(m)) if e.channel_id == channel && e.dedupe_id == id => {
+                Some((e.msg_seq, m.mentioned_user_ids.clone(), m.mentions_channel))
+            }
+            _ => None,
+        })
+    };
+    wait_events(&mut clients[1], |e| created(e, "mention-b").is_some()).await?;
+    let body = format!("hi <@{}> <@{}> <!channel>", bob.0, mallory.0);
+    send_body(&mut clients[0].ws, channel, "mention-a", &body).await?;
+    expect_ack(&mut clients[0], "mention-a").await?;
+    wait_events(&mut clients[1], |e| created(e, "mention-a").is_some()).await?;
+    let a = created(&clients[1].events, "mention-a")
+        .ok_or("mentions: bob didn't get alice's message")?;
+    let b = created(&clients[1].events, "mention-b")
+        .ok_or("mentions: bob didn't get his own message")?;
+    if a.1 != vec![bob.0] || !a.2 {
+        return Err(format!(
+            "mentions: alice's message: expected [bob] and @channel, got {a:?}"
+        ));
+    }
+    if !b.1.is_empty() || b.2 {
+        return Err(format!(
+            "mentions: bob's @here should be dropped, got {b:?}"
+        ));
+    }
+
+    let unread = async |token: &str| -> Result<Option<Vec<String>>, String> {
+        let (status, reply) = call(
+            "GET",
+            &format!("{readstate_url}/v1/me/mentions"),
+            token,
+            None,
+        )
+        .await?;
+        if status != 200 {
+            return Err(format!("mentions: GET /v1/me/mentions: {status} {reply}"));
+        }
+        Ok(reply["mentions"].as_array().and_then(|list| {
+            list.iter()
+                .find(|m| m["channel_id"].as_str() == Some(channel.to_string().as_str()))
+                .map(|m| {
+                    m["msg_seqs"]
+                        .as_array()
+                        .map(|s| {
+                            s.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                })
+        }))
+    };
+    // The feeder and the owner apply a moment after the sequencer: poll for each state.
+    let wait_for =
+        async |token: &str, want: Option<Vec<String>>, what: &str| -> Result<(), String> {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let got = unread(token).await?;
+                if got == want {
+                    return Ok(());
+                }
+                if Instant::now() > deadline {
+                    return Err(format!("mentions: {what}: expected {want:?}, got {got:?}"));
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        };
+    wait_for(&bob.1, Some(vec![a.0.to_string()]), "bob's unread mention").await?;
+    let (status, _) = call(
+        "POST",
+        &format!("{readstate_url}/v1/channels/{channel}/read"),
+        &bob.1,
+        Some(serde_json::json!({"msg_seq": a.0.to_string()})),
+    )
+    .await?;
+    if status != 202 {
+        return Err(format!("mentions: bob's mark-read: {status}"));
+    }
+    wait_for(&bob.1, None, "after bob read the channel").await?;
+    println!(
+        "mentions: members only, @channel only from admins; bob's unread mention is listed by readstate and cleared by reading"
     );
     Ok(())
 }
@@ -1269,11 +1389,26 @@ async fn connect(url: &str, token: &str) -> Result<Client, String> {
 }
 
 async fn send(ws: &mut Socket, channel: i64, client_msg_id: &str) -> Result<(), String> {
+    send_body(
+        ws,
+        channel,
+        client_msg_id,
+        &format!("hello from {client_msg_id}"),
+    )
+    .await
+}
+
+async fn send_body(
+    ws: &mut Socket,
+    channel: i64,
+    client_msg_id: &str,
+    body: &str,
+) -> Result<(), String> {
     let frame = ClientFrame {
         frame: Some(client_frame::Frame::SendMessage(SendMessageRequest {
             channel_id: channel,
             client_msg_id: client_msg_id.into(),
-            body: format!("hello from {client_msg_id}"),
+            body: body.into(),
         })),
     };
     ws.send(Ws::Binary(frame.encode_to_vec().into()))

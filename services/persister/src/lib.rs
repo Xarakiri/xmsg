@@ -31,6 +31,9 @@ pub enum Write {
         client_msg_id: String,
         body: String,
     },
+    /// An `@channel` / `@here`: one `channel_mentions` row however big the channel is
+    /// (ADR-0012), and the head's `last_mention_seq`, so readers skip channels with none new.
+    ChannelMention { channel_id: i64, msg_seq: i64 },
     /// Sets the new body unless the message was deleted meanwhile: a delete and an edit
     /// can both pass the messages service's check and be sequenced delete first.
     MessageEdited {
@@ -162,6 +165,12 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
                 kind: "message.created",
                 payload: event.msg_seq.to_be_bytes().to_vec(),
             });
+            if created.mentions_channel {
+                out.push(Write::ChannelMention {
+                    channel_id: event.channel_id,
+                    msg_seq: event.msg_seq,
+                });
+            }
         }
         Some(Payload::MessageEdited(edited)) => {
             out.push(Write::MessageEdited {
@@ -265,6 +274,7 @@ mod tests {
             Payload::MessageCreated(MessageCreated {
                 message_id: 99,
                 body: "hi".into(),
+                ..Default::default()
             }),
         );
         e.msg_seq = 20_001;
@@ -446,6 +456,45 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_mention_is_one_row_however_big_the_channel() {
+        let mut e = event(
+            12,
+            Payload::MessageCreated(MessageCreated {
+                message_id: 9,
+                body: "<!channel> hi".into(),
+                mentioned_user_ids: vec![2, 3],
+                mentions_channel: true,
+            }),
+        );
+        e.msg_seq = 11;
+        let w = writes(&e, 0);
+        assert_eq!(
+            w.iter()
+                .filter(|w| matches!(w, Write::ChannelMention { .. }))
+                .count(),
+            1
+        );
+        assert!(w.contains(&Write::ChannelMention {
+            channel_id: 100,
+            msg_seq: 11
+        }));
+        assert!(
+            matches!(w.last(), Some(Write::Head { .. })),
+            "the head stays last"
+        );
+        // User mentions are the readstate feeder's rows, not the persister's.
+        e.payload = Some(Payload::MessageCreated(MessageCreated {
+            mentioned_user_ids: vec![2],
+            ..Default::default()
+        }));
+        assert!(
+            !writes(&e, 0)
+                .iter()
+                .any(|w| matches!(w, Write::ChannelMention { .. }))
+        );
+    }
+
+    #[test]
     fn rejections_write_nothing() {
         let mut e = event(0, Payload::Rejected(Rejected::default()));
         e.event_seq = 0;
@@ -459,6 +508,7 @@ mod tests {
             Payload::MessageCreated(MessageCreated {
                 message_id: 5,
                 body: "x".into(),
+                ..Default::default()
             }),
         );
         e.msg_seq = 3;

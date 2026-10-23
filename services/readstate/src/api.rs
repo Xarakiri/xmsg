@@ -31,6 +31,7 @@ pub struct App<P, E> {
 pub fn router<P: Positions, E: Events>(app: Arc<App<P, E>>) -> Router {
     Router::new()
         .route("/v1/me/read-state", get(read_state::<P, E>))
+        .route("/v1/me/mentions", get(mentions::<P, E>))
         .route("/v1/channels/{channel_id}/read", post(mark_read::<P, E>))
         .route(
             "/v1/channels/{channel_id}/unread",
@@ -84,6 +85,29 @@ async fn read_state<P: Positions, E: Events>(
         .map(|(c, s)| json!({ "channel_id": c.to_string(), "last_read_msg_seq": s.to_string() }))
         .collect();
     Ok(Json(json!({ "positions": positions })))
+}
+
+/// `{mentions: [{channel_id, msg_seqs}]}`: unread mentions (yours and `@channel`) per
+/// channel, after your read position, at most 100 per channel. Channels with none are left out.
+async fn mentions<P: Positions, E: Events>(
+    State(app): State<Arc<App<P, E>>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let me = caller(&app, &headers).await?;
+    let found = app.positions.mentions(me).await.map_err(|e| {
+        tracing::error!(error = %e, "mentions read failed");
+        ApiError::Unavailable
+    })?;
+    let mentions: Vec<Value> = found
+        .into_iter()
+        .map(|(c, seqs)| {
+            json!({
+                "channel_id": c.to_string(),
+                "msg_seqs": seqs.iter().map(i64::to_string).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "mentions": mentions })))
 }
 
 #[derive(Deserialize)]

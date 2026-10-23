@@ -102,3 +102,7 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
   .app { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .sidebar { max-height: 40dvh; }
 }
+
+.badge.mention { background: var(--accent); color: var(--accent-fg); }
+.mention { font-weight: 600; color: var(--accent); }
+.mention.me { background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 3px; padding: 0 2px; }

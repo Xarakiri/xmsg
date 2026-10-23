@@ -281,6 +281,7 @@ async fn publish(
                             payload: Some(sequenced_event::Payload::MessageCreated(MessageCreated {
                                 message_id: now_us() as i64,
                                 body: String::new(),
+                                ..Default::default()
                             })),
                             ..Default::default()
                         })),

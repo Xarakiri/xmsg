@@ -29,6 +29,8 @@ export interface Channel {
   notifyLevel: NotifyLevel;
   /** The current user was removed or left. */
   left: boolean;
+  /** msg_seqs of messages mentioning me (or `@channel`); those after readSeq are unread. */
+  mentions: number[];
 }
 
 export type MessageStatus = "pending" | "sent" | "confirmed" | "rejected" | "failed";
@@ -86,7 +88,9 @@ export type Action =
   /** A contiguous page of a channel's events, ending at `through` (sync, lazy step). */
   | { type: "history"; channelId: string; events: SequencedEvent[]; through: number; at: number }
   /** The server says we're no longer a member (history refused). */
-  | { type: "lostAccess"; channelId: string };
+  | { type: "lostAccess"; channelId: string }
+  /** Unread mentions from the server (sync); merged as a set, so repeats change nothing. */
+  | { type: "mentions"; mentions: { channelId: string; msgSeqs: number[] }[] };
 
 export interface ListedChannel {
   id: string;
@@ -185,11 +189,19 @@ export function reduce(state: ChatState, action: Action): ChatState {
       }
       return next;
     }
+    case "mentions": {
+      let next = state;
+      for (const m of action.mentions) {
+        const channel = next.channels[m.channelId];
+        if (channel) next = withChannel(next, withMentions(channel, m.msgSeqs));
+      }
+      return next;
+    }
     case "readPositions": {
       let next = state;
       for (const p of action.positions) {
         const channel = next.channels[p.channelId];
-        if (channel && p.msgSeq > channel.readSeq) next = withChannel(next, { ...channel, readSeq: p.msgSeq });
+        if (channel && p.msgSeq > channel.readSeq) next = withChannel(next, withMentions({ ...channel, readSeq: p.msgSeq }, []));
       }
       return next;
     }
@@ -218,7 +230,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
     case "markRead": {
       const channel = state.channels[action.channelId];
       if (!channel || action.msgSeq <= channel.readSeq) return state;
-      return withChannel(state, { ...channel, readSeq: action.msgSeq });
+      return withChannel(state, withMentions({ ...channel, readSeq: action.msgSeq }, []));
     }
     case "lostAccess": {
       const channel = state.channels[action.channelId];
@@ -228,7 +240,14 @@ export function reduce(state: ChatState, action: Action): ChatState {
 }
 
 function emptyChannel(id: string, kind: ChannelKind): Channel {
-  return { id, kind, name: "", members: [], eventSeq: 0, syncedSeq: 0, membershipSeq: 0, msgSeq: 0, readSeq: 0, muted: false, notifyLevel: "all", left: false };
+  return { id, kind, name: "", members: [], eventSeq: 0, syncedSeq: 0, membershipSeq: 0, msgSeq: 0, readSeq: 0, muted: false, notifyLevel: "all", left: false, mentions: [] };
+}
+
+/** Adds mentions, keeping only unread ones (after readSeq), ascending, without repeats. */
+function withMentions(channel: Channel, seqs: number[]): Channel {
+  const all = [...new Set([...channel.mentions, ...seqs])].filter((s) => s > channel.readSeq).sort((a, b) => a - b);
+  if (all.length === channel.mentions.length && all.every((s, i) => s === channel.mentions[i])) return channel;
+  return { ...channel, mentions: all };
 }
 
 /** Records that `seq` was applied: the highest seen, and contiguous progress. */
@@ -305,11 +324,14 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
         at,
       };
       // Own messages count as read (the server's feeder does the same, ADR-0012).
-      const next = withChannel(state, {
+      let updated: Channel = {
         ...channel,
         msgSeq: Math.max(channel.msgSeq, msgSeq),
         readSeq: actor === state.me ? Math.max(channel.readSeq, msgSeq) : channel.readSeq,
-      });
+      };
+      const mentionsMe = payload.value.mentionsChannel || payload.value.mentionedUserIds.some((u) => u.toString() === state.me);
+      updated = withMentions(updated, mentionsMe && actor !== state.me ? [msgSeq] : []);
+      const next = withChannel(state, updated);
       return withMessages(next, channelId, (list) => {
         const rest = list.filter((m) => m.key !== incoming.key && !(m.msgSeq !== 0 && m.msgSeq === msgSeq));
         const known = list.find((m) => m.key === incoming.key || (m.msgSeq !== 0 && m.msgSeq === msgSeq));
@@ -390,6 +412,11 @@ function isStale(m: Message, me: string, now: number): boolean {
 /** Unread messages in a channel (ADR-0012: the head minus the read position). */
 export function unread(channel: Channel): number {
   return Math.max(0, channel.msgSeq - channel.readSeq);
+}
+
+/** Unread mentions of me (or `@channel`) in the channel. */
+export function mentionCount(channel: Channel): number {
+  return channel.mentions.filter((s) => s > channel.readSeq).length;
 }
 
 /** Messages still waiting for the gateway's ack, oldest first (the outbox to resend on reconnect). */

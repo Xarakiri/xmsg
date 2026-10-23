@@ -56,6 +56,7 @@ test("channel.created brings a channel with its name and members", () => {
     muted: false,
     notifyLevel: "all",
     left: false,
+    mentions: [],
   });
 });
 
@@ -262,4 +263,34 @@ test("a deleted message keeps its place with no body, and nothing brings the bod
       [2, "fine", false],
     ],
   );
+});
+
+const mentioning = (seq: number, actor: bigint, ids: bigint[], everyone = false) =>
+  ev({
+    eventSeq: BigInt(seq + 1),
+    msgSeq: BigInt(seq),
+    actorId: actor,
+    dedupeId: `m-${seq}`,
+    payload: { case: "messageCreated", value: { messageId: BigInt(1000 + seq), body: "hey", mentionedUserIds: ids, mentionsChannel: everyone } },
+  });
+
+test("mentions of me or @channel count until read; my own @channel doesn't", async () => {
+  const { mentionCount } = await import("../src/state.ts");
+  let s = apply(
+    initialState(ME),
+    created,
+    mentioning(1, 102n, [101n]),
+    mentioning(2, 102n, [103n]), // someone else
+    mentioning(3, 102n, [], true), // @channel
+    mentioning(4, 101n, [], true), // mine
+    mentioning(1, 102n, [101n]), // redelivered
+  );
+  assert.equal(mentionCount(s.channels["7"]!), 0, "my own send at msg_seq 4 marks everything before it read");
+  s = apply(initialState(ME), created, mentioning(1, 102n, [101n]), mentioning(2, 102n, [103n]), mentioning(3, 102n, [], true));
+  assert.deepEqual(s.channels["7"]!.mentions, [1, 3]);
+  s = reduce(s, { type: "mentions", mentions: [{ channelId: "7", msgSeqs: [3, 5] }] });
+  assert.deepEqual(s.channels["7"]!.mentions, [1, 3, 5], "merged as a set");
+  s = reduce(s, { type: "markRead", channelId: "7", msgSeq: 3 });
+  assert.equal(mentionCount(s.channels["7"]!), 1);
+  assert.deepEqual(s.channels["7"]!.mentions, [5], "read ones are dropped");
 });

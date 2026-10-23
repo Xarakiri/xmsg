@@ -176,6 +176,8 @@ defmodule Xmsg.V1.MessageCreated do
 
   field :message_id, 1, type: :int64, json_name: "messageId"
   field :body, 2, type: :string
+  field :mentioned_user_ids, 3, repeated: true, type: :int64, json_name: "mentionedUserIds"
+  field :mentions_channel, 4, type: :bool, json_name: "mentionsChannel"
 end
 
 defmodule Xmsg.V1.MemberJoined do

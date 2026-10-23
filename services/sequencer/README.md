@@ -11,6 +11,7 @@ Reads `messages.in`, writes `messages.persisted` and `commands.results`, with `e
 - Membership enforcement on posts; membership commands (join, invite, leave, kick) validated against its own state; `membership_version` on every event.
 - Dedupe of `dedupe_id` within 15 minutes of **event time**.
 - Push/pull fan-out mode with hysteresis and an ordered `channel_mode_changed` event.
+- **Mentions:** clients write `<@user_id>` and `<!channel>` / `<!here>` in the body. The sequencer keeps members only, never the author, at most 50 (`mentioned_user_ids`), and sets `mentions_channel` only for admins outside broadcast channels; anyone else's `@channel` posts without the mention.
 - **Edits and deletes** (`edit_message`, `delete_message`): an `event_seq` but no `msg_seq` (ADR-0005). The actor must be a member and the target `msg_seq` must exist; deleting someone else's message (`as_admin`) needs the admin role. Authorship is checked by the messages service.
 - Snowflake message IDs from event time, partition and a counter.
 - Explicit, fixed names for every processor, store and changelog ([`Names.kt`](src/main/kotlin/dev/xmsg/sequencer/Names.kt)).
