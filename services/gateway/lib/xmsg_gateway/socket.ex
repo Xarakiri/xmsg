@@ -27,6 +27,8 @@ defmodule XmsgGateway.Socket do
     TypingIndicator,
     Activity,
     PresenceUpdates,
+    ReadReceipt,
+    Receipt,
     WatchPresence,
     Welcome
   }
@@ -37,11 +39,14 @@ defmodule XmsgGateway.Socket do
   # Presence pings at least this often; the service's TTL is 75 s (plan §5.9).
   @presence_every_ms 30_000
   @max_watched 200
+  @receipt_interval_ms 1_000
 
   @impl true
   def init(_opts) do
     Process.send_after(self(), :auth_timeout, Config.auth_timeout_ms())
-    {:ok, %{user_id: nil, conn_id: nil, session_id: 0, typing_at: %{}, active: true}}
+
+    {:ok,
+     %{user_id: nil, conn_id: nil, session_id: 0, typing_at: %{}, active: true, receipts: %{}}}
   end
 
   @impl true
@@ -67,6 +72,19 @@ defmodule XmsgGateway.Socket do
 
   def handle_info(:auth_timeout, %{user_id: nil} = state) do
     {:stop, :normal, {@close_policy, "authentication timeout"}, state}
+  end
+
+  # The end of a channel's receipt window: send what was coalesced meanwhile.
+  def handle_info({:flush_receipt, channel_id}, state) do
+    case state.receipts do
+      %{^channel_id => {_, sent, pending}} when pending > sent ->
+        publish_receipt(state.user_id, channel_id, pending)
+        now = System.monotonic_time(:millisecond)
+        {:ok, put_in(state.receipts[channel_id], {now, pending, pending})}
+
+      _ ->
+        {:ok, state}
+    end
   end
 
   # Presence heartbeat: the service counts a connection gone after its TTL (75 s).
@@ -173,6 +191,33 @@ defmodule XmsgGateway.Socket do
     end
   end
 
+  # Read receipts (ADR-0012): at most one per channel per second, coalesced to the
+  # latest position; never backwards. The fan-out drops them outside DMs.
+  defp handle_frame({:receipt, %Receipt{channel_id: channel_id, msg_seq: seq}}, state)
+       when channel_id > 0 and seq > 0 do
+    now = System.monotonic_time(:millisecond)
+
+    case Map.get(state.receipts, channel_id) do
+      {_, sent, pending} when seq <= max(sent, pending) ->
+        {:ok, state}
+
+      {at, sent, _} when now - at < @receipt_interval_ms ->
+        if pending_flush?(state.receipts[channel_id]) == false do
+          Process.send_after(
+            self(),
+            {:flush_receipt, channel_id},
+            @receipt_interval_ms - (now - at)
+          )
+        end
+
+        {:ok, put_in(state.receipts[channel_id], {at, sent, seq})}
+
+      _ ->
+        publish_receipt(state.user_id, channel_id, seq)
+        {:ok, put_in(state.receipts[channel_id], {now, seq, seq})}
+    end
+  end
+
   defp handle_frame({:activity, %Activity{active: active}}, state) do
     if active != state.active do
       _ = XmsgGateway.Presence.ping(state.user_id, state.conn_id, connection_state(active))
@@ -207,6 +252,14 @@ defmodule XmsgGateway.Socket do
     do: Map.filter(typing_at, fn {_, at} -> now - at < @typing_interval_ms end)
 
   defp prune(typing_at, _now), do: typing_at
+
+  # A flush is already scheduled when something newer than what was sent is pending.
+  defp pending_flush?({_, sent, pending}), do: pending > sent
+
+  defp publish_receipt(user_id, channel_id, seq) do
+    receipt = %ReadReceipt{channel_id: channel_id, user_id: user_id, msg_seq: seq}
+    _ = Config.bus().publish(Config.receipts_subject(channel_id), ReadReceipt.encode(receipt))
+  end
 
   defp connection_state(true), do: :CONNECTION_STATE_ACTIVE
   defp connection_state(false), do: :CONNECTION_STATE_IDLE

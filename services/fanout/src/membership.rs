@@ -51,6 +51,8 @@ impl<A: SnapshotSource + Sync, B: SnapshotSource + Sync> SnapshotSource for Fall
 #[derive(Default)]
 pub struct Membership {
     channels: HashMap<i64, HashSet<i64>>,
+    /// Each channel's type, from the events applied (for DM-only features: receipts).
+    types: HashMap<i64, i32>,
 }
 
 /// Why a channel's members couldn't be determined for an event.
@@ -66,6 +68,9 @@ impl Membership {
     /// Applies membership changes carried by `event` to a channel already in memory.
     /// `channel.created` also brings a new channel into memory.
     pub fn apply(&mut self, event: &SequencedEvent) {
+        if event.event_seq > 0 {
+            self.types.insert(event.channel_id, event.channel_type);
+        }
         match &event.payload {
             Some(Payload::ChannelCreated(created)) => {
                 self.channels.insert(
@@ -85,6 +90,18 @@ impl Membership {
             }
             _ => {}
         }
+    }
+
+    /// Whether the channel is a DM or group DM, as far as this instance has seen.
+    pub fn is_dm(&self, channel_id: i64) -> bool {
+        use xmsg_proto::v1::ChannelType;
+        matches!(
+            self.types
+                .get(&channel_id)
+                .copied()
+                .map(ChannelType::try_from),
+            Some(Ok(ChannelType::Dm | ChannelType::GroupDm))
+        )
     }
 
     pub fn get(&self, channel_id: i64) -> Option<&HashSet<i64>> {
@@ -134,6 +151,24 @@ impl Membership {
 mod tests {
     use super::*;
     use xmsg_proto::v1::{ChannelCreated, MemberJoined, MemberLeft, MessageCreated};
+
+    #[test]
+    fn receipts_are_for_channels_seen_as_dms() {
+        use xmsg_proto::v1::ChannelType;
+        let mut m = Membership::default();
+        for (channel, kind) in [
+            (1, ChannelType::Dm),
+            (2, ChannelType::GroupDm),
+            (3, ChannelType::Private),
+        ] {
+            let mut e = msg(channel, 1);
+            e.channel_type = kind as i32;
+            m.apply(&e);
+        }
+        assert!(m.is_dm(1) && m.is_dm(2));
+        assert!(!m.is_dm(3), "a channel isn't a DM");
+        assert!(!m.is_dm(4), "unknown: dropped rather than guessed");
+    }
 
     struct Fixed(Option<Snapshot>);
     impl SnapshotSource for Fixed {

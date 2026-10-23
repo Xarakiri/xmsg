@@ -43,6 +43,10 @@ defmodule XmsgGateway.Config do
   def typing_subject(channel_id),
     do: "typing.#{XmsgGateway.Partition.partition(channel_id, partition_count())}"
 
+  @doc "Read receipts (ADR-0012): to the fan-out owning the channel's partition, like typing."
+  def receipts_subject(channel_id),
+    do: "receipts.#{XmsgGateway.Partition.partition(channel_id, partition_count())}"
+
   @doc "Presence (plan §5.9): per-connection pings, and status queries."
   def presence_ping_subject, do: "xmsg.svc.presence.ping"
   def presence_query_subject, do: "xmsg.svc.presence.get"

@@ -64,6 +64,8 @@ export interface ConnectionHandlers {
   onResync?(partition: number | undefined): void;
   /** Someone else is typing in a channel (best-effort; show it for a few seconds). */
   onTyping?(channelId: string, userId: string): void;
+  /** Someone else in a DM read it up to `msgSeq` (ADR-0012; best-effort). */
+  onReceipt?(channelId: string, userId: string, msgSeq: number): void;
   /** Statuses of watched users: the current ones after watchPresence, then changes. */
   onPresence?(updates: { userId: string; status: Presence }[]): void;
 }
@@ -161,6 +163,19 @@ export class Connection {
 
   private readonly typedAt = new Map<string, number>();
   private watched: string[] = [];
+  private receipted = new Map<string, number>();
+
+  /**
+   * Tells the other members of a DM I've read it up to `msgSeq`. Only forward moves are
+   * sent; the gateway coalesces to one per second, and the fan-out ignores channels
+   * that aren't DMs.
+   */
+  receipt(channelId: string, msgSeq: number): void {
+    if (!this.online || !this.ws || msgSeq <= (this.receipted.get(channelId) ?? 0)) return;
+    this.receipted.set(channelId, msgSeq);
+    const frame = create(ClientFrameSchema, { frame: { case: "receipt", value: { channelId: BigInt(channelId), msgSeq: BigInt(msgSeq) } } });
+    this.ws.send(toBinary(ClientFrameSchema, frame) as Frame);
+  }
   private active = true;
 
   /** Watch these users' presence (replacing the previous set; at most 200). Kept across reconnects. */
@@ -259,6 +274,13 @@ export class Connection {
       case "presence":
         this.opts.onPresence?.(
           frame.frame.value.updates.map((u) => ({ userId: u.userId.toString(), status: PRESENCE[u.status] ?? "offline" })),
+        );
+        break;
+      case "receipt":
+        this.opts.onReceipt?.(
+          frame.frame.value.channelId.toString(),
+          frame.frame.value.userId.toString(),
+          Number(frame.frame.value.msgSeq),
         );
         break;
       case "typing":

@@ -60,6 +60,12 @@ export declare type ClientFrame = Message<"xmsg.v1.ClientFrame"> & {
      */
     value: Activity;
     case: "activity";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.Receipt receipt = 7;
+     */
+    value: Receipt;
+    case: "receipt";
   } | { case: undefined; value?: undefined };
 };
 
@@ -174,6 +180,30 @@ export declare type WatchPresence = Message<"xmsg.v1.WatchPresence"> & {
 export declare const WatchPresenceSchema: GenMessage<WatchPresence>;
 
 /**
+ * "I've read this DM up to here" (ADR-0012): shown to the other members as a read
+ * receipt. DMs and group DMs only; best-effort, never stored or sequenced.
+ *
+ * @generated from message xmsg.v1.Receipt
+ */
+export declare type Receipt = Message<"xmsg.v1.Receipt"> & {
+  /**
+   * @generated from field: int64 channel_id = 1;
+   */
+  channelId: bigint;
+
+  /**
+   * @generated from field: int64 msg_seq = 2;
+   */
+  msgSeq: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.Receipt.
+ * Use `create(ReceiptSchema)` to create a new message.
+ */
+export declare const ReceiptSchema: GenMessage<Receipt>;
+
+/**
  * Whether the user is active on this connection (the app is in front and used
  * recently) or idle. Connections start active.
  *
@@ -263,6 +293,12 @@ export declare type ServerFrame = Message<"xmsg.v1.ServerFrame"> & {
      */
     value: PresenceUpdates;
     case: "presence";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.ReadReceipt receipt = 9;
+     */
+    value: ReadReceipt;
+    case: "receipt";
   } | { case: undefined; value?: undefined };
 };
 
@@ -320,6 +356,35 @@ export declare type TypingIndicator = Message<"xmsg.v1.TypingIndicator"> & {
  * Use `create(TypingIndicatorSchema)` to create a new message.
  */
 export declare const TypingIndicatorSchema: GenMessage<TypingIndicator>;
+
+/**
+ * Someone else in a DM read it up to `msg_seq`. Also what gateways publish on
+ * `receipts.{partition}` for the owning fan-out.
+ *
+ * @generated from message xmsg.v1.ReadReceipt
+ */
+export declare type ReadReceipt = Message<"xmsg.v1.ReadReceipt"> & {
+  /**
+   * @generated from field: int64 channel_id = 1;
+   */
+  channelId: bigint;
+
+  /**
+   * @generated from field: int64 user_id = 2;
+   */
+  userId: bigint;
+
+  /**
+   * @generated from field: int64 msg_seq = 3;
+   */
+  msgSeq: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.ReadReceipt.
+ * Use `create(ReadReceiptSchema)` to create a new message.
+ */
+export declare const ReadReceiptSchema: GenMessage<ReadReceipt>;
 
 /**
  * Statuses of watched users: the current ones after a WatchPresence, then changes.
