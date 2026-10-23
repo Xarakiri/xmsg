@@ -22,6 +22,8 @@ export interface Endpoints {
   /** Base URL of the readstate service. */
   readstate: string;
   users: string;
+  /** Web Push subscriptions (optional: push may be off). */
+  push?: string;
 }
 
 /** What anyone sharing a workspace with the user sees. */
@@ -232,6 +234,21 @@ export class Api {
       rootMsgSeq: Number(r.root_msg_seq),
       body: r.body,
     }));
+  }
+
+  /** The server's VAPID public key, for `pushManager.subscribe` (plan §5.11). */
+  async pushKey(): Promise<string> {
+    const reply = await call<{ key: string }>(`${this.endpoints.push ?? "/push"}/v1/push/vapid-public-key`, { method: "GET" });
+    return reply.key;
+  }
+
+  /** Registers this browser for notifications (the subscription's JSON as the browser gives it). */
+  async subscribePush(token: string, subscription: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<void> {
+    await call(`${this.endpoints.push ?? "/push"}/v1/push/subscriptions`, { method: "POST", token, body: json(subscription) });
+  }
+
+  async unsubscribePush(token: string, endpoint: string): Promise<void> {
+    await call(`${this.endpoints.push ?? "/push"}/v1/push/subscriptions`, { method: "DELETE", token, body: json({ endpoint }) });
   }
 
   /** A thread's replies, oldest first (ADR-0005). */
