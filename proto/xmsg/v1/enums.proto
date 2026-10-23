@@ -37,3 +37,11 @@ enum RejectReason {
   REJECT_REASON_INVALID = 4;
   REJECT_REASON_UNAVAILABLE = 5;
 }
+
+enum PresenceStatus {
+  PRESENCE_STATUS_UNSPECIFIED = 0;
+  PRESENCE_STATUS_OFFLINE = 1;
+  // Connected, but no recent activity (or the app is in the background).
+  PRESENCE_STATUS_AWAY = 2;
+  PRESENCE_STATUS_ONLINE = 3;
+}

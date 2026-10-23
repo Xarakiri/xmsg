@@ -12,6 +12,7 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 - **Gap detection** (ADR-0009): consecutive `seq` per stream `(partition, owner_epoch)`; `StreamHeads` on `stream_heads.{gateway_id}` catch a lost last batch; a new epoch resets tracking; on a gap, local clients get `Resync{partition}`; after a NATS resubscription, everyone gets a full `Resync`.
 - **Sessions:** each authenticated connection is published to Kafka `sessions.events` (compacted, key = connection ID) with brod; a monitor-based tracker publishes the tombstone however the socket ends (clean close, abrupt disconnect or crash). A heartbeat goes to NATS `gateway.alive.{gateway_id}` every 2 s.
 - **Typing** (§5.9): a `Typing{channel_id}` frame goes to NATS `typing.{partition}` as `TypingIndicator{channel_id, user_id}` (the user from the token), at most once per channel every 3 s per connection, without waiting. Fan-out's answers arrive on `gw.{gateway_id}.ephemeral` (plain `Delivery` messages, no stream) and go straight to the users' sockets as `TypingIndicator` frames.
+- **Presence** (§5.9): each connection pings the presence service (`xmsg.svc.presence.ping`) on connect, on `Activity` changes, every 30 s, and when it closes (from the session tracker, so crashes count). `WatchPresence{user_ids}` sets the users a socket watches (registry `XmsgGateway.PresenceWatchers`); the gateway answers with current statuses (`xmsg.svc.presence.get`) and forwards changes from `presence.*` as `PresenceUpdates` frames.
 - Ping/Pong.
 
 - **Revocations** (§6.4): `XmsgGateway.Revocations` subscribes to NATS `auth.revocations`. A `SessionRevoked` closes every socket of that session (close code 1008, "session revoked") and puts the session in an ETS deny set until `refuse_until_ms`, so its still-valid access tokens can't reconnect. The deny check runs before *and* after a connecting socket registers its session, so a revocation landing in between isn't missed. Development tokens (session 0) are never revoked.
@@ -20,7 +21,7 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 
 ## Not yet
 - Resume tokens are issued but not yet accepted on reconnect.
-- Presence, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`, admission control, per-connection limits, drain on deploy.
+- Refcounted per-user presence subscriptions, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`, admission control, per-connection limits, drain on deploy.
 - Hibernation of idle connections, kernel/BEAM tuning, and the 100k-connections-per-pod capacity spike.
 
 ## Configuration (environment, `config/runtime.exs`)

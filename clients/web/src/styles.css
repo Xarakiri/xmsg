@@ -116,3 +116,7 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .thread { position: absolute; inset: 0 0 0 auto; width: min(420px, 100%); display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--border); z-index: 2; }
 .thread .message.root { border-style: dashed; }
 .thread-link { display: inline-block; margin-top: 4px; }
+.presence { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; margin-right: 6px; border: 1.5px solid var(--muted, #888); }
+.presence.online { background: #2f9e44; border-color: #2f9e44; }
+.presence.away { background: transparent; border-color: #2f9e44; }
+.presence.offline { opacity: 0.45; }

@@ -62,3 +62,18 @@ defmodule Xmsg.V1.RejectReason do
   field :REJECT_REASON_INVALID, 4
   field :REJECT_REASON_UNAVAILABLE, 5
 end
+
+defmodule Xmsg.V1.PresenceStatus do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "xmsg.v1.PresenceStatus",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :PRESENCE_STATUS_UNSPECIFIED, 0
+  field :PRESENCE_STATUS_OFFLINE, 1
+  field :PRESENCE_STATUS_AWAY, 2
+  field :PRESENCE_STATUS_ONLINE, 3
+end

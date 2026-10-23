@@ -51,9 +51,10 @@ use rdkafka::producer::{FutureProducer, FutureRecord};
 use tokio_tungstenite::{connect_async, tungstenite::Message as Ws};
 use xmsg_proto::Message;
 use xmsg_proto::v1::{
-    ChannelCreated, ChannelType, ClientFrame, Connect, InboundEvent, RejectReason,
-    SendMessageRequest, SequencedEvent, ServerFrame, ThreadRoot, Typing, TypingIndicator,
-    client_frame, inbound_event, sequenced_event, server_frame,
+    Activity, ChannelCreated, ChannelType, ClientFrame, Connect, InboundEvent, PresenceStatus,
+    PresenceUpdate, RejectReason, SendMessageRequest, SequencedEvent, ServerFrame, ThreadRoot,
+    Typing, TypingIndicator, WatchPresence, client_frame, inbound_event, sequenced_event,
+    server_frame,
 };
 
 type Socket =
@@ -180,6 +181,7 @@ async fn run() -> Result<(), String> {
 
     check_delivery(&mut clients, channel).await?;
     check_typing(&mut clients, channel, &users).await?;
+    check_presence(&mut clients, &users).await?;
 
     if let Ok(nodes) = std::env::var("XMSG_CQL_NODES") {
         check_store(&nodes, channel, alice, bob).await?;
@@ -1712,6 +1714,67 @@ async fn check_delivery(clients: &mut [Client; 3], channel: i64) -> Result<(), S
     }
     println!(
         "fan-out delivered msg_seq 1..3 to both members over WebSocket; the non-member got only its rejection"
+    );
+    Ok(())
+}
+
+/// Presence (plan §5.9): through the gateway's pings, the presence service and Valkey,
+/// and back to a watching client.
+async fn check_presence(clients: &mut [Client; 3], users: &[(i64, String)]) -> Result<(), String> {
+    let frame = |f: client_frame::Frame| ClientFrame { frame: Some(f) }.encode_to_vec();
+    async fn presence_seen(client: &mut Client, within: Duration) -> Vec<PresenceUpdate> {
+        let deadline = tokio::time::Instant::now() + within;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, next_frame(client)).await {
+                Ok(Ok(server_frame::Frame::Presence(p))) => return p.updates,
+                Ok(Ok(_)) => {}
+                _ => break,
+            }
+        }
+        Vec::new()
+    }
+    let status_of = |updates: &[PresenceUpdate], user: i64| {
+        updates.iter().find(|u| u.user_id == user).map(|u| u.status)
+    };
+    let [alice, bob, _] = clients;
+    let (alice_id, nobody) = (users[0].0, 1_i64);
+    bob.ws
+        .send(Ws::Binary(
+            frame(client_frame::Frame::WatchPresence(WatchPresence {
+                user_ids: vec![alice_id, nobody],
+            }))
+            .into(),
+        ))
+        .await
+        .map_err(|e| e.to_string())?;
+    let now = presence_seen(bob, Duration::from_secs(10)).await;
+    if status_of(&now, alice_id) != Some(PresenceStatus::Online as i32)
+        || status_of(&now, nobody) != Some(PresenceStatus::Offline as i32)
+    {
+        return Err(format!(
+            "presence: expected alice online and user 1 offline, got {now:?}"
+        ));
+    }
+    for (active, want) in [
+        (false, PresenceStatus::Away),
+        (true, PresenceStatus::Online),
+    ] {
+        alice
+            .ws
+            .send(Ws::Binary(
+                frame(client_frame::Frame::Activity(Activity { active })).into(),
+            ))
+            .await
+            .map_err(|e| e.to_string())?;
+        let changed = presence_seen(bob, Duration::from_secs(10)).await;
+        if status_of(&changed, alice_id) != Some(want as i32) {
+            return Err(format!(
+                "presence: after alice's activity {active}, bob expected {want:?}, got {changed:?}"
+            ));
+        }
+    }
+    println!(
+        "presence: bob sees alice online, away when idle, online again; a user who never connected is offline"
     );
     Ok(())
 }

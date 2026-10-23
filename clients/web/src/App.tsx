@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
+import { ApiError, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
@@ -129,7 +129,7 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
 }
 
 function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread } = useChat(me, initial);
+  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf } = useChat(me, initial);
   // The thread open next to the conversation: its root message's msg_seq.
   const [threadOf, setThreadOf] = useState<number | null>(null);
   const names = useNames(me);
@@ -140,6 +140,14 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
   const rooms = channels.filter((c) => c.kind !== "dm" && c.kind !== "group_dm");
   const dms = channels.filter((c) => c.kind === "dm" || c.kind === "group_dm");
   const current = selected ? state.channels[selected] : undefined;
+  // Presence for the people on screen: DM partners and the open channel's members.
+  const watched = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of channels) if (c.kind === "dm") for (const m of c.members) if (m !== me) ids.add(m);
+    for (const m of current?.members ?? []) if (m !== me) ids.add(m);
+    return [...ids].sort().slice(0, 200);
+  }, [channels, current, me]);
+  useEffect(() => watchPresence(watched), [watched.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The open channel is read while the tab is visible (debounced, so a burst of
   // messages costs one update; also when the tab comes back).
@@ -180,9 +188,22 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
           ))}
         </Section>
         <Section title="Direct messages" onAdd={() => setPanel("dm")}>
-          {dms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} mentions={mentionCount(c)} muted={c.muted} />
-          ))}
+          {dms.map((c) => {
+            // A 1:1 DM shows the other person's presence.
+            const other = c.kind === "dm" ? c.members.find((m) => m !== me) : undefined;
+            return (
+              <Item
+                key={c.id}
+                active={c.id === selected}
+                onClick={() => setSelected(c.id)}
+                label={channelTitle(c, me, names)}
+                unread={unread(c)}
+                mentions={mentionCount(c)}
+                muted={c.muted}
+                presence={other ? presenceOf(other) : undefined}
+              />
+            );
+          })}
         </Section>
         <footer>
           <button className="link" onClick={onSignOut}>
@@ -214,6 +235,7 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
             typing={typingIn(current.id)}
             onTyping={() => notifyTyping(current.id)}
             onReact={(msgSeq, emoji, add) => react(current.id, msgSeq, emoji, add)}
+            presenceOf={presenceOf}
             onOpenThread={(m) => {
               setThreadOf(m.msgSeq);
               openThread(current.id, { msgSeq: m.msgSeq, messageId: messageIdOf(m) });
@@ -274,6 +296,7 @@ function Section({ title, onAdd, children }: { title: string; onAdd: () => void;
 
 function Item({
   label,
+  presence,
   mentions,
   active,
   unread,
@@ -285,6 +308,7 @@ function Item({
   unread: number;
   mentions: number;
   muted: boolean;
+  presence?: Presence;
   onClick: () => void;
 }) {
   // Muted channels never shout: no bold, no badge (as in Slack). Mentions still show.
@@ -293,6 +317,7 @@ function Item({
   return (
     <li>
       <button className={classes} onClick={onClick} aria-label={`${label}${muted ? ", muted" : ""}${shown > 0 ? `, ${shown} unread` : ""}`}>
+        {presence && <PresenceDot status={presence} />}
         <span className="label">{label}</span>
         {mentions > 0 && !active && <span className="badge mention">@{mentions > 99 ? "99+" : mentions}</span>}
         {shown > 0 && !mentions && !active && <span className="badge">{shown > 99 ? "99+" : shown}</span>}
@@ -374,6 +399,7 @@ function Conversation({
   onTyping,
   onReact,
   onOpenThread,
+  presenceOf,
 }: {
   channel: Channel;
   me: string;
@@ -386,6 +412,7 @@ function Conversation({
   onTyping: () => void;
   onReact: (msgSeq: number, emoji: string, add: boolean) => void;
   onOpenThread: (root: Message) => void;
+  presenceOf: (userId: string) => Presence;
 }) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
@@ -477,6 +504,7 @@ function Conversation({
         {messages.map((m) => (
           <li key={m.key} className={`message ${m.authorId === me ? "own" : ""} ${m.status}`}>
             <div className="meta">
+              {m.authorId !== me && <PresenceDot status={presenceOf(m.authorId)} />}
               <span className="strong">{m.authorId === me ? "You" : names.label(m.authorId)}</span>
               <time className="muted small">{new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
               {m.status === "pending" && <span className="muted small">sending…</span>}
@@ -752,4 +780,9 @@ function ThreadPanel({
       </form>
     </aside>
   );
+}
+
+/** Online (filled), away (hollow) or offline (faint), with the status for screen readers. */
+function PresenceDot({ status }: { status: Presence }) {
+  return <span className={`presence ${status}`} role="img" aria-label={status} title={status} />;
 }

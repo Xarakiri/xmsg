@@ -151,3 +151,32 @@ test("typing goes out at most every 3 s per channel, and others' typing reaches 
   assert.deepEqual(typing, [["7", "102"]]);
   conn.stop();
 });
+
+test("presence: watches and activity survive reconnects, updates reach onPresence", async () => {
+  const seen: { userId: string; status: string }[][] = [];
+  const conn = new Connection({
+    url: "ws://gw/ws",
+    token: async () => "t",
+    WebSocket: FakeSocket as unknown as typeof WebSocket,
+    onStatus: () => {},
+    onAck: () => {},
+    onEvent: () => {},
+    onSendRejected: () => {},
+    onPresence: (u) => seen.push(u),
+  });
+  conn.watchPresence(["102", "103", "102"]); // before connecting: sent on Welcome
+  conn.setActive(false);
+  conn.start();
+  await tick();
+  FakeSocket.last.push({ frame: { case: "welcome", value: { partitionCount: 16 } } });
+  const frames = FakeSocket.last.sent.slice(1).map((b) => fromBinary(ClientFrameSchema, b).frame);
+  assert.deepEqual(frames.map((f) => f.case), ["activity", "watchPresence"]);
+  const watch = frames[1]!;
+  assert.deepEqual(watch.case === "watchPresence" ? watch.value.userIds : [], [102n, 103n]);
+  const before = FakeSocket.last.sent.length;
+  conn.watchPresence(["102", "103"]); // unchanged: nothing sent
+  assert.equal(FakeSocket.last.sent.length, before);
+  FakeSocket.last.push({ frame: { case: "presence", value: { updates: [{ userId: 102n, status: 3 }, { userId: 103n, status: 2 }] } } });
+  assert.deepEqual(seen, [[{ userId: "102", status: "online" }, { userId: "103", status: "away" }]]);
+  conn.stop();
+});

@@ -16,9 +16,31 @@ defmodule XmsgGateway.Bus.Local do
 
   @impl true
   def publish(subject, body) do
-    Registry.dispatch(@registry, subject, fn entries ->
-      for {pid, _} <- entries, do: send(pid, {:bus_msg, subject, body})
-    end)
+    # Exact subscriptions, plus NATS-style `prefix.*` ones matching one more token.
+    patterns =
+      Registry.select(@registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> Enum.uniq()
+      |> Enum.filter(&wildcard_match?(&1, subject))
+
+    for key <- [subject | patterns] do
+      Registry.dispatch(@registry, key, fn entries ->
+        for {pid, _} <- entries, do: send(pid, {:bus_msg, subject, body})
+      end)
+    end
+
+    :ok
+  end
+
+  defp wildcard_match?(pattern, subject) do
+    case String.split(pattern, ".") |> Enum.reverse() do
+      ["*" | rest] ->
+        prefix = rest |> Enum.reverse() |> Enum.join(".")
+        tokens = String.split(subject, ".")
+        length(tokens) == length(rest) + 1 and String.starts_with?(subject, prefix <> ".")
+
+      _ ->
+        false
+    end
   end
 
   @impl true
