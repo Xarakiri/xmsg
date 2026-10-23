@@ -2,6 +2,8 @@
 # The Elixir gateway as an OTP release. Build from the repository root:
 #   docker build -f deploy/docker/gateway.Dockerfile -t xmsg/gateway .
 FROM elixir:1.20 AS build
+# crc32cer (brod's checksum NIF) builds with cmake.
+RUN apt-get update && apt-get install -y --no-install-recommends cmake && rm -rf /var/lib/apt/lists/*
 ENV MIX_ENV=prod
 WORKDIR /src/services/gateway
 COPY services/gateway/mix.exs services/gateway/mix.lock ./
