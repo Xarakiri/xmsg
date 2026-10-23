@@ -18,7 +18,7 @@ defmodule XmsgGateway.Delivery do
 
   alias XmsgGateway.Config
   alias XmsgGateway.Delivery.Worker
-  alias Xmsg.V1.{GatewayBatch, StreamHeads}
+  alias Xmsg.V1.{Delivery, GatewayBatch, StreamHeads}
 
   @retry_ms 1_000
 
@@ -46,7 +46,8 @@ defmodule XmsgGateway.Delivery do
     bus = Config.bus()
 
     with {:ok, conn} <- bus.subscribe(Config.delivery_subject()),
-         {:ok, ^conn} <- bus.subscribe(Config.stream_heads_subject()) do
+         {:ok, ^conn} <- bus.subscribe(Config.stream_heads_subject()),
+         {:ok, ^conn} <- bus.subscribe(Config.ephemeral_subject()) do
       if state.subscribed_once? do
         for i <- 0..(state.workers - 1), do: Worker.reset(i)
         Worker.broadcast_resync(nil)
@@ -81,6 +82,16 @@ defmodule XmsgGateway.Delivery do
         heads
         |> Enum.group_by(&rem(&1.partition, state.workers))
         |> Enum.each(fn {worker, worker_heads} -> Worker.heads(worker, worker_heads) end)
+
+      # Best-effort frames (typing): no stream, no gap tracking, straight to the sockets.
+      subject == Config.ephemeral_subject() ->
+        %Delivery{user_ids: user_ids, server_frame: frame} = Delivery.decode(body)
+
+        for user_id <- user_ids do
+          Registry.dispatch(XmsgGateway.Users, user_id, fn entries ->
+            for {pid, _} <- entries, do: send(pid, {:deliver, frame})
+          end)
+        end
 
       true ->
         :ok

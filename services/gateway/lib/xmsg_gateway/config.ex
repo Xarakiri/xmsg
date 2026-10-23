@@ -33,6 +33,16 @@ defmodule XmsgGateway.Config do
   def delivery_subject, do: "gw.#{gateway_id()}"
   def stream_heads_subject, do: "stream_heads.#{gateway_id()}"
 
+  @doc """
+  Best-effort frames for this gateway (typing): plain `Delivery` messages outside the
+  sequenced stream, so losing one is never a gap.
+  """
+  def ephemeral_subject, do: "gw.#{gateway_id()}.ephemeral"
+
+  @doc "Where typing goes: the fan-out instance owning the channel's partition (plan §5.9)."
+  def typing_subject(channel_id),
+    do: "typing.#{XmsgGateway.Partition.partition(channel_id, partition_count())}"
+
   @doc "NATS request/reply subject of the messages service."
   def send_subject, do: "xmsg.svc.messages.send"
 end

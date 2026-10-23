@@ -14,7 +14,7 @@ import { file_xmsg_v1_events } from "./events_pb.js";
  * Describes the file xmsg/v1/client.proto.
  */
 export const file_xmsg_v1_client = /*@__PURE__*/
-  fileDesc("ChR4bXNnL3YxL2NsaWVudC5wcm90bxIHeG1zZy52MSKPAQoLQ2xpZW50RnJhbWUSIwoHY29ubmVjdBgBIAEoCzIQLnhtc2cudjEuQ29ubmVjdEgAEjMKDHNlbmRfbWVzc2FnZRgCIAEoCzIbLnhtc2cudjEuU2VuZE1lc3NhZ2VSZXF1ZXN0SAASHQoEcGluZxgDIAEoCzINLnhtc2cudjEuUGluZ0gAQgcKBWZyYW1lImMKB0Nvbm5lY3QSFAoMYWNjZXNzX3Rva2VuGAEgASgJEhgKEHByb3RvY29sX3ZlcnNpb24YAiABKA0SEgoKc3luY190b2tlbhgDIAEoCRIUCgxyZXN1bWVfdG9rZW4YBCABKAkiTQoSU2VuZE1lc3NhZ2VSZXF1ZXN0EhIKCmNoYW5uZWxfaWQYASABKAMSFQoNY2xpZW50X21zZ19pZBgCIAEoCRIMCgRib2R5GAMgASgJIhoKBFBpbmcSEgoKc2VudF9hdF9tcxgBIAEoAyL4AQoLU2VydmVyRnJhbWUSIwoHd2VsY29tZRgBIAEoCzIQLnhtc2cudjEuV2VsY29tZUgAEh8KA2FjaxgCIAEoCzIQLnhtc2cudjEuU2VuZEFja0gAEigKBWV2ZW50GAMgASgLMhcueG1zZy52MS5TZXF1ZW5jZWRFdmVudEgAEiEKBnJlc3luYxgEIAEoCzIPLnhtc2cudjEuUmVzeW5jSAASHQoEcG9uZxgFIAEoCzINLnhtc2cudjEuUG9uZ0gAEi4KDXNlbmRfcmVqZWN0ZWQYBiABKAsyFS54bXNnLnYxLlNlbmRSZWplY3RlZEgAQgcKBWZyYW1lIjgKB1dlbGNvbWUSFAoMcmVzdW1lX3Rva2VuGAEgASgJEhcKD3BhcnRpdGlvbl9jb3VudBgCIAEoDSJcCgxTZW5kUmVqZWN0ZWQSFQoNY2xpZW50X21zZ19pZBgBIAEoCRIlCgZyZWFzb24YAiABKA4yFS54bXNnLnYxLlJlamVjdFJlYXNvbhIOCgZkZXRhaWwYAyABKAkiIAoHU2VuZEFjaxIVCg1jbGllbnRfbXNnX2lkGAEgASgJIi4KBlJlc3luYxIWCglwYXJ0aXRpb24YASABKA1IAIgBAUIMCgpfcGFydGl0aW9uIhoKBFBvbmcSEgoKc2VudF9hdF9tcxgBIAEoA0IVChFkZXYueG1zZy5wcm90by52MVABYgZwcm90bzM", [file_xmsg_v1_enums, file_xmsg_v1_events]);
+  fileDesc("ChR4bXNnL3YxL2NsaWVudC5wcm90bxIHeG1zZy52MSKyAQoLQ2xpZW50RnJhbWUSIwoHY29ubmVjdBgBIAEoCzIQLnhtc2cudjEuQ29ubmVjdEgAEjMKDHNlbmRfbWVzc2FnZRgCIAEoCzIbLnhtc2cudjEuU2VuZE1lc3NhZ2VSZXF1ZXN0SAASHQoEcGluZxgDIAEoCzINLnhtc2cudjEuUGluZ0gAEiEKBnR5cGluZxgEIAEoCzIPLnhtc2cudjEuVHlwaW5nSABCBwoFZnJhbWUiYwoHQ29ubmVjdBIUCgxhY2Nlc3NfdG9rZW4YASABKAkSGAoQcHJvdG9jb2xfdmVyc2lvbhgCIAEoDRISCgpzeW5jX3Rva2VuGAMgASgJEhQKDHJlc3VtZV90b2tlbhgEIAEoCSJNChJTZW5kTWVzc2FnZVJlcXVlc3QSEgoKY2hhbm5lbF9pZBgBIAEoAxIVCg1jbGllbnRfbXNnX2lkGAIgASgJEgwKBGJvZHkYAyABKAkiHAoGVHlwaW5nEhIKCmNoYW5uZWxfaWQYASABKAMiGgoEUGluZxISCgpzZW50X2F0X21zGAEgASgDIqQCCgtTZXJ2ZXJGcmFtZRIjCgd3ZWxjb21lGAEgASgLMhAueG1zZy52MS5XZWxjb21lSAASHwoDYWNrGAIgASgLMhAueG1zZy52MS5TZW5kQWNrSAASKAoFZXZlbnQYAyABKAsyFy54bXNnLnYxLlNlcXVlbmNlZEV2ZW50SAASIQoGcmVzeW5jGAQgASgLMg8ueG1zZy52MS5SZXN5bmNIABIdCgRwb25nGAUgASgLMg0ueG1zZy52MS5Qb25nSAASLgoNc2VuZF9yZWplY3RlZBgGIAEoCzIVLnhtc2cudjEuU2VuZFJlamVjdGVkSAASKgoGdHlwaW5nGAcgASgLMhgueG1zZy52MS5UeXBpbmdJbmRpY2F0b3JIAEIHCgVmcmFtZSI4CgdXZWxjb21lEhQKDHJlc3VtZV90b2tlbhgBIAEoCRIXCg9wYXJ0aXRpb25fY291bnQYAiABKA0iNgoPVHlwaW5nSW5kaWNhdG9yEhIKCmNoYW5uZWxfaWQYASABKAMSDwoHdXNlcl9pZBgCIAEoAyJcCgxTZW5kUmVqZWN0ZWQSFQoNY2xpZW50X21zZ19pZBgBIAEoCRIlCgZyZWFzb24YAiABKA4yFS54bXNnLnYxLlJlamVjdFJlYXNvbhIOCgZkZXRhaWwYAyABKAkiIAoHU2VuZEFjaxIVCg1jbGllbnRfbXNnX2lkGAEgASgJIi4KBlJlc3luYxIWCglwYXJ0aXRpb24YASABKA1IAIgBAUIMCgpfcGFydGl0aW9uIhoKBFBvbmcSEgoKc2VudF9hdF9tcxgBIAEoA0IVChFkZXYueG1zZy5wcm90by52MVABYgZwcm90bzM", [file_xmsg_v1_enums, file_xmsg_v1_events]);
 
 /**
  * Describes the message xmsg.v1.ClientFrame.
@@ -38,51 +38,65 @@ export const SendMessageRequestSchema = /*@__PURE__*/
   messageDesc(file_xmsg_v1_client, 2);
 
 /**
+ * Describes the message xmsg.v1.Typing.
+ * Use `create(TypingSchema)` to create a new message.
+ */
+export const TypingSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_client, 3);
+
+/**
  * Describes the message xmsg.v1.Ping.
  * Use `create(PingSchema)` to create a new message.
  */
 export const PingSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 3);
+  messageDesc(file_xmsg_v1_client, 4);
 
 /**
  * Describes the message xmsg.v1.ServerFrame.
  * Use `create(ServerFrameSchema)` to create a new message.
  */
 export const ServerFrameSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 4);
+  messageDesc(file_xmsg_v1_client, 5);
 
 /**
  * Describes the message xmsg.v1.Welcome.
  * Use `create(WelcomeSchema)` to create a new message.
  */
 export const WelcomeSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 5);
+  messageDesc(file_xmsg_v1_client, 6);
+
+/**
+ * Describes the message xmsg.v1.TypingIndicator.
+ * Use `create(TypingIndicatorSchema)` to create a new message.
+ */
+export const TypingIndicatorSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_client, 7);
 
 /**
  * Describes the message xmsg.v1.SendRejected.
  * Use `create(SendRejectedSchema)` to create a new message.
  */
 export const SendRejectedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 6);
+  messageDesc(file_xmsg_v1_client, 8);
 
 /**
  * Describes the message xmsg.v1.SendAck.
  * Use `create(SendAckSchema)` to create a new message.
  */
 export const SendAckSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 7);
+  messageDesc(file_xmsg_v1_client, 9);
 
 /**
  * Describes the message xmsg.v1.Resync.
  * Use `create(ResyncSchema)` to create a new message.
  */
 export const ResyncSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 8);
+  messageDesc(file_xmsg_v1_client, 10);
 
 /**
  * Describes the message xmsg.v1.Pong.
  * Use `create(PongSchema)` to create a new message.
  */
 export const PongSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 9);
+  messageDesc(file_xmsg_v1_client, 11);
 

@@ -108,3 +108,46 @@ test("Resync frames reach onResync, scoped to their partition", async () => {
   assert.deepEqual(resyncs, [3, undefined]);
   conn.stop();
 });
+
+test("typing shows for a few seconds after the last notice, and a message ends it", async () => {
+  const { TypingTracker, TYPING_SHOWN_MS } = await import("../src/connection.ts");
+  const t = new TypingTracker();
+  t.note("7", "102", 1_000);
+  t.note("7", "103", 2_000);
+  assert.deepEqual(t.who("7", 2_500), ["102", "103"]);
+  assert.deepEqual(t.who("7", 1_000 + TYPING_SHOWN_MS), ["103"], "102's notice ran out");
+  t.stop("7", "103");
+  assert.deepEqual(t.who("7", 2_500), []);
+  assert.deepEqual(t.who("8", 0), []);
+});
+
+test("typing goes out at most every 3 s per channel, and others' typing reaches onTyping", async () => {
+  const typing: [string, string][] = [];
+  const conn = new Connection({
+    url: "ws://gw/ws",
+    token: async () => "t",
+    WebSocket: FakeSocket as unknown as typeof WebSocket,
+    onStatus: () => {},
+    onAck: () => {},
+    onEvent: () => {},
+    onSendRejected: () => {},
+    onTyping: (c, u) => typing.push([c, u]),
+  });
+  conn.typing("7", 0); // offline: dropped, never queued
+  conn.start();
+  await tick();
+  FakeSocket.last.push({ frame: { case: "welcome", value: { partitionCount: 16 } } });
+  const before = FakeSocket.last.sent.length;
+  conn.typing("7", 10_000);
+  conn.typing("7", 11_000);
+  conn.typing("8", 11_000);
+  conn.typing("7", 13_000);
+  const frames = FakeSocket.last.sent.slice(before).map((b) => fromBinary(ClientFrameSchema, b).frame);
+  assert.deepEqual(
+    frames.map((f) => (f.case === "typing" ? f.value.channelId : null)),
+    [7n, 8n, 7n],
+  );
+  FakeSocket.last.push({ frame: { case: "typing", value: { channelId: 7n, userId: 102n } } });
+  assert.deepEqual(typing, [["7", "102"]]);
+  conn.stop();
+});

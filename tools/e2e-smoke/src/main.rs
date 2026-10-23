@@ -52,8 +52,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message as Ws};
 use xmsg_proto::Message;
 use xmsg_proto::v1::{
     ChannelCreated, ChannelType, ClientFrame, Connect, InboundEvent, RejectReason,
-    SendMessageRequest, SequencedEvent, ServerFrame, client_frame, inbound_event, sequenced_event,
-    server_frame,
+    SendMessageRequest, SequencedEvent, ServerFrame, Typing, TypingIndicator, client_frame,
+    inbound_event, sequenced_event, server_frame,
 };
 
 type Socket =
@@ -179,6 +179,7 @@ async fn run() -> Result<(), String> {
     println!("sequencer output: msg_seq {seqs:?} for {ids:?}; non-member send rejected");
 
     check_delivery(&mut clients, channel).await?;
+    check_typing(&mut clients, channel, &users).await?;
 
     if let Ok(nodes) = std::env::var("XMSG_CQL_NODES") {
         check_store(&nodes, channel, alice, bob).await?;
@@ -1483,6 +1484,60 @@ async fn check_delivery(clients: &mut [Client; 3], channel: i64) -> Result<(), S
     }
     println!(
         "fan-out delivered msg_seq 1..3 to both members over WebSocket; the non-member got only its rejection"
+    );
+    Ok(())
+}
+
+/// Typing (plan §5.9): best-effort, through the gateway, the partition's fan-out and back.
+/// A member's typing reaches the other members; a non-member's reaches nobody.
+async fn check_typing(
+    clients: &mut [Client; 3],
+    channel: i64,
+    users: &[(i64, String)],
+) -> Result<(), String> {
+    let typing = |channel_id| ClientFrame {
+        frame: Some(client_frame::Frame::Typing(Typing { channel_id })),
+    };
+    // Waits up to `within` for a typing frame on `client`; other frames are kept as usual.
+    async fn typing_seen(client: &mut Client, within: Duration) -> Option<TypingIndicator> {
+        let deadline = tokio::time::Instant::now() + within;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, next_frame(client)).await {
+                Ok(Ok(server_frame::Frame::Typing(t))) => return Some(t),
+                Ok(Ok(_)) => {}
+                _ => return None,
+            }
+        }
+        None
+    }
+    let [alice, bob, mallory] = clients;
+    mallory
+        .ws
+        .send(Ws::Binary(typing(channel).encode_to_vec().into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(t) = typing_seen(alice, Duration::from_secs(2)).await {
+        return Err(format!(
+            "typing: a non-member's typing reached alice: {t:?}"
+        ));
+    }
+    bob.ws
+        .send(Ws::Binary(typing(channel).encode_to_vec().into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    let seen = typing_seen(alice, Duration::from_secs(10)).await;
+    let expected = TypingIndicator {
+        channel_id: channel,
+        user_id: users[1].0,
+    };
+    if seen.as_ref() != Some(&expected) {
+        return Err(format!("typing: alice expected {expected:?}, got {seen:?}"));
+    }
+    if let Some(t) = typing_seen(bob, Duration::from_millis(500)).await {
+        return Err(format!("typing: bob saw his own typing: {t:?}"));
+    }
+    println!(
+        "typing: bob's typing reached alice through the partition's fan-out; a non-member's reached nobody"
     );
     Ok(())
 }

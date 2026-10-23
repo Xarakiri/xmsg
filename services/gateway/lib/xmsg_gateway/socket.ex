@@ -23,15 +23,19 @@ defmodule XmsgGateway.Socket do
     SendRejected,
     SendResult,
     ServerFrame,
+    Typing,
+    TypingIndicator,
     Welcome
   }
 
   @close_policy 1008
+  # At most one typing notice per channel per connection in this many ms (plan §5.9).
+  @typing_interval_ms 3_000
 
   @impl true
   def init(_opts) do
     Process.send_after(self(), :auth_timeout, Config.auth_timeout_ms())
-    {:ok, %{user_id: nil, conn_id: nil, session_id: 0}}
+    {:ok, %{user_id: nil, conn_id: nil, session_id: 0, typing_at: %{}}}
   end
 
   @impl true
@@ -135,11 +139,36 @@ defmodule XmsgGateway.Socket do
     end
   end
 
+  # Typing is best-effort (plan §5.9): throttled per channel, published without waiting,
+  # and the fan-out drops it unless the user is a member of the channel.
+  defp handle_frame({:typing, %Typing{channel_id: channel_id}}, state) when channel_id > 0 do
+    now = System.monotonic_time(:millisecond)
+
+    case state.typing_at do
+      %{^channel_id => last} when now - last < @typing_interval_ms ->
+        {:ok, state}
+
+      typing_at ->
+        notice = %TypingIndicator{channel_id: channel_id, user_id: state.user_id}
+
+        _ =
+          Config.bus().publish(Config.typing_subject(channel_id), TypingIndicator.encode(notice))
+
+        {:ok, %{state | typing_at: prune(Map.put(typing_at, channel_id, now), now)}}
+    end
+  end
+
   defp handle_frame({:connect, _}, state) do
     {:stop, :normal, {@close_policy, "already connected"}, state}
   end
 
   defp handle_frame(_unknown, state), do: {:ok, state}
+
+  # Forget channels not typed in for a while, so the map stays small.
+  defp prune(typing_at, now) when map_size(typing_at) > 32,
+    do: Map.filter(typing_at, fn {_, at} -> now - at < @typing_interval_ms end)
+
+  defp prune(typing_at, _now), do: typing_at
 
   defp decode_result(reply) do
     SendResult.decode(reply)

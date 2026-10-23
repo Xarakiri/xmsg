@@ -41,6 +41,12 @@ export declare type ClientFrame = Message<"xmsg.v1.ClientFrame"> & {
      */
     value: Ping;
     case: "ping";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.Typing typing = 4;
+     */
+    value: Typing;
+    case: "typing";
   } | { case: undefined; value?: undefined };
 };
 
@@ -108,6 +114,25 @@ export declare type SendMessageRequest = Message<"xmsg.v1.SendMessageRequest"> &
 export declare const SendMessageRequestSchema: GenMessage<SendMessageRequest>;
 
 /**
+ * "I'm typing in this channel." Best-effort: the gateway passes on at most one per
+ * channel every 3 s, and nothing stores it (plan §5.9).
+ *
+ * @generated from message xmsg.v1.Typing
+ */
+export declare type Typing = Message<"xmsg.v1.Typing"> & {
+  /**
+   * @generated from field: int64 channel_id = 1;
+   */
+  channelId: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.Typing.
+ * Use `create(TypingSchema)` to create a new message.
+ */
+export declare const TypingSchema: GenMessage<Typing>;
+
+/**
  * @generated from message xmsg.v1.Ping
  */
 export declare type Ping = Message<"xmsg.v1.Ping"> & {
@@ -166,6 +191,12 @@ export declare type ServerFrame = Message<"xmsg.v1.ServerFrame"> & {
      */
     value: SendRejected;
     case: "sendRejected";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.TypingIndicator typing = 7;
+     */
+    value: TypingIndicator;
+    case: "typing";
   } | { case: undefined; value?: undefined };
 };
 
@@ -201,7 +232,30 @@ export declare const WelcomeSchema: GenMessage<Welcome>;
 /**
  * The send was refused before reaching the sequencer (invalid, too large...).
  * The client shows it as an error and does not retry it automatically.
+ * Someone else is typing in a channel you're in. Show it for a few seconds; there is
+ * no "stopped typing" (the next message, or silence, ends it).
  *
+ * @generated from message xmsg.v1.TypingIndicator
+ */
+export declare type TypingIndicator = Message<"xmsg.v1.TypingIndicator"> & {
+  /**
+   * @generated from field: int64 channel_id = 1;
+   */
+  channelId: bigint;
+
+  /**
+   * @generated from field: int64 user_id = 2;
+   */
+  userId: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.TypingIndicator.
+ * Use `create(TypingIndicatorSchema)` to create a new message.
+ */
+export declare const TypingIndicatorSchema: GenMessage<TypingIndicator>;
+
+/**
  * @generated from message xmsg.v1.SendRejected
  */
 export declare type SendRejected = Message<"xmsg.v1.SendRejected"> & {

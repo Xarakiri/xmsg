@@ -7,6 +7,7 @@ import {
   BACKGROUND_SYNC_MS,
   Connection,
   SyncScheduler,
+  TypingTracker,
   inPartition,
   reduce,
   sync,
@@ -24,6 +25,9 @@ export function useChat(me: string, initial: ChatState) {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [syncError, setSyncError] = useState(false);
   const conn = useRef<Connection | null>(null);
+  // Typing indicators live only in memory: never saved, never part of the chat state.
+  const typing = useRef(new TypingTracker());
+  const [typingTick, setTypingTick] = useState(0);
   const latest = useRef(state);
   latest.current = state;
 
@@ -41,7 +45,18 @@ export function useChat(me: string, initial: ChatState) {
     const connection = new Connection({
       url: gatewayUrl(),
       token: () => session.accessToken(),
-      onEvent: (event) => dispatch({ type: "event", event, at: Date.now() }),
+      onEvent: (event) => {
+        // Their message ends their typing indicator.
+        if (event.payload.case === "messageCreated") {
+          typing.current.stop(event.channelId.toString(), event.actorId.toString());
+          setTypingTick((n) => n + 1);
+        }
+        dispatch({ type: "event", event, at: Date.now() });
+      },
+      onTyping: (channelId, userId) => {
+        typing.current.note(channelId, userId);
+        setTypingTick((n) => n + 1);
+      },
       onAck: (clientMsgId) => dispatch({ type: "ack", clientMsgId }),
       onSendRejected: (clientMsgId, reason, detail) => dispatch({ type: "sendRejected", clientMsgId, reason, detail }),
       onStatus: (s) => {
@@ -78,6 +93,20 @@ export function useChat(me: string, initial: ChatState) {
     const id = setTimeout(() => void saveState(me, state), 200);
     return () => clearTimeout(id);
   }, [me, state]);
+
+  // Re-render once a second while anyone is typing, so indicators run out on time.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const anyone = Object.keys(latest.current.channels).some((c) => typing.current.who(c).length > 0);
+      if (anyone || typingTick > 0) setTypingTick((n) => (anyone ? n + 1 : 0));
+    }, 1_000);
+    return () => clearInterval(id);
+  }, [typingTick]);
+
+  /** Who else is typing in the channel now. */
+  const typingIn = (channelId: string) => typing.current.who(channelId);
+  /** Call on every keystroke in the composer; the connection throttles. */
+  const notifyTyping = (channelId: string) => conn.current?.typing(channelId);
 
   const send = (channelId: string, body: string) => {
     const clientMsgId = crypto.randomUUID();
@@ -123,5 +152,5 @@ export function useChat(me: string, initial: ChatState) {
     conn.current?.send(message.channelId, newKey, message.body);
   };
 
-  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry };
+  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping };
 }

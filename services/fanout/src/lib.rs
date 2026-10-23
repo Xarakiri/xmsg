@@ -38,6 +38,16 @@ pub fn recipients(event: &SequencedEvent, members: &HashSet<i64>) -> HashSet<i64
     out
 }
 
+/// Who sees `user` typing in a channel with these members: everyone else, and only if
+/// `user` is a member (best-effort, plan §5.9). `None`: drop the notice.
+pub fn typing_recipients(members: &HashSet<i64>, user: i64) -> Option<HashSet<i64>> {
+    if !members.contains(&user) {
+        return None;
+    }
+    let others: HashSet<i64> = members.iter().copied().filter(|&m| m != user).collect();
+    (!others.is_empty()).then_some(others)
+}
+
 /// Groups recipients by the gateways their connections are on.
 pub fn by_gateway(
     recipients: &HashSet<i64>,
@@ -97,6 +107,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(recipients(&left, &members), HashSet::from([1, 2, 3]));
+    }
+
+    #[test]
+    fn typing_goes_to_the_other_members_and_only_from_a_member() {
+        let members = HashSet::from([1, 2, 3]);
+        assert_eq!(typing_recipients(&members, 2), Some(HashSet::from([1, 3])));
+        assert_eq!(typing_recipients(&members, 9), None, "not a member");
+        assert_eq!(
+            typing_recipients(&HashSet::from([4]), 4),
+            None,
+            "nobody to tell"
+        );
     }
 
     #[test]
