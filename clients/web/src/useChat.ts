@@ -15,10 +15,14 @@ import {
   type Action,
   type ChatState,
   type ConnectionStatus,
+  type Presence,
   type ThreadRootRef,
 } from "@xmsg/client-core";
 import { api, gatewayUrl, session } from "./session.ts";
 import { saveState } from "./storage.ts";
+
+/** No input for this long counts as away. */
+const IDLE_AFTER_MS = 5 * 60_000;
 
 /** `initial`: the state loaded from the local database (see storage.ts). */
 export function useChat(me: string, initial: ChatState) {
@@ -29,6 +33,8 @@ export function useChat(me: string, initial: ChatState) {
   // Typing indicators live only in memory: never saved, never part of the chat state.
   const typing = useRef(new TypingTracker());
   const [typingTick, setTypingTick] = useState(0);
+  // Presence of watched users (plan §5.9): in memory only, refreshed on every reconnect.
+  const [presence, setPresence] = useState<Record<string, Presence>>({});
   const latest = useRef(state);
   latest.current = state;
 
@@ -54,6 +60,12 @@ export function useChat(me: string, initial: ChatState) {
         }
         dispatch({ type: "event", event, at: Date.now() });
       },
+      onPresence: (updates) =>
+        setPresence((p) => {
+          const next = { ...p };
+          for (const u of updates) next[u.userId] = u.status;
+          return next;
+        }),
       onTyping: (channelId, userId) => {
         typing.current.note(channelId, userId);
         setTypingTick((n) => n + 1);
@@ -73,7 +85,18 @@ export function useChat(me: string, initial: ChatState) {
     });
     conn.current = connection;
     connection.start();
+    // Away when the tab is hidden or there's been no input for 5 minutes (plan §5.9).
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const activity = () => {
+      connection.setActive(document.visibilityState === "visible");
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => connection.setActive(false), IDLE_AFTER_MS);
+    };
+    const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+    for (const e of inputs) window.addEventListener(e, activity, { passive: true });
+    activity();
     const onVisible = () => {
+      activity();
       if (document.visibilityState === "visible" && connection.isOnline) scheduler.request();
     };
     document.addEventListener("visibilitychange", onVisible);
@@ -84,6 +107,8 @@ export function useChat(me: string, initial: ChatState) {
     const expiry = setInterval(() => dispatch({ type: "expire", now: Date.now() }), 30_000);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
+      for (const e of inputs) window.removeEventListener(e, activity);
+      clearTimeout(idleTimer);
       clearInterval(timer);
       clearInterval(expiry);
       connection.stop();
@@ -103,6 +128,10 @@ export function useChat(me: string, initial: ChatState) {
     }, 1_000);
     return () => clearInterval(id);
   }, [typingTick]);
+
+  /** Watch these users' presence (people on screen); the connection keeps the set. */
+  const watchPresence = (userIds: string[]) => conn.current?.watchPresence(userIds);
+  const presenceOf = (userId: string): Presence => presence[userId] ?? "offline";
 
   /** Who else is typing in the channel now. */
   const typingIn = (channelId: string) => typing.current.who(channelId);
@@ -172,5 +201,5 @@ export function useChat(me: string, initial: ChatState) {
     conn.current?.send(message.channelId, newKey, message.body, message.threadRoot);
   };
 
-  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread };
+  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf };
 }

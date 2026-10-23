@@ -5,11 +5,18 @@
 // client_msg_ids within 15 minutes.
 
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { PresenceStatus } from "./gen/xmsg/v1/enums_pb.js";
 import { ClientFrameSchema, ServerFrameSchema, type ServerFrame } from "./gen/xmsg/v1/client_pb.js";
 import type { SequencedEvent } from "./gen/xmsg/v1/events_pb.js";
 import type { RejectReason } from "./gen/xmsg/v1/enums_pb.js";
 
 export const PROTOCOL_VERSION = 1;
+
+const PRESENCE: Record<number, Presence> = {
+  [PresenceStatus.ONLINE]: "online",
+  [PresenceStatus.AWAY]: "away",
+  [PresenceStatus.OFFLINE]: "offline",
+};
 
 /** Typing notices go out at most this often per channel (plan §5.9). */
 export const TYPING_EVERY_MS = 3_000;
@@ -57,7 +64,11 @@ export interface ConnectionHandlers {
   onResync?(partition: number | undefined): void;
   /** Someone else is typing in a channel (best-effort; show it for a few seconds). */
   onTyping?(channelId: string, userId: string): void;
+  /** Statuses of watched users: the current ones after watchPresence, then changes. */
+  onPresence?(updates: { userId: string; status: Presence }[]): void;
 }
+
+export type Presence = "online" | "away" | "offline";
 
 export interface ConnectionOptions extends ConnectionHandlers {
   url: string;
@@ -149,6 +160,35 @@ export class Connection {
   }
 
   private readonly typedAt = new Map<string, number>();
+  private watched: string[] = [];
+  private active = true;
+
+  /** Watch these users' presence (replacing the previous set; at most 200). Kept across reconnects. */
+  watchPresence(userIds: string[]): void {
+    const ids = [...new Set(userIds)].slice(0, 200);
+    if (ids.length === this.watched.length && ids.every((id, i) => id === this.watched[i])) return;
+    this.watched = ids;
+    this.sendWatch();
+  }
+
+  /** Whether the user is using the app (front, recent input); others see "away" when not. */
+  setActive(active: boolean): void {
+    if (active === this.active) return;
+    this.active = active;
+    this.sendActivity();
+  }
+
+  private sendWatch(): void {
+    if (!this.online || !this.ws) return;
+    const frame = create(ClientFrameSchema, { frame: { case: "watchPresence", value: { userIds: this.watched.map(BigInt) } } });
+    this.ws.send(toBinary(ClientFrameSchema, frame) as Frame);
+  }
+
+  private sendActivity(): void {
+    if (!this.online || !this.ws) return;
+    const frame = create(ClientFrameSchema, { frame: { case: "activity", value: { active: this.active } } });
+    this.ws.send(toBinary(ClientFrameSchema, frame) as Frame);
+  }
 
   /** Sends if online; returns false otherwise (the message stays in the caller's outbox). */
   send(channelId: string, clientMsgId: string, body: string, threadRoot?: { msgSeq: number; messageId: string }): boolean {
@@ -199,6 +239,9 @@ export class Connection {
         this.online = true;
         this.attempt = 0;
         this.startPings();
+        // A new connection starts active and watching nobody: restore both.
+        if (!this.active) this.sendActivity();
+        if (this.watched.length) this.sendWatch();
         this.opts.onStatus("online");
         break;
       case "event":
@@ -212,6 +255,11 @@ export class Connection {
         break;
       case "resync":
         this.opts.onResync?.(frame.frame.value.partition);
+        break;
+      case "presence":
+        this.opts.onPresence?.(
+          frame.frame.value.updates.map((u) => ({ userId: u.userId.toString(), status: PRESENCE[u.status] ?? "offline" })),
+        );
         break;
       case "typing":
         this.opts.onTyping?.(frame.frame.value.channelId.toString(), frame.frame.value.userId.toString());

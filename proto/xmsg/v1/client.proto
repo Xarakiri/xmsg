@@ -5,6 +5,7 @@ package xmsg.v1;
 
 import "xmsg/v1/enums.proto";
 import "xmsg/v1/events.proto";
+import "xmsg/v1/presence.proto";
 
 option java_multiple_files = true;
 option java_package = "dev.xmsg.proto.v1";
@@ -17,6 +18,8 @@ message ClientFrame {
     SendMessageRequest send_message = 2;
     Ping ping = 3;
     Typing typing = 4;
+    WatchPresence watch_presence = 5;
+    Activity activity = 6;
   }
 }
 
@@ -42,6 +45,19 @@ message Typing {
   int64 channel_id = 1;
 }
 
+// The users whose presence this client shows now (people on screen). Replaces the
+// previous set; at most 200. The gateway answers with their current statuses, then
+// sends changes as they happen.
+message WatchPresence {
+  repeated int64 user_ids = 1;
+}
+
+// Whether the user is active on this connection (the app is in front and used
+// recently) or idle. Connections start active.
+message Activity {
+  bool active = 1;
+}
+
 message Ping {
   int64 sent_at_ms = 1;
 }
@@ -55,6 +71,7 @@ message ServerFrame {
     Pong pong = 5;
     SendRejected send_rejected = 6;
     TypingIndicator typing = 7;
+    PresenceUpdates presence = 8;
   }
 }
 
@@ -71,6 +88,11 @@ message Welcome {
 message TypingIndicator {
   int64 channel_id = 1;
   int64 user_id = 2;
+}
+
+// Statuses of watched users: the current ones after a WatchPresence, then changes.
+message PresenceUpdates {
+  repeated PresenceUpdate updates = 1;
 }
 
 message SendRejected {

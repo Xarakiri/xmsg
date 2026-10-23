@@ -43,6 +43,10 @@ defmodule XmsgGateway.Config do
   def typing_subject(channel_id),
     do: "typing.#{XmsgGateway.Partition.partition(channel_id, partition_count())}"
 
+  @doc "Presence (plan §5.9): per-connection pings, and status queries."
+  def presence_ping_subject, do: "xmsg.svc.presence.ping"
+  def presence_query_subject, do: "xmsg.svc.presence.get"
+
   @doc "NATS request/reply subject of the messages service."
   def send_subject, do: "xmsg.svc.messages.send"
 end

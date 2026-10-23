@@ -14,6 +14,8 @@ defmodule Xmsg.V1.ClientFrame do
   field :send_message, 2, type: Xmsg.V1.SendMessageRequest, json_name: "sendMessage", oneof: 0
   field :ping, 3, type: Xmsg.V1.Ping, oneof: 0
   field :typing, 4, type: Xmsg.V1.Typing, oneof: 0
+  field :watch_presence, 5, type: Xmsg.V1.WatchPresence, json_name: "watchPresence", oneof: 0
+  field :activity, 6, type: Xmsg.V1.Activity, oneof: 0
 end
 
 defmodule Xmsg.V1.Connect do
@@ -49,6 +51,28 @@ defmodule Xmsg.V1.Typing do
   field :channel_id, 1, type: :int64, json_name: "channelId"
 end
 
+defmodule Xmsg.V1.WatchPresence do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.WatchPresence",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :user_ids, 1, repeated: true, type: :int64, json_name: "userIds"
+end
+
+defmodule Xmsg.V1.Activity do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.Activity",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :active, 1, type: :bool
+end
+
 defmodule Xmsg.V1.Ping do
   @moduledoc false
 
@@ -74,6 +98,7 @@ defmodule Xmsg.V1.ServerFrame do
   field :pong, 5, type: Xmsg.V1.Pong, oneof: 0
   field :send_rejected, 6, type: Xmsg.V1.SendRejected, json_name: "sendRejected", oneof: 0
   field :typing, 7, type: Xmsg.V1.TypingIndicator, oneof: 0
+  field :presence, 8, type: Xmsg.V1.PresenceUpdates, oneof: 0
 end
 
 defmodule Xmsg.V1.Welcome do
@@ -95,6 +120,17 @@ defmodule Xmsg.V1.TypingIndicator do
 
   field :channel_id, 1, type: :int64, json_name: "channelId"
   field :user_id, 2, type: :int64, json_name: "userId"
+end
+
+defmodule Xmsg.V1.PresenceUpdates do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.PresenceUpdates",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :updates, 1, repeated: true, type: Xmsg.V1.PresenceUpdate
 end
 
 defmodule Xmsg.V1.SendRejected do

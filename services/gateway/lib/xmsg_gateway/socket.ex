@@ -25,17 +25,23 @@ defmodule XmsgGateway.Socket do
     ServerFrame,
     Typing,
     TypingIndicator,
+    Activity,
+    PresenceUpdates,
+    WatchPresence,
     Welcome
   }
 
   @close_policy 1008
   # At most one typing notice per channel per connection in this many ms (plan §5.9).
   @typing_interval_ms 3_000
+  # Presence pings at least this often; the service's TTL is 75 s (plan §5.9).
+  @presence_every_ms 30_000
+  @max_watched 200
 
   @impl true
   def init(_opts) do
     Process.send_after(self(), :auth_timeout, Config.auth_timeout_ms())
-    {:ok, %{user_id: nil, conn_id: nil, session_id: 0, typing_at: %{}}}
+    {:ok, %{user_id: nil, conn_id: nil, session_id: 0, typing_at: %{}, active: true}}
   end
 
   @impl true
@@ -63,6 +69,13 @@ defmodule XmsgGateway.Socket do
     {:stop, :normal, {@close_policy, "authentication timeout"}, state}
   end
 
+  # Presence heartbeat: the service counts a connection gone after its TTL (75 s).
+  def handle_info(:presence_beat, %{user_id: id} = state) when not is_nil(id) do
+    _ = XmsgGateway.Presence.ping(id, state.conn_id, connection_state(state.active))
+    Process.send_after(self(), :presence_beat, @presence_every_ms)
+    {:ok, state}
+  end
+
   def handle_info(_message, state), do: {:ok, state}
 
   # Before authentication only Connect is accepted.
@@ -75,6 +88,8 @@ defmodule XmsgGateway.Socket do
       {:ok, _} = Registry.register(XmsgGateway.Users, user_id, nil)
       conn_id = XmsgGateway.Sessions.new_conn_id()
       XmsgGateway.Sessions.Tracker.track(conn_id, user_id)
+      _ = XmsgGateway.Presence.ping(user_id, conn_id, :CONNECTION_STATE_ACTIVE)
+      Process.send_after(self(), :presence_beat, @presence_every_ms)
 
       welcome = %Welcome{
         resume_token: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
@@ -82,7 +97,7 @@ defmodule XmsgGateway.Socket do
       }
 
       {:push, {:binary, encode(%ServerFrame{frame: {:welcome, welcome}})},
-       %{state | user_id: user_id, session_id: sid}}
+       %{state | user_id: user_id, session_id: sid, conn_id: conn_id}}
     else
       {:error, _} -> {:stop, :normal, {@close_policy, "invalid token"}, state}
       true -> {:stop, :normal, {@close_policy, "session revoked"}, state}
@@ -158,6 +173,29 @@ defmodule XmsgGateway.Socket do
     end
   end
 
+  defp handle_frame({:activity, %Activity{active: active}}, state) do
+    if active != state.active do
+      _ = XmsgGateway.Presence.ping(state.user_id, state.conn_id, connection_state(active))
+    end
+
+    {:ok, %{state | active: active}}
+  end
+
+  # The users this client shows now: watched from here on, current statuses at once.
+  defp handle_frame({:watch_presence, %WatchPresence{user_ids: ids}}, state) do
+    ids = ids |> Enum.filter(&(&1 > 0)) |> Enum.uniq() |> Enum.take(@max_watched)
+    :ok = XmsgGateway.Presence.watch(ids)
+
+    case ids do
+      [] ->
+        {:ok, state}
+
+      _ ->
+        updates = %PresenceUpdates{updates: XmsgGateway.Presence.query(ids)}
+        {:push, {:binary, encode(%ServerFrame{frame: {:presence, updates}})}, state}
+    end
+  end
+
   defp handle_frame({:connect, _}, state) do
     {:stop, :normal, {@close_policy, "already connected"}, state}
   end
@@ -169,6 +207,9 @@ defmodule XmsgGateway.Socket do
     do: Map.filter(typing_at, fn {_, at} -> now - at < @typing_interval_ms end)
 
   defp prune(typing_at, _now), do: typing_at
+
+  defp connection_state(true), do: :CONNECTION_STATE_ACTIVE
+  defp connection_state(false), do: :CONNECTION_STATE_IDLE
 
   defp decode_result(reply) do
     SendResult.decode(reply)

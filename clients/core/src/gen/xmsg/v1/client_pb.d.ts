@@ -9,6 +9,7 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
 import type { SequencedEvent, ThreadRoot } from "./events_pb.js";
+import type { PresenceUpdate } from "./presence_pb.js";
 import type { RejectReason } from "./enums_pb.js";
 
 /**
@@ -47,6 +48,18 @@ export declare type ClientFrame = Message<"xmsg.v1.ClientFrame"> & {
      */
     value: Typing;
     case: "typing";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.WatchPresence watch_presence = 5;
+     */
+    value: WatchPresence;
+    case: "watchPresence";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.Activity activity = 6;
+     */
+    value: Activity;
+    case: "activity";
   } | { case: undefined; value?: undefined };
 };
 
@@ -141,6 +154,45 @@ export declare type Typing = Message<"xmsg.v1.Typing"> & {
 export declare const TypingSchema: GenMessage<Typing>;
 
 /**
+ * The users whose presence this client shows now (people on screen). Replaces the
+ * previous set; at most 200. The gateway answers with their current statuses, then
+ * sends changes as they happen.
+ *
+ * @generated from message xmsg.v1.WatchPresence
+ */
+export declare type WatchPresence = Message<"xmsg.v1.WatchPresence"> & {
+  /**
+   * @generated from field: repeated int64 user_ids = 1;
+   */
+  userIds: bigint[];
+};
+
+/**
+ * Describes the message xmsg.v1.WatchPresence.
+ * Use `create(WatchPresenceSchema)` to create a new message.
+ */
+export declare const WatchPresenceSchema: GenMessage<WatchPresence>;
+
+/**
+ * Whether the user is active on this connection (the app is in front and used
+ * recently) or idle. Connections start active.
+ *
+ * @generated from message xmsg.v1.Activity
+ */
+export declare type Activity = Message<"xmsg.v1.Activity"> & {
+  /**
+   * @generated from field: bool active = 1;
+   */
+  active: boolean;
+};
+
+/**
+ * Describes the message xmsg.v1.Activity.
+ * Use `create(ActivitySchema)` to create a new message.
+ */
+export declare const ActivitySchema: GenMessage<Activity>;
+
+/**
  * @generated from message xmsg.v1.Ping
  */
 export declare type Ping = Message<"xmsg.v1.Ping"> & {
@@ -205,6 +257,12 @@ export declare type ServerFrame = Message<"xmsg.v1.ServerFrame"> & {
      */
     value: TypingIndicator;
     case: "typing";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.PresenceUpdates presence = 8;
+     */
+    value: PresenceUpdates;
+    case: "presence";
   } | { case: undefined; value?: undefined };
 };
 
@@ -262,6 +320,24 @@ export declare type TypingIndicator = Message<"xmsg.v1.TypingIndicator"> & {
  * Use `create(TypingIndicatorSchema)` to create a new message.
  */
 export declare const TypingIndicatorSchema: GenMessage<TypingIndicator>;
+
+/**
+ * Statuses of watched users: the current ones after a WatchPresence, then changes.
+ *
+ * @generated from message xmsg.v1.PresenceUpdates
+ */
+export declare type PresenceUpdates = Message<"xmsg.v1.PresenceUpdates"> & {
+  /**
+   * @generated from field: repeated xmsg.v1.PresenceUpdate updates = 1;
+   */
+  updates: PresenceUpdate[];
+};
+
+/**
+ * Describes the message xmsg.v1.PresenceUpdates.
+ * Use `create(PresenceUpdatesSchema)` to create a new message.
+ */
+export declare const PresenceUpdatesSchema: GenMessage<PresenceUpdates>;
 
 /**
  * @generated from message xmsg.v1.SendRejected

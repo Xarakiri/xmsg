@@ -150,3 +150,35 @@ export enum RejectReason {
  */
 export declare const RejectReasonSchema: GenEnum<RejectReason>;
 
+/**
+ * @generated from enum xmsg.v1.PresenceStatus
+ */
+export enum PresenceStatus {
+  /**
+   * @generated from enum value: PRESENCE_STATUS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: PRESENCE_STATUS_OFFLINE = 1;
+   */
+  OFFLINE = 1,
+
+  /**
+   * Connected, but no recent activity (or the app is in the background).
+   *
+   * @generated from enum value: PRESENCE_STATUS_AWAY = 2;
+   */
+  AWAY = 2,
+
+  /**
+   * @generated from enum value: PRESENCE_STATUS_ONLINE = 3;
+   */
+  ONLINE = 3,
+}
+
+/**
+ * Describes the enum xmsg.v1.PresenceStatus.
+ */
+export declare const PresenceStatusSchema: GenEnum<PresenceStatus>;
+
