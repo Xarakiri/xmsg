@@ -14,7 +14,7 @@ use xmsg_proto::Message;
 use xmsg_proto::v1::{ReadStateEvent, SequencedEvent, sequenced_event::Payload};
 use xmsg_readstate::api::{App, Events, router};
 use xmsg_readstate::cassandra::Cassandra;
-use xmsg_readstate::{TOPIC, apply, feed};
+use xmsg_readstate::{TOPIC, apply, feed, mentioned};
 
 struct Kafka(FutureProducer);
 
@@ -147,6 +147,16 @@ async fn feeder(bootstrap: String, store: Arc<Cassandra>, events: Arc<Kafka>) {
                         }
                         (None, _) => 0,
                     };
+                    // Mention rows before the offset can be stored: a crash repeats them, harmlessly.
+                    for &user in mentioned(&event) {
+                        while let Err(e) = store
+                            .insert_mention(user, event.channel_id, event.msg_seq)
+                            .await
+                        {
+                            tracing::warn!(error = %e, "inserting a mention failed; retrying");
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                        }
+                    }
                     for out in feed(&event, channel_msg_seq, now_ms()) {
                         let delivery = events.enqueue(&out).await;
                         inflight.push((out, delivery));
@@ -240,6 +250,9 @@ struct StoreRef(Arc<Cassandra>);
 impl xmsg_readstate::cassandra::Positions for StoreRef {
     async fn positions(&self, user_id: i64) -> Result<Vec<(i64, i64)>, String> {
         xmsg_readstate::cassandra::Positions::positions(&*self.0, user_id).await
+    }
+    async fn mentions(&self, user_id: i64) -> Result<Vec<(i64, Vec<i64>)>, String> {
+        xmsg_readstate::cassandra::Positions::mentions(&*self.0, user_id).await
     }
 }
 struct EventsRef(Arc<Kafka>);

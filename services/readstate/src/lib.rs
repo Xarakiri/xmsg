@@ -35,6 +35,26 @@ pub fn read_up_to(user_id: i64, channel_id: i64, msg_seq: i64, at_ms: i64) -> Re
     }
 }
 
+/// Users a message mentions (members only, chosen by the sequencer): the feeder inserts
+/// a `user_mentions` row for each. Idempotent inserts, so the feeder may write them
+/// itself; only `read_state` is the owner's (ADR-0012).
+pub fn mentioned(event: &SequencedEvent) -> &[i64] {
+    match &event.payload {
+        Some(Payload::MessageCreated(m)) if event.event_seq > 0 => &m.mentioned_user_ids,
+        _ => &[],
+    }
+}
+
+/// Unread mentions in one channel: `msg_seq`s after the read position, from both the
+/// user's own rows and the channel's `@channel` rows, ascending and without repeats.
+pub fn unread_mentions(last_read: i64, mut own: Vec<i64>, channel: Vec<i64>) -> Vec<i64> {
+    own.extend(channel);
+    own.retain(|&s| s > last_read);
+    own.sort_unstable();
+    own.dedup();
+    own
+}
+
 /// What the feeder produces for one sequenced event. `channel_msg_seq` is the channel's
 /// latest `msg_seq` before this event (for joins: a new member has read nothing older).
 pub fn feed(event: &SequencedEvent, channel_msg_seq: i64, at_ms: i64) -> Vec<ReadStateEvent> {
@@ -67,6 +87,26 @@ pub fn feed(event: &SequencedEvent, channel_msg_seq: i64, at_ms: i64) -> Vec<Rea
 mod tests {
     use super::*;
     use xmsg_proto::v1::{MemberJoined, MessageCreated, Rejected};
+
+    #[test]
+    fn mentions_after_the_read_position_count_once() {
+        assert_eq!(
+            unread_mentions(5, vec![3, 6, 9], vec![9, 7, 2]),
+            vec![6, 7, 9]
+        );
+        assert!(unread_mentions(9, vec![9], vec![]).is_empty());
+        let m = event(
+            4,
+            3,
+            1,
+            Payload::MessageCreated(MessageCreated {
+                mentioned_user_ids: vec![2, 3],
+                ..Default::default()
+            }),
+        );
+        assert_eq!(mentioned(&m), &[2, 3]);
+        assert!(mentioned(&event(0, 0, 1, Payload::Rejected(Rejected::default()))).is_empty());
+    }
 
     #[test]
     fn positions_only_move_forward_except_on_an_explicit_unread() {

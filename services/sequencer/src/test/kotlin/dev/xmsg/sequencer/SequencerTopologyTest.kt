@@ -165,6 +165,19 @@ class SequencerTopologyTest {
     }
 
     @Test
+    fun `mentions keep members only, never the author, and @channel only from admins`() {
+        create(100, alice, ChannelType.CHANNEL_TYPE_PRIVATE, bob)
+        post(100, alice, "hi <@$bob> <@$carol> <@$alice> <@$bob> <!channel>")
+        post(100, bob, "<!here> anyone? <@$alice>")
+        val (first, second) = drain().filter { it.hasMessageCreated() }.map { it.messageCreated }
+        assertEquals(listOf(bob), first.mentionedUserIdsList, "carol isn't a member; alice is the author; bob once")
+        assertTrue(first.mentionsChannel)
+        assertEquals(listOf(alice), second.mentionedUserIdsList)
+        assertTrue(!second.mentionsChannel, "bob isn't an admin")
+        assertEquals(listOf(5L, 6L), Mentions.users("<@5> <@x> <@6> <@5>"))
+    }
+
+    @Test
     fun `edits and deletes take an event_seq but no msg_seq, and are checked`() {
         create(100, alice, ChannelType.CHANNEL_TYPE_PRIVATE, bob)
         post(100, bob, "helo")

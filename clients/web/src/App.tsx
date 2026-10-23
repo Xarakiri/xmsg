@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ApiError, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { ApiError, mentionCount, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
@@ -174,12 +174,12 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
         </header>
         <Section title="Channels" onAdd={() => setPanel("channel")}>
           {rooms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} muted={c.muted} />
+            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} mentions={mentionCount(c)} muted={c.muted} />
           ))}
         </Section>
         <Section title="Direct messages" onAdd={() => setPanel("dm")}>
           {dms.map((c) => (
-            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} muted={c.muted} />
+            <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} mentions={mentionCount(c)} muted={c.muted} />
           ))}
         </Section>
         <footer>
@@ -249,6 +249,7 @@ function Section({ title, onAdd, children }: { title: string; onAdd: () => void;
 
 function Item({
   label,
+  mentions,
   active,
   unread,
   muted,
@@ -257,17 +258,19 @@ function Item({
   label: string;
   active: boolean;
   unread: number;
+  mentions: number;
   muted: boolean;
   onClick: () => void;
 }) {
-  // Muted channels never shout: no bold, no badge (as in Slack).
+  // Muted channels never shout: no bold, no badge (as in Slack). Mentions still show.
   const shown = muted ? 0 : unread;
   const classes = ["item", active && "active", shown > 0 && !active && "unread", muted && "muted"].filter(Boolean).join(" ");
   return (
     <li>
       <button className={classes} onClick={onClick} aria-label={`${label}${muted ? ", muted" : ""}${shown > 0 ? `, ${shown} unread` : ""}`}>
         <span className="label">{label}</span>
-        {shown > 0 && !active && <span className="badge">{shown > 99 ? "99+" : shown}</span>}
+        {mentions > 0 && !active && <span className="badge mention">@{mentions > 99 ? "99+" : mentions}</span>}
+        {shown > 0 && !mentions && !active && <span className="badge">{shown > 99 ? "99+" : shown}</span>}
       </button>
     </li>
   );
@@ -392,7 +395,7 @@ function Conversation({
     e?.preventDefault();
     const body = draft.trim();
     if (!body) return;
-    onSend(body);
+    onSend(toTokens(body, channel.members, me, names));
     setDraft("");
   };
 
@@ -488,7 +491,7 @@ function Conversation({
                 </div>
               </form>
             ) : (
-              <div className="body">{m.body}</div>
+              <div className="body">{renderBody(m.body, me, names)}</div>
             )}
             {m.error && (
               <div className="error small">
@@ -524,4 +527,44 @@ function Conversation({
       </form>
     </section>
   );
+}
+
+/**
+ * `@Name` of a channel member becomes `<@user_id>`, and `@channel` / `@here` become
+ * `<!channel>` / `<!here>`: the tokens the sequencer turns into mentions (ADR-0012).
+ * Longer names first, so "@Ann Lee" wins over "@Ann".
+ */
+function toTokens(body: string, members: string[], me: string, names: Directory): string {
+  let out = body.replace(/@(channel|here)\b/g, "<!$1>");
+  const people = members
+    .filter((id) => id !== me)
+    .map((id) => ({ id, name: names.label(id) }))
+    .sort((a, b) => b.name.length - a.name.length);
+  for (const { id, name } of people) {
+    out = out.split(`@${name}`).join(`<@${id}>`);
+  }
+  return out;
+}
+
+/** Shows mention tokens as highlighted names; mentions of me stand out more. */
+function renderBody(body: string, me: string, names: Directory): ReactNode[] {
+  return body.split(/(<@\d+>|<!(?:channel|here)>)/).map((part, i) => {
+    const user = /^<@(\d+)>$/.exec(part)?.[1];
+    if (user) {
+      return (
+        <span key={i} className={`mention ${user === me ? "me" : ""}`}>
+          @{user === me ? names.label(me) : names.label(user)}
+        </span>
+      );
+    }
+    const everyone = /^<!(channel|here)>$/.exec(part)?.[1];
+    if (everyone) {
+      return (
+        <span key={i} className="mention me">
+          @{everyone}
+        </span>
+      );
+    }
+    return part;
+  });
 }

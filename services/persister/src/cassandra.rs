@@ -15,6 +15,8 @@ pub struct Store {
     insert_message: PreparedStatement,
     insert_channel_event: PreparedStatement,
     select_deleted: PreparedStatement,
+    insert_channel_mention: PreparedStatement,
+    update_head_mention: PreparedStatement,
     update_message_body: PreparedStatement,
     delete_message: PreparedStatement,
     insert_member_by_channel: PreparedStatement,
@@ -47,6 +49,14 @@ impl Store {
             insert_message: prepare(format!(
                 "INSERT INTO {k}.messages (channel_id, bucket, msg_seq, message_id, event_seq, author_id, client_msg_id, body, deleted) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)"
+            ))
+            .await?,
+            insert_channel_mention: prepare(format!(
+                "INSERT INTO {k}.channel_mentions (channel_id, msg_seq, kind) VALUES (?, ?, 'channel')"
+            ))
+            .await?,
+            update_head_mention: prepare(format!(
+                "UPDATE {k}.channel_heads SET last_mention_seq = ? WHERE channel_id = ?"
             ))
             .await?,
             select_deleted: prepare(format!(
@@ -176,6 +186,16 @@ impl Store {
                     )
                     .await?;
                 }
+            }
+            Write::ChannelMention {
+                channel_id,
+                msg_seq,
+            } => {
+                s.execute_unpaged(&self.insert_channel_mention, (channel_id, msg_seq))
+                    .await?;
+                // Events arrive in channel order, so the latest mention is the highest.
+                s.execute_unpaged(&self.update_head_mention, (msg_seq, channel_id))
+                    .await?;
             }
             Write::MessageDeleted {
                 channel_id,

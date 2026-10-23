@@ -154,6 +154,15 @@ export class Api {
     return reply.positions.map((p) => ({ channelId: p.channel_id, msgSeq: Number(p.last_read_msg_seq) }));
   }
 
+  /** Unread mentions of me (and `@channel`) per channel, after my read positions. */
+  async mentions(token: string): Promise<{ channelId: string; msgSeqs: number[] }[]> {
+    const reply = await call<{ mentions: { channel_id: string; msg_seqs: string[] }[] }>(
+      `${this.endpoints.readstate}/v1/me/mentions`,
+      { method: "GET", token },
+    );
+    return reply.mentions.map((m) => ({ channelId: m.channel_id, msgSeqs: m.msg_seqs.map(Number) }));
+  }
+
   /** Read up to `msgSeq` (applied by the user's readstate owner shortly after). */
   async markRead(token: string, channelId: string, msgSeq: number): Promise<void> {
     await call(`${this.endpoints.readstate}/v1/channels/${channelId}/read`, {

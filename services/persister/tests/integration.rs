@@ -163,6 +163,7 @@ async fn sequenced_events_become_rows_and_replays_change_nothing() {
             Payload::MessageCreated(MessageCreated {
                 message_id: 500 + i as i64,
                 body: body.to_string(),
+                ..Default::default()
             }),
         );
         e.msg_seq = 1 + i as i64;

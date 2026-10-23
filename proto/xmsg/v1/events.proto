@@ -118,6 +118,11 @@ message MessageCreated {
   // Snowflake: (ms timestamp, partition, counter), assigned by the sequencer.
   int64 message_id = 1;
   string body = 2;
+  // Parsed by the sequencer from `<@user_id>` tokens in the body: channel members only,
+  // never the author, at most 50.
+  repeated int64 mentioned_user_ids = 3;
+  // `<!channel>` or `<!here>` from a channel admin (never in broadcast channels).
+  bool mentions_channel = 4;
 }
 
 message MemberJoined {

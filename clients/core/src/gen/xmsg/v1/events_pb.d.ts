@@ -442,6 +442,21 @@ export declare type MessageCreated = Message<"xmsg.v1.MessageCreated"> & {
    * @generated from field: string body = 2;
    */
   body: string;
+
+  /**
+   * Parsed by the sequencer from `<@user_id>` tokens in the body: channel members only,
+   * never the author, at most 50.
+   *
+   * @generated from field: repeated int64 mentioned_user_ids = 3;
+   */
+  mentionedUserIds: bigint[];
+
+  /**
+   * `<!channel>` or `<!here>` from a channel admin (never in broadcast channels).
+   *
+   * @generated from field: bool mentions_channel = 4;
+   */
+  mentionsChannel: boolean;
 };
 
 /**

@@ -137,8 +137,22 @@ class SequencerProcessor(
         val messageId = nextMessageId(now)
         val updated = head.toBuilder().setEventSeq(head.eventSeq + 1).setMsgSeq(head.msgSeq + 1).build()
         heads.put(event.channelId, updated.toByteArray())
+        val body = event.sendMessage.body
+        val mentioned = Mentions.users(body)
+            .filter { it != event.actorId && role(event.channelId, it) != null }
+            .take(Mentions.MAX_USERS)
+        // @channel / @here: admin-only, and never in broadcast channels (plan §6.7).
+        val channelWide = Mentions.channel(body) &&
+            head.type != ChannelType.CHANNEL_TYPE_BROADCAST &&
+            role == MemberRole.MEMBER_ROLE_ADMIN
         emit(event, updated, now) {
-            it.setMessageCreated(MessageCreated.newBuilder().setMessageId(messageId).setBody(event.sendMessage.body))
+            it.setMessageCreated(
+                MessageCreated.newBuilder()
+                    .setMessageId(messageId)
+                    .setBody(body)
+                    .addAllMentionedUserIds(mentioned)
+                    .setMentionsChannel(channelWide),
+            )
         }
     }
 
