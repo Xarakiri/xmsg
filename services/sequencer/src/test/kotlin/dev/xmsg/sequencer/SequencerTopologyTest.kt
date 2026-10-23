@@ -16,6 +16,7 @@ import dev.xmsg.proto.v1.MemberRole
 import dev.xmsg.proto.v1.RejectReason
 import dev.xmsg.proto.v1.SendMessage
 import dev.xmsg.proto.v1.SequencedEvent
+import dev.xmsg.proto.v1.ThreadRoot
 import org.apache.kafka.common.serialization.Serdes
 import org.apache.kafka.streams.StreamsConfig
 import org.apache.kafka.streams.TestInputTopic
@@ -98,6 +99,13 @@ class SequencerTopologyTest {
                 ReactionBatch.newBuilder().setMessageId(msgSeq * 1000).setMsgSeq(msgSeq).setEmoji(emoji)
                     .addAllOps(ops.map { (user, add, counter) -> ReactionOp.newBuilder().setUserId(user).setAdd(add).setCounter(counter).build() }),
             ).build(),
+        )
+
+    private fun reply(channel: Long, actor: Long, rootSeq: Long, rootId: Long, body: String) =
+        send(
+            base(channel, actor, dedupe = "reply-$channel-$actor-$body")
+                .setSendMessage(SendMessage.newBuilder().setBody(body).setThreadRoot(ThreadRoot.newBuilder().setMsgSeq(rootSeq).setMessageId(rootId)))
+                .build(),
         )
 
     private fun drain(): List<SequencedEvent> = persisted.readValuesToList().map { SequencedEvent.parseFrom(it) }
@@ -185,6 +193,33 @@ class SequencerTopologyTest {
         assertEquals(listOf(alice), second.mentionedUserIdsList)
         assertTrue(!second.mentionsChannel, "bob isn't an admin")
         assertEquals(listOf(5L, 6L), Mentions.users("<@5> <@x> <@6> <@5>"))
+    }
+
+    @Test
+    fun `thread replies take an event_seq and their own reply_seq, never a msg_seq`() {
+        create(100, alice, ChannelType.CHANNEL_TYPE_PRIVATE, bob)
+        post(100, alice, "plan?")
+        val rootId = drain().single { it.hasMessageCreated() }.messageCreated.messageId
+
+        reply(100, bob, 1, rootId, "yes <@$alice>")
+        reply(100, alice, 1, rootId, "great")
+        reply(100, bob, 1, rootId + 1, "wrong root id")
+        reply(100, bob, 9, rootId, "no such root")
+        reply(100, carol, 1, rootId, "not a member")
+        post(100, bob, "next topic")
+
+        val events = drain()
+        val replies = events.filter { it.hasThreadReply() }
+        assertEquals(listOf(1L to 1L, 2L to 2L), replies.map { it.threadReply.replySeq to it.threadReply.replyCount })
+        assertTrue(replies.all { it.msgSeq == 0L && it.threadReply.rootMsgSeq == 1L && it.threadReply.rootMessageId == rootId })
+        assertEquals(listOf(alice), replies.first().threadReply.mentionedUserIdsList)
+        assertEquals(listOf(3L, 4L), replies.map { it.eventSeq })
+        assertEquals(
+            listOf(RejectReason.REJECT_REASON_INVALID, RejectReason.REJECT_REASON_INVALID, RejectReason.REJECT_REASON_NOT_A_MEMBER),
+            events.filter { it.hasRejected() }.map { it.rejected.reason },
+        )
+        val next = events.single { it.hasMessageCreated() }
+        assertEquals(5L to 2L, next.eventSeq to next.msgSeq, "replies don't move msg_seq")
     }
 
     @Test

@@ -113,3 +113,6 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .reaction.add { opacity: 0; }
 .message:hover .reaction.add, .message:focus-within .reaction.add { opacity: 1; }
 @media (hover: none) { .reaction.add { opacity: 1; } }
+.thread { position: absolute; inset: 0 0 0 auto; width: min(420px, 100%); display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--border); z-index: 2; }
+.thread .message.root { border-style: dashed; }
+.thread-link { display: inline-block; margin-top: 4px; }

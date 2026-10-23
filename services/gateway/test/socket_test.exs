@@ -100,6 +100,32 @@ defmodule XmsgGateway.SocketTest do
     assert {:send_message, %{body: "hi"}} = event.payload
   end
 
+  test "a thread reply carries its root through to the messages service", %{port: port} do
+    test_pid = self()
+
+    Bus.Local.put_responder(fn _subject, body ->
+      send(test_pid, {:request, InboundEvent.decode(body)})
+      {:ok, SendResult.encode(%SendResult{accepted: true})}
+    end)
+
+    {c, _} = connect_as(port, 8)
+    root = %Xmsg.V1.ThreadRoot{msg_seq: 4, message_id: 4004}
+
+    req = %SendMessageRequest{
+      channel_id: 100,
+      client_msg_id: "r-1",
+      body: "agreed",
+      thread_root: root
+    }
+
+    c = WsClient.send_frame(c, %ClientFrame{frame: {:send_message, req}})
+
+    assert {_c, %ServerFrame{frame: {:ack, %{client_msg_id: "r-1"}}}, _} =
+             WsClient.recv_server_frame(c)
+
+    assert_received {:request, %InboundEvent{payload: {:send_message, %{thread_root: ^root}}}}
+  end
+
   test "no ack when the messages service doesn't answer; the client retries later", %{port: port} do
     {c, _} = connect_as(port, 8)
     req = %SendMessageRequest{channel_id: 100, client_msg_id: "c-2", body: "hi"}

@@ -80,6 +80,7 @@ fn send(channel_id: i64, dedupe: &str) -> InboundEvent {
         dedupe_id: dedupe.into(),
         payload: Some(Payload::SendMessage(SendMessage {
             body: format!("hello {dedupe}"),
+            ..Default::default()
         })),
         ..Default::default()
     }

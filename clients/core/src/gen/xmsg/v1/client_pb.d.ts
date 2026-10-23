@@ -8,7 +8,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
-import type { SequencedEvent } from "./events_pb.js";
+import type { SequencedEvent, ThreadRoot } from "./events_pb.js";
 import type { RejectReason } from "./enums_pb.js";
 
 /**
@@ -105,6 +105,14 @@ export declare type SendMessageRequest = Message<"xmsg.v1.SendMessageRequest"> &
    * @generated from field: string body = 3;
    */
   body: string;
+
+  /**
+   * A thread reply: the root message's msg_seq and message_id (ADR-0005). Unset for a
+   * top-level message.
+   *
+   * @generated from field: xmsg.v1.ThreadRoot thread_root = 4;
+   */
+  threadRoot?: ThreadRoot | undefined;
 };
 
 /**

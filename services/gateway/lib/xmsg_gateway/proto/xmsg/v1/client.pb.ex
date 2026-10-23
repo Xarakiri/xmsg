@@ -38,6 +38,7 @@ defmodule Xmsg.V1.SendMessageRequest do
   field :channel_id, 1, type: :int64, json_name: "channelId"
   field :client_msg_id, 2, type: :string, json_name: "clientMsgId"
   field :body, 3, type: :string
+  field :thread_root, 4, type: Xmsg.V1.ThreadRoot, json_name: "threadRoot"
 end
 
 defmodule Xmsg.V1.Typing do

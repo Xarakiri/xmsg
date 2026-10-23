@@ -21,6 +21,8 @@ import dev.xmsg.proto.v1.ReactionsChanged
 import dev.xmsg.proto.v1.RejectReason
 import dev.xmsg.proto.v1.Rejected
 import dev.xmsg.proto.v1.SequencedEvent
+import dev.xmsg.proto.v1.ThreadReply
+import dev.xmsg.proto.v1.ThreadState
 import org.apache.kafka.streams.processor.api.Processor
 import org.apache.kafka.streams.processor.api.ProcessorContext
 import org.apache.kafka.streams.processor.api.Record
@@ -45,6 +47,7 @@ class SequencerProcessor(
     private lateinit var partitionState: KeyValueStore<Int, ByteArray>
     private lateinit var reactions: KeyValueStore<String, ByteArray>
     private lateinit var reactionCounts: KeyValueStore<String, ByteArray>
+    private lateinit var threads: KeyValueStore<String, ByteArray>
 
     override fun init(context: ProcessorContext<Any, ByteArray>) {
         this.context = context
@@ -54,6 +57,7 @@ class SequencerProcessor(
         partitionState = context.getStateStore(Names.STORE_PARTITION_STATE)
         reactions = context.getStateStore(Names.STORE_REACTIONS)
         reactionCounts = context.getStateStore(Names.STORE_REACTION_COUNTS)
+        threads = context.getStateStore(Names.STORE_THREADS)
     }
 
     override fun process(record: Record<Long, ByteArray>) {
@@ -142,13 +146,14 @@ class SequencerProcessor(
         ) {
             return reject(event, now, RejectReason.REJECT_REASON_FORBIDDEN, "only posters can post in broadcast channels")
         }
-        val messageId = nextMessageId(now)
-        val updated = head.toBuilder().setEventSeq(head.eventSeq + 1).setMsgSeq(head.msgSeq + 1).build()
-        heads.put(event.channelId, updated.toByteArray())
         val body = event.sendMessage.body
         val mentioned = Mentions.users(body)
             .filter { it != event.actorId && role(event.channelId, it) != null }
             .take(Mentions.MAX_USERS)
+        if (event.sendMessage.hasThreadRoot()) return threadReply(event, head, now, mentioned)
+        val messageId = nextMessageId(now)
+        val updated = head.toBuilder().setEventSeq(head.eventSeq + 1).setMsgSeq(head.msgSeq + 1).build()
+        heads.put(event.channelId, updated.toByteArray())
         // @channel / @here: admin-only, and never in broadcast channels (plan §6.7).
         val channelWide = Mentions.channel(body) &&
             head.type != ChannelType.CHANNEL_TYPE_BROADCAST &&
@@ -160,6 +165,45 @@ class SequencerProcessor(
                     .setBody(body)
                     .addAllMentionedUserIds(mentioned)
                     .setMentionsChannel(channelWide),
+            )
+        }
+    }
+
+    /**
+     * A thread reply (ADR-0005): an event_seq and the thread's next reply_seq, no msg_seq.
+     * The root must be a sequenced message; its message_id is pinned by the first reply, so
+     * a later reply naming another one is refused (the persister also checks the root row
+     * exists before touching it).
+     */
+    private fun threadReply(event: InboundEvent, head: ChannelHeadState, now: Long, mentioned: List<Long>) {
+        val root = event.sendMessage.threadRoot
+        if (root.msgSeq < 1 || root.msgSeq > head.msgSeq) {
+            return reject(event, now, RejectReason.REJECT_REASON_INVALID, "no message ${root.msgSeq} to reply to")
+        }
+        val key = "${event.channelId}:${root.msgSeq}"
+        val thread = threads.get(key)?.let { ThreadState.parseFrom(it) }
+        if (thread != null && thread.rootMessageId != root.messageId) {
+            return reject(event, now, RejectReason.REJECT_REASON_INVALID, "message ${root.msgSeq} has another id")
+        }
+        val replySeq = (thread?.replyCount ?: 0L) + 1
+        threads.put(
+            key,
+            ThreadState.newBuilder().setFormatVersion(STATE_FORMAT).setRootMessageId(root.messageId).setReplyCount(replySeq)
+                .build().toByteArray(),
+        )
+        val messageId = nextMessageId(now)
+        val updated = head.toBuilder().setEventSeq(head.eventSeq + 1).build()
+        heads.put(event.channelId, updated.toByteArray())
+        emit(event, updated, now) {
+            it.setThreadReply(
+                ThreadReply.newBuilder()
+                    .setMessageId(messageId)
+                    .setBody(event.sendMessage.body)
+                    .setRootMsgSeq(root.msgSeq)
+                    .setRootMessageId(root.messageId)
+                    .setReplySeq(replySeq)
+                    .setReplyCount(replySeq)
+                    .addAllMentionedUserIds(mentioned),
             )
         }
     }
@@ -339,7 +383,7 @@ class SequencerProcessor(
             .setWorkspaceId(head.workspaceId)
             .setActorId(event.actorId)
             .setEventSeq(head.eventSeq)
-            .setMsgSeq(if (event.payloadCase == InboundEvent.PayloadCase.SEND_MESSAGE) head.msgSeq else 0)
+            .setMsgSeq(if (event.payloadCase == InboundEvent.PayloadCase.SEND_MESSAGE && !event.sendMessage.hasThreadRoot()) head.msgSeq else 0)
             .setMembershipVersion(head.membershipVersion)
             .setFanoutMode(head.fanoutMode)
             .setChannelType(head.type)

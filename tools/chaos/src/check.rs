@@ -285,6 +285,10 @@ pub fn summary(e: &SequencedEvent) -> String {
         // History rebuilds an edit from the current row, so the body isn't compared.
         Some(Payload::MessageEdited(m)) => format!("edited msg_seq={}", m.msg_seq),
         Some(Payload::MessageDeleted(m)) => format!("deleted msg_seq={}", m.msg_seq),
+        Some(Payload::ThreadReply(r)) => format!(
+            "reply root={} reply_seq={} id={} body={:?}",
+            r.root_msg_seq, r.reply_seq, e.dedupe_id, r.body
+        ),
         Some(Payload::ReactionsChanged(r)) => {
             format!("reactions msg_seq={} {}={}", r.msg_seq, r.emoji, r.count)
         }

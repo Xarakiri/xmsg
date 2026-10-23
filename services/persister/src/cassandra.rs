@@ -17,6 +17,9 @@ pub struct Store {
     select_deleted: PreparedStatement,
     insert_channel_mention: PreparedStatement,
     set_reaction_count: PreparedStatement,
+    insert_thread_message: PreparedStatement,
+    root_exists: PreparedStatement,
+    update_root_replies: PreparedStatement,
     insert_reaction: PreparedStatement,
     delete_reaction: PreparedStatement,
     update_head_mention: PreparedStatement,
@@ -52,6 +55,20 @@ impl Store {
             insert_message: prepare(format!(
                 "INSERT INTO {k}.messages (channel_id, bucket, msg_seq, message_id, event_seq, author_id, client_msg_id, body, deleted) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, false)"
+            ))
+            .await?,
+            insert_thread_message: prepare(format!(
+                "INSERT INTO {k}.thread_messages (channel_id, thread_root, reply_seq, message_id, author_id, body, also_sent_to_channel, deleted) \
+                 VALUES (?, ?, ?, ?, ?, ?, false, false)"
+            ))
+            .await?,
+            root_exists: prepare(format!(
+                "SELECT message_id FROM {k}.messages WHERE channel_id = ? AND bucket = ? AND msg_seq = ? AND message_id = ?"
+            ))
+            .await?,
+            update_root_replies: prepare(format!(
+                "UPDATE {k}.messages SET reply_count = ?, last_reply_at = ? \
+                 WHERE channel_id = ? AND bucket = ? AND msg_seq = ? AND message_id = ?"
             ))
             .await?,
             set_reaction_count: prepare(format!(
@@ -197,6 +214,56 @@ impl Store {
                             bucket,
                             msg_seq,
                             message_id,
+                        ),
+                    )
+                    .await?;
+                }
+            }
+            Write::ThreadReply {
+                channel_id,
+                root_msg_seq,
+                root_message_id,
+                reply_seq,
+                message_id,
+                author_id,
+                body,
+                reply_count,
+                at_ms,
+            } => {
+                s.execute_unpaged(
+                    &self.insert_thread_message,
+                    (
+                        channel_id,
+                        root_msg_seq,
+                        reply_seq,
+                        message_id,
+                        author_id,
+                        body,
+                    ),
+                )
+                .await?;
+                let root = (
+                    channel_id,
+                    crate::bucket(*root_msg_seq),
+                    root_msg_seq,
+                    root_message_id,
+                );
+                let exists = s
+                    .execute_unpaged(&self.root_exists, root)
+                    .await?
+                    .into_rows_result()?
+                    .rows_num()
+                    > 0;
+                if exists {
+                    s.execute_unpaged(
+                        &self.update_root_replies,
+                        (
+                            *reply_count as i32,
+                            CqlTimestamp(*at_ms),
+                            channel_id,
+                            crate::bucket(*root_msg_seq),
+                            root_msg_seq,
+                            root_message_id,
                         ),
                     )
                     .await?;

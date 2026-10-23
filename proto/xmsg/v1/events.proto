@@ -62,8 +62,16 @@ message ReactionOp {
   int64 counter = 3;
 }
 
+// The message a thread reply belongs to: its msg_seq and message_id.
+message ThreadRoot {
+  int64 msg_seq = 1;
+  int64 message_id = 2;
+}
+
 message SendMessage {
   string body = 1;
+  // Set for a thread reply (ADR-0005).
+  ThreadRoot thread_root = 2;
 }
 
 message ChannelCreated {
@@ -111,6 +119,7 @@ message SequencedEvent {
     Rejected rejected = 14;
     ChannelModeChanged channel_mode_changed = 15;
     ReactionsChanged reactions_changed = 19;
+    ThreadReply thread_reply = 20;
     MessageEdited message_edited = 17;
     MessageDeleted message_deleted = 18;
   }
@@ -149,6 +158,20 @@ message MemberJoined {
 
 message MemberLeft {
   int64 user_id = 1;
+}
+
+// A reply in a thread (ADR-0005): an event_seq and its own reply_seq, but no msg_seq, so
+// it never counts as an unread channel message. `reply_count` is the root's absolute
+// count after it. The actor is the author; dedupe_id is their client_msg_id.
+message ThreadReply {
+  int64 message_id = 1;
+  string body = 2;
+  int64 root_msg_seq = 3;
+  int64 root_message_id = 4;
+  int64 reply_seq = 5;
+  int64 reply_count = 6;
+  // As for MessageCreated: members only, never the author, at most 50.
+  repeated int64 mentioned_user_ids = 7;
 }
 
 // A reaction batch applied by the sequencer: an event_seq, no msg_seq. `count` is the

@@ -314,3 +314,34 @@ test("reactions: mine shows at once, the server's absolute count wins, older upd
   assert.deepEqual(s.messages["7"]![0]!.reactions, {}, "nobody has it any more");
   assert.equal(s.channels["7"]!.msgSeq, 1, "reactions don't count as messages");
 });
+
+test("thread replies live under the thread, count on the root, and never move msg_seq", async () => {
+  const { threadKey } = await import("../src/state.ts");
+  const root = { msgSeq: 1, messageId: "1001" };
+  let s = apply(initialState(ME), created, message(1, 102n, "b-1", "plan?"));
+  s = reduce(s, { type: "send", channelId: "7", clientMsgId: "r-1", body: "yes", at: 5, threadRoot: root });
+  const key = threadKey("7", 1);
+  assert.equal(s.messages[key]![0]!.status, "pending");
+  const reply = (eventSeq: number, replySeq: number, actor: bigint, dedupeId: string, body: string) =>
+    ev({
+      eventSeq: BigInt(eventSeq),
+      actorId: actor,
+      dedupeId,
+      payload: {
+        case: "threadReply",
+        value: { messageId: BigInt(5000 + replySeq), body, rootMsgSeq: 1n, rootMessageId: 1001n, replySeq: BigInt(replySeq), replyCount: BigInt(replySeq) },
+      },
+    });
+  s = apply(s, reply(3, 1, 102n, "b-r", "me first"), reply(4, 2, 101n, "r-1", "yes"), reply(3, 1, 102n, "b-r", "me first"));
+  assert.deepEqual(
+    s.messages[key]!.map((m) => [m.msgSeq, m.body, m.status]),
+    [
+      [1, "me first", "confirmed"],
+      [2, "yes", "confirmed"],
+    ],
+  );
+  assert.equal(s.messages["7"]![0]!.replyCount, 2);
+  assert.equal(s.channels["7"]!.msgSeq, 1, "replies aren't channel messages");
+  s = reduce(s, { type: "threadLoaded", channelId: "7", root, replies: [{ replySeq: 3, messageId: "5003", authorId: "102", body: "late" }] });
+  assert.deepEqual(s.messages[key]!.map((m) => m.msgSeq), [1, 2, 3]);
+});

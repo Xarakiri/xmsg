@@ -10,6 +10,7 @@ pub mod edits;
 pub mod history;
 pub mod kafka;
 pub mod reactions;
+pub mod threads;
 
 use xmsg_proto::Message;
 use xmsg_proto::v1::{InboundEvent, RejectReason, SendResult, inbound_event::Payload};
@@ -131,7 +132,10 @@ mod tests {
             channel_id: 100,
             actor_id: 7,
             dedupe_id: "c-1".into(),
-            payload: Some(Payload::SendMessage(SendMessage { body: body.into() })),
+            payload: Some(Payload::SendMessage(SendMessage {
+                body: body.into(),
+                ..Default::default()
+            })),
             ..Default::default()
         }
     }
