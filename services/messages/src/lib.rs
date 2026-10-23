@@ -10,6 +10,7 @@ pub mod edits;
 pub mod history;
 pub mod kafka;
 pub mod reactions;
+pub mod search;
 pub mod threads;
 
 use xmsg_proto::Message;
