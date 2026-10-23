@@ -4049,6 +4049,7 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "rdkafka",
+ "reqwest",
  "scylla",
  "serde",
  "serde_json",
@@ -4145,6 +4146,19 @@ dependencies = [
  "tracing-subscriber",
  "xmsg-auth",
  "xmsg-authn",
+ "xmsg-proto",
+]
+
+[[package]]
+name = "xmsg-search-indexer"
+version = "0.0.0"
+dependencies = [
+ "rdkafka",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "xmsg-proto",
 ]
 

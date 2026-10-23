@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence } from "@xmsg/client-core";
+import { ApiError, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
@@ -130,6 +130,21 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
 
 function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; onSignOut: () => void }) {
   const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf } = useChat(me, initial);
+  // Search (plan §5.12): results replace the conversation until one is picked or closed.
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [searchNote, setSearchNote] = useState("");
+  const runSearch = async () => {
+    const q = query.trim();
+    if (!q) return setHits(null);
+    setSearchNote("");
+    try {
+      setHits(await api.search(await session.accessToken(), q));
+    } catch (err) {
+      setHits([]);
+      setSearchNote(errorText(err));
+    }
+  };
   // The thread open next to the conversation: its root message's msg_seq.
   const [threadOf, setThreadOf] = useState<number | null>(null);
   const names = useNames(me);
@@ -182,6 +197,16 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
             </button>
           </div>
         </header>
+        <form
+          className="search"
+          role="search"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void runSearch();
+          }}
+        >
+          <input type="search" placeholder="Search messages" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search messages" />
+        </form>
         <Section title="Channels" onAdd={() => setPanel("channel")}>
           {rooms.map((c) => (
             <Item key={c.id} active={c.id === selected} onClick={() => setSelected(c.id)} label={channelTitle(c, me, names)} unread={unread(c)} mentions={mentionCount(c)} muted={c.muted} />
@@ -223,7 +248,23 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
             }}
           />
         )}
-        {current ? (
+        {hits !== null ? (
+          <SearchResults
+            hits={hits}
+            note={searchNote}
+            channelName={(id) => (state.channels[id] ? channelTitle(state.channels[id]!, me, names) : "a channel")}
+            names={names}
+            me={me}
+            onPick={(hit) => {
+              setHits(null);
+              setSelected(hit.channelId);
+              setThreadOf(hit.reply ? hit.rootMsgSeq : null);
+              const root = hit.reply ? (state.messages[hit.channelId] ?? []).find((m) => m.msgSeq === hit.rootMsgSeq) : undefined;
+              if (root?.messageId) openThread(hit.channelId, { msgSeq: root.msgSeq, messageId: root.messageId });
+            }}
+            onClose={() => setHits(null)}
+          />
+        ) : current ? (
           <Conversation
             channel={current}
             me={me}
@@ -792,4 +833,53 @@ function ThreadPanel({
 /** Online (filled), away (hollow) or offline (faint), with the status for screen readers. */
 function PresenceDot({ status }: { status: Presence }) {
   return <span className={`presence ${status}`} role="img" aria-label={status} title={status} />;
+}
+
+/** Search results: where each hit is, who wrote it, and the text. */
+function SearchResults({
+  hits,
+  note,
+  channelName,
+  names,
+  me,
+  onPick,
+  onClose,
+}: {
+  hits: SearchHit[];
+  note: string;
+  channelName: (id: string) => string;
+  names: Directory;
+  me: string;
+  onPick: (hit: SearchHit) => void;
+  onClose: () => void;
+}) {
+  return (
+    <section className="conversation">
+      <header className="conv-header">
+        <div className="strong">
+          {hits.length} result{hits.length === 1 ? "" : "s"}
+        </div>
+        <button className="link" onClick={onClose}>
+          Close
+        </button>
+      </header>
+      {note && <p className="note">{note}</p>}
+      <ol className="messages">
+        {hits.map((h) => (
+          <li key={h.messageId} className="message">
+            <button className="link hit" onClick={() => onPick(h)}>
+              <div className="meta">
+                <span className="strong">{h.authorId === me ? "You" : names.label(h.authorId)}</span>
+                <span className="muted small">
+                  in {channelName(h.channelId)}
+                  {h.reply ? " · thread reply" : ""}
+                </span>
+              </div>
+              <div className="body">{renderBody(h.body, me, names)}</div>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
 }

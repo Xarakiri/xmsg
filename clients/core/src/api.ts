@@ -42,6 +42,17 @@ export interface WorkspaceMember extends UserProfile {
   role: Workspace["role"];
 }
 
+/** One search result: a message, or a reply (then `msgSeq` is its reply_seq in the thread of `rootMsgSeq`). */
+export interface SearchHit {
+  channelId: string;
+  msgSeq: number;
+  messageId: string;
+  authorId: string;
+  reply: boolean;
+  rootMsgSeq: number;
+  body: string;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -204,6 +215,23 @@ export class Api {
       `${this.endpoints.messages}/v1/channels/${channelId}/messages/${msgSeq}/reactions/${encodeURIComponent(emoji)}?counter=${counter}`,
       { method: add ? "PUT" : "DELETE", token },
     );
+  }
+
+  /** Messages and replies matching `q`, only in my channels (plan §5.12). */
+  async search(token: string, q: string, limit = 20): Promise<SearchHit[]> {
+    const reply = await call<{ results: { channel_id: string; msg_seq: string; message_id: string; author_id: string; kind: string; root_msg_seq: string; body: string }[] }>(
+      `${this.endpoints.messages}/v1/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+      { method: "GET", token },
+    );
+    return reply.results.map((r) => ({
+      channelId: r.channel_id,
+      msgSeq: Number(r.msg_seq),
+      messageId: r.message_id,
+      authorId: r.author_id,
+      reply: r.kind === "reply",
+      rootMsgSeq: Number(r.root_msg_seq),
+      body: r.body,
+    }));
   }
 
   /** A thread's replies, oldest first (ADR-0005). */

@@ -209,6 +209,7 @@ jobs:
         working-directory: deploy/compose
         run: |
           docker compose up -d --wait kafka nats cassandra postgres valkey
+          docker compose --profile search up -d opensearch
           docker compose up kafka-init --exit-code-from kafka-init
           docker compose up cassandra-init --exit-code-from cassandra-init
       - name: Start Debezium and register the outbox connector
@@ -221,7 +222,7 @@ jobs:
           init/debezium/register.sh
       - name: Build
         run: |
-          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-e2e-smoke
+          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-search-indexer -p xmsg-e2e-smoke
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
       - name: Messages service integration tests (real Kafka + NATS)
@@ -284,11 +285,12 @@ jobs:
             ./target/release/xmsg-readstate > logs/readstate.log 2>&1 &
           XMSG_STATE_DIR=$RUNNER_TEMP/seq-state XMSG_INSTANCE_ID=ci-1 XMSG_ADVERTISED_HOST=localhost \
             services/sequencer/build/install/xmsg-sequencer/bin/xmsg-sequencer > logs/sequencer.log 2>&1 &
-          XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
+          XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json XMSG_SEARCH_URL=http://localhost:9200 \
             ./target/release/xmsg-messages > logs/messages.log 2>&1 &
           ./target/release/xmsg-persister > logs/persister.log 2>&1 &
           ./target/release/xmsg-reaction-batcher > logs/reaction-batcher.log 2>&1 &
           ./target/release/xmsg-presence > logs/presence.log 2>&1 &
+          XMSG_OPENSEARCH_URL=http://localhost:9200 ./target/release/xmsg-search-indexer > logs/search-indexer.log 2>&1 &
           XMSG_SEQUENCER_URL=http://localhost:8090 ./target/release/xmsg-fanout > logs/fanout.log 2>&1 &
           (cd services/gateway && MIX_ENV=prod XMSG_GATEWAY_ID=ci \
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
@@ -306,6 +308,7 @@ jobs:
               && grep -q 'persister ready' logs/persister.log \
               && grep -q 'reaction-batcher ready' logs/reaction-batcher.log \
               && grep -q 'presence ready' logs/presence.log \
+              && grep -q 'search indexer ready' logs/search-indexer.log \
               && grep -q 'fanout ready' logs/fanout.log \
               && grep -q 'REBALANCING to RUNNING' logs/sequencer.log && exit 0
             sleep 2

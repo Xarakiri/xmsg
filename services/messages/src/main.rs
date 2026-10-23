@@ -81,6 +81,9 @@ async fn main() -> ExitCode {
             store,
             log: log.clone(),
             reactions,
+            search: std::env::var("XMSG_SEARCH_URL")
+                .ok()
+                .map(xmsg_messages::search::Search::new),
             verifier: match xmsg_authn::Verifier::from_env(jwks_url).await {
                 Ok(v) => v,
                 Err(e) => return fail(&e),

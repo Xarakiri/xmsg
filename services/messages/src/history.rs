@@ -95,6 +95,10 @@ pub trait Store: Send + Sync + 'static {
         from: i64,
         to: i64,
     ) -> impl Future<Output = Result<Vec<MessageRow>, String>> + Send;
+    /// The channels `user_id` is in (at most 1,000), for scoping search.
+    fn my_channels(&self, _user_id: i64) -> impl Future<Output = Result<Vec<i64>, String>> + Send {
+        async { Ok(Vec::new()) }
+    }
     /// A thread's replies after `after`, in reply_seq order, at most `limit`.
     fn thread(
         &self,
@@ -220,12 +224,15 @@ pub struct App<S, L> {
     pub log: L,
     /// Where reactions go (`reactions.in`, ADR-0015).
     pub reactions: L,
+    /// OpenSearch, when search is on (it's optional on the Small tier).
+    pub search: Option<crate::search::Search>,
     pub verifier: Verifier,
 }
 
 pub fn router<S: Store, L: EventLog + Send + Sync + 'static>(app: Arc<App<S, L>>) -> Router {
     Router::new()
         .route("/v1/channels/{channel_id}/events", get(events::<S, L>))
+        .route("/v1/search", get(crate::search::search::<S, L>))
         .route(
             "/v1/channels/{channel_id}/threads/{root_msg_seq}",
             get(crate::threads::replies::<S, L>),

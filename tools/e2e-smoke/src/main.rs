@@ -208,6 +208,7 @@ async fn run() -> Result<(), String> {
             check_reactions(url, &messages_url, &mut clients, &users, run_id).await?;
             check_threads(url, &messages_url, &mut clients, &users, run_id).await?;
             check_receipts(url, &mut clients, &users, channel).await?;
+            check_search(&messages_url, &mut clients, &users, channel, run_id).await?;
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
@@ -549,6 +550,74 @@ async fn check_membership_endpoint(
     }
     println!(
         "membership endpoint: the sequencer serves alice and bob at version 6; an unknown channel is 404"
+    );
+    Ok(())
+}
+
+/// Search (plan §5.12): a member finds a message in their channel; someone who left the
+/// channel (mallory) doesn't, because search is scoped to the caller's channels.
+async fn check_search(
+    messages_url: &str,
+    clients: &mut [Client; 3],
+    users: &[(i64, String)],
+    channel: i64,
+    run_id: i64,
+) -> Result<(), String> {
+    let (bob, mallory) = (&users[1], &users[2]);
+    let word = format!("zebra{run_id}");
+    send_body(
+        &mut clients[0].ws,
+        channel,
+        "search-me",
+        &format!("the {word} crossed the road"),
+    )
+    .await?;
+    expect_ack(&mut clients[0], "search-me").await?;
+    let found = async |token: &str| -> Result<Vec<String>, String> {
+        let (status, reply) = call(
+            "GET",
+            &format!("{messages_url}/v1/search?q={word}"),
+            token,
+            None,
+        )
+        .await?;
+        if status != 200 {
+            return Err(format!("search: GET /v1/search: {status} {reply}"));
+        }
+        Ok(reply["results"]
+            .as_array()
+            .map(|r| {
+                r.iter()
+                    .filter_map(|x| x["body"].as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default())
+    };
+    // Indexing is asynchronous (the indexer flushes every second, OpenSearch refreshes every second).
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(30);
+    loop {
+        let hits = found(&bob.1).await?;
+        if hits.len() == 1 && hits[0].contains(&word) {
+            break;
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "search: bob expected 1 hit for {word}, got {hits:?}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let searchable_after = started.elapsed();
+    let leaked = found(&mallory.1).await?;
+    if !leaked.is_empty() {
+        return Err(format!(
+            "search: mallory (not in the channel) found {leaked:?}"
+        ));
+    }
+    println!(
+        "search: bob finds a message in his channel ({} ms after sending); mallory, who left it, finds nothing",
+        searchable_after.as_millis()
     );
     Ok(())
 }
