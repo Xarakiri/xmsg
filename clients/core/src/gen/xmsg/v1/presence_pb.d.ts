@@ -17,7 +17,7 @@ export declare const file_xmsg_v1_presence: GenFile;
 
 /**
  * One connection's state, from its gateway to the presence service (NATS
- * `presence.pings`, queue group): on connect, on activity changes, every 30 s, and
+ * `xmsg.svc.presence.ping`, queue group): on connect, on activity changes, every 30 s, and
  * when it closes. A connection not heard from within its TTL counts as gone.
  *
  * @generated from message xmsg.v1.PresencePing
