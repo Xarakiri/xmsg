@@ -51,6 +51,12 @@ export interface Message {
   status: MessageStatus;
   error?: string;
   at: number;
+  /** Set once edited (ms). */
+  editedAt?: number;
+  /** event_seq of the edit the body comes from, so a redelivered older edit can't win. */
+  editSeq?: number;
+  /** Deleted messages keep their place with no body. */
+  deleted?: boolean;
 }
 
 export interface ChatState {
@@ -306,9 +312,33 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
       });
       return withMessages(next, channelId, (list) => {
         const rest = list.filter((m) => m.key !== incoming.key && !(m.msgSeq !== 0 && m.msgSeq === msgSeq));
-        const mine = list.find((m) => m.key === incoming.key);
-        return sortMessages([...rest, mine ? { ...incoming, at: mine.at } : incoming]);
+        const known = list.find((m) => m.key === incoming.key || (m.msgSeq !== 0 && m.msgSeq === msgSeq));
+        // A replayed creation never undoes a later edit or delete we already have.
+        let merged: Message = known ? { ...incoming, at: known.at } : incoming;
+        if (known?.deleted || known?.editSeq) {
+          const { editedAt, editSeq, deleted, body } = known;
+          merged = { ...merged, body, ...(editedAt && { editedAt }), ...(editSeq && { editSeq }), ...(deleted && { deleted }) };
+        }
+        return sortMessages([...rest, merged]);
       });
+    }
+    case "messageEdited": {
+      const edit = payload.value;
+      const next = withChannel(state, channel);
+      return withMessages(next, channelId, (list) =>
+        list.map((m) =>
+          m.msgSeq === Number(edit.msgSeq) && !m.deleted && (m.editSeq ?? 0) < eventSeq
+            ? { ...m, body: edit.body, editedAt: Number(edit.editedAtMs), editSeq: eventSeq }
+            : m,
+        ),
+      );
+    }
+    case "messageDeleted": {
+      const target = Number(payload.value.msgSeq);
+      const next = withChannel(state, channel);
+      return withMessages(next, channelId, (list) =>
+        list.map((m) => (m.msgSeq === target ? { ...m, body: "", deleted: true } : m)),
+      );
     }
     default:
       return withChannel(state, channel);

@@ -90,6 +90,11 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .message.rejected, .message.failed { border-color: var(--error); }
 .message .meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
 .message .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.message .actions { margin-left: auto; display: flex; gap: 8px; opacity: 0; }
+.message:hover .actions, .message:focus-within .actions { opacity: 1; }
+@media (hover: none) { .message .actions { opacity: 1; } }
+.message .edit textarea { width: 100%; min-width: 40ch; font: inherit; }
+.message .edit .row { gap: 8px; margin-top: 4px; }
 .composer { display: flex; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--panel); }
 .composer textarea { resize: none; }
 

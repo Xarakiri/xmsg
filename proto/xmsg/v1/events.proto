@@ -26,7 +26,24 @@ message InboundEvent {
     ChannelCreated channel_created = 11;
     MemberJoinRequested member_join_requested = 12;
     MemberKickRequested member_kick_requested = 13;
+    EditMessage edit_message = 14;
+    DeleteMessage delete_message = 15;
   }
+}
+
+// Only the author edits (checked by the messages service against the stored row).
+message EditMessage {
+  int64 msg_seq = 1;
+  int64 message_id = 2;
+  string body = 3;
+}
+
+// The author deletes their own message; anyone else's needs `as_admin`, which the
+// sequencer checks against the actor's role.
+message DeleteMessage {
+  int64 msg_seq = 1;
+  int64 message_id = 2;
+  bool as_admin = 3;
 }
 
 message SendMessage {
@@ -77,7 +94,24 @@ message SequencedEvent {
     MemberLeft member_left = 13;
     Rejected rejected = 14;
     ChannelModeChanged channel_mode_changed = 15;
+    MessageEdited message_edited = 17;
+    MessageDeleted message_deleted = 18;
   }
+}
+
+// Edits and deletes take an event_seq but no msg_seq (ADR-0005); they name their
+// target by its msg_seq and message_id.
+message MessageEdited {
+  int64 msg_seq = 1;
+  int64 message_id = 2;
+  string body = 3;
+  // Event time, set by the sequencer.
+  int64 edited_at_ms = 4;
+}
+
+message MessageDeleted {
+  int64 msg_seq = 1;
+  int64 message_id = 2;
 }
 
 message MessageCreated {

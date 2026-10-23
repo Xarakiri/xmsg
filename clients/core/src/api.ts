@@ -174,6 +174,23 @@ export class Api {
     return fromBinary(EventPageSchema, new Uint8Array(await response.arrayBuffer()));
   }
 
+  /**
+   * Edit your own message. Accepted (202) means sequenced shortly; the change arrives as a
+   * `messageEdited` event like everyone else's. Reuse `editId` when retrying the same edit.
+   */
+  async editMessage(token: string, channelId: string, msgSeq: number, body: string, editId: string): Promise<void> {
+    await call(`${this.endpoints.messages}/v1/channels/${channelId}/messages/${msgSeq}`, {
+      method: "PATCH",
+      token,
+      body: json({ body, edit_id: editId }),
+    });
+  }
+
+  /** Delete your own message, or anyone's as a channel admin (checked by the sequencer). */
+  async deleteMessage(token: string, channelId: string, msgSeq: number): Promise<void> {
+    await call(`${this.endpoints.messages}/v1/channels/${channelId}/messages/${msgSeq}`, { method: "DELETE", token });
+  }
+
   me(token: string): Promise<UserProfile & { email: string }> {
     return call(`${this.endpoints.users}/v1/me`, { method: "GET", token });
   }

@@ -47,14 +47,14 @@ impl Cassandra {
         let k = keyspace;
         Ok(Cassandra {
             member: prepare(format!("SELECT user_id FROM {k}.members_by_channel WHERE channel_id = ? AND user_id = ?")).await?,
-            head: prepare(format!("SELECT event_seq, channel_type FROM {k}.channel_heads WHERE channel_id = ?")).await?,
+            head: prepare(format!("SELECT event_seq, msg_seq, channel_type FROM {k}.channel_heads WHERE channel_id = ?")).await?,
             events: prepare(format!(
                 "SELECT event_seq, type, payload FROM {k}.channel_events \
                  WHERE channel_id = ? AND bucket = ? AND event_seq > ? ORDER BY event_seq ASC LIMIT ?"
             ))
             .await?,
             messages: prepare(format!(
-                "SELECT msg_seq, message_id, event_seq, author_id, client_msg_id, body FROM {k}.messages \
+                "SELECT msg_seq, message_id, event_seq, author_id, client_msg_id, body, edited_at, deleted FROM {k}.messages \
                  WHERE channel_id = ? AND bucket = ? AND msg_seq >= ? AND msg_seq <= ?"
             ))
             .await?,
@@ -85,11 +85,12 @@ impl Store for Cassandra {
             .map_err(err)?
             .into_rows_result()
             .map_err(err)?
-            .maybe_first_row::<(Option<i64>, Option<String>)>()
+            .maybe_first_row::<(Option<i64>, Option<i64>, Option<String>)>()
             .map_err(err)?;
-        Ok(row.and_then(|(seq, kind)| {
+        Ok(row.and_then(|(seq, msg_seq, kind)| {
             seq.map(|event_seq| Head {
                 event_seq,
+                msg_seq: msg_seq.unwrap_or(0),
                 channel_type: channel_type(kind.as_deref().unwrap_or("")),
             })
         }))
@@ -141,17 +142,32 @@ impl Store for Cassandra {
                 Option<i64>,
                 Option<String>,
                 Option<String>,
+                Option<scylla::value::CqlTimestamp>,
+                Option<bool>,
             )>()
             .map_err(err)?
             .map(|r| {
                 r.map(
-                    |(msg_seq, message_id, event_seq, author_id, client_msg_id, body)| MessageRow {
+                    |(
                         msg_seq,
                         message_id,
-                        event_seq: event_seq.unwrap_or_default(),
-                        author_id: author_id.unwrap_or_default(),
-                        client_msg_id: client_msg_id.unwrap_or_default(),
-                        body: body.unwrap_or_default(),
+                        event_seq,
+                        author_id,
+                        client_msg_id,
+                        body,
+                        edited_at,
+                        deleted,
+                    )| {
+                        MessageRow {
+                            msg_seq,
+                            message_id,
+                            event_seq: event_seq.unwrap_or_default(),
+                            author_id: author_id.unwrap_or_default(),
+                            client_msg_id: client_msg_id.unwrap_or_default(),
+                            body: body.unwrap_or_default(),
+                            edited_at_ms: edited_at.map_or(0, |t| t.0),
+                            deleted: deleted.unwrap_or(false),
+                        }
                     },
                 )
                 .map_err(err)

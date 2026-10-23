@@ -8,6 +8,8 @@ Phase 1a ([plan §5.7](../../docs/architecture-plan.md)). Reads `messages.persis
 | Event | Writes (in this order) |
 |---|---|
 | `message.created` | `messages` row; `channel_events` **pointer** (the `msg_seq`, not the body); `channel_heads` incl. `msg_seq` |
+| `message.edited` | `messages` body and `edited_at`, unless the row is already deleted (read first; the persister is the only writer, so this is race-free); event **pointer**; head (no `msg_seq`) |
+| `message.deleted` | `messages` body cleared, `deleted = true`; the event (it has no body); head |
 | `channel.created` | `members_by_channel` + `channels_by_user` for each initial member (roles from the sequencer); event; head |
 | `member.joined` / `member.left` | membership rows added / removed; event; head |
 | `channel.mode_changed` | `channels_by_user.fanout_mode` for every member; event; head |

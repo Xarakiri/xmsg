@@ -81,6 +81,18 @@ export declare type InboundEvent = Message<"xmsg.v1.InboundEvent"> & {
      */
     value: MemberKickRequested;
     case: "memberKickRequested";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.EditMessage edit_message = 14;
+     */
+    value: EditMessage;
+    case: "editMessage";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.DeleteMessage delete_message = 15;
+     */
+    value: DeleteMessage;
+    case: "deleteMessage";
   } | { case: undefined; value?: undefined };
 };
 
@@ -89,6 +101,63 @@ export declare type InboundEvent = Message<"xmsg.v1.InboundEvent"> & {
  * Use `create(InboundEventSchema)` to create a new message.
  */
 export declare const InboundEventSchema: GenMessage<InboundEvent>;
+
+/**
+ * Only the author edits (checked by the messages service against the stored row).
+ *
+ * @generated from message xmsg.v1.EditMessage
+ */
+export declare type EditMessage = Message<"xmsg.v1.EditMessage"> & {
+  /**
+   * @generated from field: int64 msg_seq = 1;
+   */
+  msgSeq: bigint;
+
+  /**
+   * @generated from field: int64 message_id = 2;
+   */
+  messageId: bigint;
+
+  /**
+   * @generated from field: string body = 3;
+   */
+  body: string;
+};
+
+/**
+ * Describes the message xmsg.v1.EditMessage.
+ * Use `create(EditMessageSchema)` to create a new message.
+ */
+export declare const EditMessageSchema: GenMessage<EditMessage>;
+
+/**
+ * The author deletes their own message; anyone else's needs `as_admin`, which the
+ * sequencer checks against the actor's role.
+ *
+ * @generated from message xmsg.v1.DeleteMessage
+ */
+export declare type DeleteMessage = Message<"xmsg.v1.DeleteMessage"> & {
+  /**
+   * @generated from field: int64 msg_seq = 1;
+   */
+  msgSeq: bigint;
+
+  /**
+   * @generated from field: int64 message_id = 2;
+   */
+  messageId: bigint;
+
+  /**
+   * @generated from field: bool as_admin = 3;
+   */
+  asAdmin: boolean;
+};
+
+/**
+ * Describes the message xmsg.v1.DeleteMessage.
+ * Use `create(DeleteMessageSchema)` to create a new message.
+ */
+export declare const DeleteMessageSchema: GenMessage<DeleteMessage>;
 
 /**
  * @generated from message xmsg.v1.SendMessage
@@ -280,6 +349,18 @@ export declare type SequencedEvent = Message<"xmsg.v1.SequencedEvent"> & {
      */
     value: ChannelModeChanged;
     case: "channelModeChanged";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.MessageEdited message_edited = 17;
+     */
+    value: MessageEdited;
+    case: "messageEdited";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.MessageDeleted message_deleted = 18;
+     */
+    value: MessageDeleted;
+    case: "messageDeleted";
   } | { case: undefined; value?: undefined };
 };
 
@@ -288,6 +369,63 @@ export declare type SequencedEvent = Message<"xmsg.v1.SequencedEvent"> & {
  * Use `create(SequencedEventSchema)` to create a new message.
  */
 export declare const SequencedEventSchema: GenMessage<SequencedEvent>;
+
+/**
+ * Edits and deletes take an event_seq but no msg_seq (ADR-0005); they name their
+ * target by its msg_seq and message_id.
+ *
+ * @generated from message xmsg.v1.MessageEdited
+ */
+export declare type MessageEdited = Message<"xmsg.v1.MessageEdited"> & {
+  /**
+   * @generated from field: int64 msg_seq = 1;
+   */
+  msgSeq: bigint;
+
+  /**
+   * @generated from field: int64 message_id = 2;
+   */
+  messageId: bigint;
+
+  /**
+   * @generated from field: string body = 3;
+   */
+  body: string;
+
+  /**
+   * Event time, set by the sequencer.
+   *
+   * @generated from field: int64 edited_at_ms = 4;
+   */
+  editedAtMs: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.MessageEdited.
+ * Use `create(MessageEditedSchema)` to create a new message.
+ */
+export declare const MessageEditedSchema: GenMessage<MessageEdited>;
+
+/**
+ * @generated from message xmsg.v1.MessageDeleted
+ */
+export declare type MessageDeleted = Message<"xmsg.v1.MessageDeleted"> & {
+  /**
+   * @generated from field: int64 msg_seq = 1;
+   */
+  msgSeq: bigint;
+
+  /**
+   * @generated from field: int64 message_id = 2;
+   */
+  messageId: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.MessageDeleted.
+ * Use `create(MessageDeletedSchema)` to create a new message.
+ */
+export declare const MessageDeletedSchema: GenMessage<MessageDeleted>;
 
 /**
  * @generated from message xmsg.v1.MessageCreated
