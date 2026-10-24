@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+apiVersion: v2
+name: xmsg
+description: xmsg on Kubernetes, Medium tier (ADR-0019) - the services, with your own Kafka, Cassandra/ScyllaDB, PostgreSQL and (optionally) OpenSearch.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -175,6 +175,53 @@ jobs:
         working-directory: deploy/compose
         run: docker compose down -v
 
+  helm:
+    name: Helm chart (Medium tier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.15.1
+      - name: The chart's init files are the compose ones
+        run: |
+          diff deploy/compose/init/kafka/create-topics.sh deploy/helm/xmsg/files/create-topics.sh
+          diff deploy/compose/init/cassandra/001_schema.cql deploy/helm/xmsg/files/001_schema.cql
+          diff deploy/compose/init/postgres/001_schema.sql deploy/helm/xmsg/files/postgres-001_schema.sql
+          diff deploy/compose/init/postgres/002_push.sql deploy/helm/xmsg/files/postgres-002_push.sql
+      - name: Lint and render
+        run: |
+          helm lint deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml
+          helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml > rendered.yaml
+          # Search and push off too.
+          helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml \
+            --set opensearch.url= --set push.enabled=false > rendered-minimal.yaml
+      - name: Validate against the Kubernetes schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml rendered-minimal.yaml
+
+  images:
+    name: Container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [services, sequencer, gateway, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/${{ matrix.image }}.Dockerfile
+          push: false
+          tags: xmsg/${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
   pipeline:
     name: Pipeline (service integration + end-to-end smoke, ${{ matrix.relay }} outbox relay)
     runs-on: ubuntu-latest

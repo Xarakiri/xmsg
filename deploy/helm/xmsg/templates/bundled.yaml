@@ -1,0 +1,44 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- $full := include "xmsg.fullname" . -}}
+{{/* NATS and Valkey, bundled for convenience: one pod each, nothing to keep (presence and
+deliveries rebuild after a restart, plan §8). Use your own for redundancy. */}}
+{{- range $b := list (dict "name" "nats" "on" .Values.nats.bundled "image" "nats:2.10-alpine" "port" 4222 "args" (list "-m" "8222"))
+                      (dict "name" "valkey" "on" .Values.valkey.bundled "image" "valkey/valkey:8.0" "port" 6379 "args" (list "valkey-server" "--save" "" "--appendonly" "no")) }}
+{{- if $b.on }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-{{ $b.name }}
+  labels: {{- include "xmsg.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $b.name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $b.name }} }
+  template:
+    metadata:
+      labels: {{- include "xmsg.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: {{ $b.name }}
+    spec:
+      containers:
+        - name: {{ $b.name }}
+          image: {{ $b.image }}
+          args: {{- toYaml $b.args | nindent 12 }}
+          ports:
+            - { containerPort: {{ $b.port }} }
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-{{ $b.name }}
+  labels: {{- include "xmsg.labels" $ | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $b.name }} }
+  ports:
+    - { port: {{ $b.port }} }
+{{- end }}
+{{- end }}

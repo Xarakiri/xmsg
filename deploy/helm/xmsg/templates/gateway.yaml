@@ -1,0 +1,51 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- $full := include "xmsg.fullname" . -}}
+{{- $nats := include "xmsg.natsUrl" . | trimPrefix "nats://" | splitList ":" -}}
+{{- $natsPort := "4222" -}}{{- if gt (len $nats) 1 -}}{{- $natsPort = index $nats 1 -}}{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-gateway
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: gateway }
+  template:
+    metadata:
+      labels: {{- include "xmsg.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      # Connections drain to other pods on rollout (clients reconnect and resync).
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gateway
+          image: {{ include "xmsg.image" (list . "gateway") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: XMSG_GATEWAY_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - { name: XMSG_GATEWAY_PORT, value: "4000" }
+            - { name: XMSG_NATS_HOST, value: {{ index $nats 0 | quote }} }
+            - { name: XMSG_NATS_PORT, value: {{ $natsPort | quote }} }
+            - { name: XMSG_KAFKA_BOOTSTRAP, value: {{ .Values.kafka.bootstrap | quote }} }
+            - { name: XMSG_PARTITIONS, value: {{ .Values.partitions | quote }} }
+            - { name: XMSG_AUTH_JWKS_URL, value: "http://{{ $full }}-auth:8081/.well-known/jwks.json" }
+          ports:
+            - { name: ws, containerPort: 4000 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: ws }
+            periodSeconds: 5
+          resources: {{- toYaml .Values.gateway.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-gateway
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: gateway }
+  ports:
+    - { name: ws, port: 4000, targetPort: ws }

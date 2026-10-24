@@ -12,7 +12,7 @@ create() { # name partitions [config...]
   local args=()
   for c in "$@"; do args+=(--config "$c"); done
   "$KT" --bootstrap-server "$BOOTSTRAP" --create --if-not-exists \
-    --topic "$name" --partitions "$parts" --replication-factor 1 "${args[@]}"
+    --topic "$name" --partitions "$parts" --replication-factor "${REPLICATION_FACTOR:-1}" "${args[@]}"
 }
 
 check_partitions() { # name expected

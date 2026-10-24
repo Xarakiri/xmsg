@@ -1,0 +1,76 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- $full := include "xmsg.fullname" . -}}
+# The sequencer (ADR-0003): a StatefulSet, so each instance keeps its RocksDB state and
+# its static group membership across restarts. The headless service gives every pod a
+# stable name, which is what it advertises for the membership endpoint's redirects.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-sequencer-headless
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: sequencer }
+  ports:
+    - { name: http, port: 8090 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-sequencer
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: sequencer }
+  ports:
+    - { name: http, port: 8090, targetPort: http }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $full }}-sequencer
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sequencer
+spec:
+  serviceName: {{ $full }}-sequencer-headless
+  replicas: {{ .Values.sequencer.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: sequencer }
+  template:
+    metadata:
+      labels: {{- include "xmsg.labels" . | nindent 8 }}
+        app.kubernetes.io/component: sequencer
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001 }
+      # Static membership: give the instance time to leave cleanly on SIGTERM.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: sequencer
+          image: {{ include "xmsg.image" (list . "sequencer") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef: { name: {{ $full }}-env }
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - { name: XMSG_INSTANCE_ID, value: "$(POD_NAME)" }
+            - { name: XMSG_ADVERTISED_HOST, value: "$(POD_NAME).{{ $full }}-sequencer-headless.{{ .Release.Namespace }}.svc.cluster.local" }
+            - { name: XMSG_SEQUENCER_HTTP_PORT, value: "8090" }
+            - { name: XMSG_STANDBY_REPLICAS, value: {{ .Values.sequencer.standbyReplicas | quote }} }
+            - { name: XMSG_STATE_DIR, value: /state }
+          ports:
+            - { name: http, containerPort: 8090 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          resources: {{- toYaml .Values.sequencer.resources | nindent 12 }}
+          volumeMounts:
+            - { name: state, mountPath: /state }
+  volumeClaimTemplates:
+    - metadata: { name: state }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.sequencer.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.sequencer.storage }} } }
