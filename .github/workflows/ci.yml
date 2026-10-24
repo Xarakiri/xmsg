@@ -175,6 +175,27 @@ jobs:
         working-directory: deploy/compose
         run: docker compose down -v
 
+  enterprise:
+    name: Enterprise Edition (ee/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ee
+      - name: Install protoc
+        run: sudo apt-get install -y --no-install-recommends protobuf-compiler
+      # Its own workspace: CE builds never compile it (ADR-0022).
+      - name: Format, lint and test (test licence keys only)
+        working-directory: ee
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked --features xmsg-ee-license/test-keys
+
   helm:
     name: Helm chart (Medium tier)
     runs-on: ubuntu-latest
@@ -189,6 +210,7 @@ jobs:
           diff deploy/compose/init/cassandra/001_schema.cql deploy/helm/xmsg/files/001_schema.cql
           diff deploy/compose/init/postgres/001_schema.sql deploy/helm/xmsg/files/postgres-001_schema.sql
           diff deploy/compose/init/postgres/002_push.sql deploy/helm/xmsg/files/postgres-002_push.sql
+          diff deploy/compose/init/postgres/003_sso.sql deploy/helm/xmsg/files/postgres-003_sso.sql
       - name: Lint and render
         run: |
           helm lint deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml

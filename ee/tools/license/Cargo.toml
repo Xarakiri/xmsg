@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: LicenseRef-xmsg-EE
+[package]
+name = "xmsg-license-tool"
+description = "Generates the licence-signing key and signs Enterprise Edition licences (vendor-side)"
+edition.workspace = true
+license = "LicenseRef-xmsg-EE"
+license-file = "../../LICENSE"
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[[bin]]
+name = "xmsg-license"
+path = "src/main.rs"
+
+[dependencies]
+xmsg-ee-license = { path = "../../crates/license" }
+base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+ed25519-dalek = { version = "3.0.0", default-features = false }
+getrandom = "0.4.3"

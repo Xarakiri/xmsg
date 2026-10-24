@@ -8,9 +8,15 @@ pub mod config;
 pub mod keys;
 pub mod password;
 pub mod revocation;
+pub mod sso;
 pub mod store;
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use api::{Auth, router};
+use config::Config;
+use store::Postgres;
 
 /// Time-ordered 63-bit IDs: milliseconds since 2026-01-01 in the high bits,
 /// 22 random bits below (no coordination needed for users, devices, tokens).
@@ -41,6 +47,96 @@ pub fn token_hash(token: &str) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Runs the auth service: config from the environment, Postgres, the HTTP API. The
+/// Enterprise Edition passes its identity providers (single sign-on); the Community
+/// Edition none.
+pub async fn serve(providers: Vec<std::sync::Arc<dyn sso::IdentityProvider>>) {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+    let config = Config::from_env().unwrap_or_else(|e| {
+        eprintln!("config: {e}");
+        std::process::exit(2);
+    });
+    let store = Postgres::connect(&config.database_url)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("postgres: {e}");
+            std::process::exit(1);
+        });
+    let revocations = match &config.nats_url {
+        Some(url) => {
+            let client = async_nats::connect(url).await.unwrap_or_else(|e| {
+                eprintln!("nats {url}: {e}");
+                std::process::exit(1);
+            });
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    // Best effort: the outbox copy reaches gateways via meta-relay anyway.
+                    if let Err(e) = client.publish(revocation::SUBJECT, event.into()).await {
+                        tracing::warn!(error = %e, "publishing a revocation failed; the outbox will deliver it");
+                    }
+                }
+            });
+            Some(tx)
+        }
+        None => {
+            tracing::warn!(
+                "XMSG_NATS_URL not set: revocations reach gateways through the outbox only"
+            );
+            None
+        }
+    };
+    let sso = if providers.is_empty() {
+        None
+    } else {
+        let public_url = std::env::var("XMSG_AUTH_PUBLIC_URL").unwrap_or_else(|_| {
+            eprintln!("XMSG_AUTH_PUBLIC_URL must be set for single sign-on (the auth service as browsers reach it)");
+            std::process::exit(2);
+        });
+        let web_url = std::env::var("XMSG_WEB_URL").unwrap_or_else(|_| {
+            eprintln!("XMSG_WEB_URL must be set for single sign-on (where signed-in users land)");
+            std::process::exit(2);
+        });
+        tracing::info!(providers = providers.len(), "single sign-on enabled");
+        Some(sso::Sso::new(providers, public_url, web_url))
+    };
+    let auth = Arc::new(Auth {
+        store,
+        keys: config.keys,
+        access_ttl_secs: config.access_ttl_secs,
+        refresh_ttl_secs: config.refresh_ttl_secs,
+        reuse_grace_secs: config.reuse_grace_secs,
+        revocations,
+        sso,
+    });
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("bind :{}: {e}", config.port);
+            std::process::exit(1);
+        });
+    tracing::info!(port = config.port, "auth ready");
+    axum::serve(listener, router(auth))
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("server");
+}
+
+/// SIGINT or SIGTERM. Kubernetes and systemd stop services with SIGTERM; without a
+/// handler the process dies on the spot and skips the clean shutdown below.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("installing the SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = term.recv() => {}
+    }
 }
 
 #[cfg(test)]

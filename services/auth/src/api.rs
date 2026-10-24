@@ -26,6 +26,8 @@ pub struct Auth<S> {
     /// Fast path for revocations (NATS `auth.revocations`), fed after commit; `None`
     /// leaves them to the outbox alone.
     pub revocations: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
+    /// External identity providers (single sign-on), when any are registered.
+    pub sso: Option<crate::sso::Sso>,
 }
 
 pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
@@ -36,6 +38,7 @@ pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
         .route("/v1/logout", post(logout::<S>))
         .route("/.well-known/jwks.json", get(jwks::<S>))
         .route("/healthz", get(|| async { "ok" }))
+        .merge(crate::sso::routes::<S>())
         .with_state(auth)
 }
 
@@ -162,15 +165,9 @@ async fn login<S: Store>(
     let Some(user_id) = user_id.filter(|_| ok) else {
         return Err(ApiError::Unauthorized);
     };
-    let platform: String = req.platform.chars().take(32).collect();
-    let now = Utc::now();
-    let device_id = new_id();
-    let (refresh_token, refresh) = auth.new_refresh(now);
-    auth.store
-        .start_session(user_id, device_id, &platform, refresh)
-        .await?;
-    tracing::info!(user_id, device_id, "logged in");
-    Ok(Json(auth.tokens(user_id, device_id, refresh_token, now)))
+    let tokens = auth.start_session(user_id, &req.platform).await?;
+    tracing::info!(user_id, session_id = tokens.session_id, "logged in");
+    Ok(Json(tokens))
 }
 
 async fn refresh<S: Store>(
@@ -230,6 +227,21 @@ async fn jwks<S: Store>(State(auth): State<Arc<Auth<S>>>) -> impl IntoResponse {
         [("cache-control", "public, max-age=300")],
         Json(auth.keys.jwks()),
     )
+}
+
+impl<S: Store> Auth<S> {
+    /// A new session (a device) for a user who has proven who they are: by password, or
+    /// through an external identity provider.
+    pub async fn start_session(&self, user_id: i64, platform: &str) -> Result<Tokens, ApiError> {
+        let platform: String = platform.chars().take(32).collect();
+        let now = Utc::now();
+        let device_id = new_id();
+        let (refresh_token, refresh) = self.new_refresh(now);
+        self.store
+            .start_session(user_id, device_id, &platform, refresh)
+            .await?;
+        Ok(self.tokens(user_id, device_id, refresh_token, now))
+    }
 }
 
 impl<S> Auth<S> {
@@ -301,9 +313,51 @@ mod tests {
         tokens: Mutex<HashMap<String, Token>>,
         /// What the Postgres store writes to the outbox (`session.revoked` payloads).
         outbox: Mutex<Vec<Vec<u8>>>,
+        sso: Mutex<HashMap<String, crate::store::SsoState>>,
+        links: Mutex<HashMap<String, i64>>,
     }
 
     impl Store for Memory {
+        async fn save_sso_state(
+            &self,
+            state: &str,
+            s: &crate::store::SsoState,
+        ) -> Result<(), StoreError> {
+            self.sso.lock().unwrap().insert(state.into(), s.clone());
+            Ok(())
+        }
+        async fn take_sso_state(
+            &self,
+            state: &str,
+            _max_age: Duration,
+        ) -> Result<Option<crate::store::SsoState>, StoreError> {
+            Ok(self.sso.lock().unwrap().remove(state))
+        }
+        async fn external_user(
+            &self,
+            provider: &str,
+            subject: &str,
+            email: &str,
+            _name: &str,
+            new_id: i64,
+        ) -> Result<i64, StoreError> {
+            let key = format!("{provider}:{subject}");
+            if let Some(id) = self.links.lock().unwrap().get(&key) {
+                return Ok(*id);
+            }
+            let id = {
+                let mut users = self.users.lock().unwrap();
+                users
+                    .entry(email.into())
+                    .or_insert(Credentials {
+                        user_id: new_id,
+                        password_hash: None,
+                    })
+                    .user_id
+            };
+            self.links.lock().unwrap().insert(key, id);
+            Ok(id)
+        }
         async fn create_user(
             &self,
             id: i64,
@@ -432,6 +486,7 @@ mod tests {
             refresh_ttl_secs: 3600,
             reuse_grace_secs: 30,
             revocations: None,
+            sso: None,
         });
         (router(auth.clone()), auth)
     }
@@ -450,8 +505,178 @@ mod tests {
             refresh_ttl_secs: 3600,
             reuse_grace_secs: 30,
             revocations: Some(tx),
+            sso: None,
         });
         (router(auth.clone()), auth, rx)
+    }
+
+    /// A provider standing in for OIDC: the code it's given is the subject.
+    struct Fake;
+    impl crate::sso::IdentityProvider for Fake {
+        fn id(&self) -> &str {
+            "fake"
+        }
+        fn display_name(&self) -> &str {
+            "Fake IdP"
+        }
+        fn authorize_url(
+            &self,
+            state: &str,
+            nonce: &str,
+            challenge: &str,
+            redirect: &str,
+        ) -> String {
+            format!(
+                "https://idp.example/authorize?state={state}&nonce={nonce}&code_challenge={challenge}&redirect_uri={redirect}"
+            )
+        }
+        fn finish<'a>(
+            &'a self,
+            code: &'a str,
+            verifier: &'a str,
+            _nonce: &'a str,
+            _r: &'a str,
+        ) -> crate::sso::BoxFuture<'a, Result<crate::sso::ExternalIdentity, String>> {
+            Box::pin(async move {
+                if verifier.is_empty() {
+                    return Err("no PKCE verifier".into());
+                }
+                Ok(crate::sso::ExternalIdentity {
+                    subject: code.into(),
+                    email: if code == "unverified" {
+                        "u@example.org".into()
+                    } else {
+                        "Ann@Example.org".into()
+                    },
+                    email_verified: code != "unverified",
+                    name: "Ann".into(),
+                })
+            })
+        }
+    }
+
+    async fn get(app: &Router, path: &str) -> (StatusCode, String) {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let location = response
+            .headers()
+            .get("location")
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        (status, location)
+    }
+
+    fn query_param(url: &str, name: &str) -> String {
+        url.split(['?', '&', '#'])
+            .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn single_sign_on_links_by_verified_email_and_starts_a_session() {
+        let auth = Arc::new(Auth {
+            store: Memory::default(),
+            keys: Keys::generate(),
+            access_ttl_secs: 900,
+            refresh_ttl_secs: 3600,
+            reuse_grace_secs: 30,
+            revocations: None,
+            sso: Some(crate::sso::Sso::new(
+                vec![Arc::new(Fake)],
+                "https://chat.example/auth/".into(),
+                "https://chat.example".into(),
+            )),
+        });
+        let app = router(auth.clone());
+        // An existing password account with the same email.
+        let (status, _) = call(&app, "/v1/signup", serde_json::json!({"email": "ann@example.org", "password": "correct horse battery", "name": "Ann"})).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let existing = auth.store.users.lock().unwrap()["ann@example.org"].user_id;
+
+        let (status, to_idp) = get(&app, "/v1/sso/fake/start?return_to=/channels/7").await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert!(to_idp.starts_with("https://idp.example/authorize?"));
+        assert!(to_idp.contains("redirect_uri=https://chat.example/auth/v1/sso/fake/callback"));
+        let state = query_param(&to_idp, "state");
+
+        let (status, back) = get(
+            &app,
+            &format!("/v1/sso/fake/callback?code=sub-1&state={state}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert!(
+            back.starts_with("https://chat.example/channels/7#access_token="),
+            "{back}"
+        );
+        assert_eq!(
+            query_param(&back, "user_id"),
+            existing.to_string(),
+            "linked to the account with that email"
+        );
+        assert!(!query_param(&back, "refresh_token").is_empty());
+
+        // The state is used once.
+        let (_, again) = get(
+            &app,
+            &format!("/v1/sso/fake/callback?code=sub-1&state={state}"),
+        )
+        .await;
+        assert!(again.contains("#sso_error="), "{again}");
+        // An unverified email never signs in.
+        let (_, to_idp) = get(&app, "/v1/sso/fake/start").await;
+        let (_, refused) = get(
+            &app,
+            &format!(
+                "/v1/sso/fake/callback?code=unverified&state={}",
+                query_param(&to_idp, "state")
+            ),
+        )
+        .await;
+        assert!(
+            refused.starts_with("https://chat.example/#sso_error="),
+            "{refused}"
+        );
+        // Off-site return paths are replaced.
+        let (_, to_idp) = get(&app, "/v1/sso/fake/start?return_to=https://evil.example").await;
+        let (_, back) = get(
+            &app,
+            &format!(
+                "/v1/sso/fake/callback?code=sub-1&state={}",
+                query_param(&to_idp, "state")
+            ),
+        )
+        .await;
+        assert!(
+            back.starts_with("https://chat.example/#access_token="),
+            "{back}"
+        );
+        // Unknown providers, and the provider list.
+        assert_eq!(
+            get(&app, "/v1/sso/nope/start").await.0,
+            StatusCode::NOT_FOUND
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/sso/providers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["providers"][0]["name"],
+            "Fake IdP"
+        );
     }
 
     async fn call(
