@@ -29,6 +29,9 @@ pub struct App<S> {
     /// Fast path for workspace removals (NATS `auth.revocations`, plan §6.5), fed after
     /// commit with encoded `AuthEvent`s; `None` leaves them to the outbox.
     pub removals: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
+    /// The service token for the provisioning API (`XMSG_PROVISIONING_TOKEN`); `None`
+    /// turns it off.
+    pub provisioning_token: Option<String>,
 }
 
 pub fn router<S: Store>(app: Arc<App<S>>) -> Router {
@@ -45,6 +48,7 @@ pub fn router<S: Store>(app: Arc<App<S>>) -> Router {
         )
         .route("/v1/invites/{code}/accept", post(accept_invite::<S>))
         .route("/healthz", get(|| async { "ok" }))
+        .merge(crate::provisioning::routes::<S>())
         .with_state(app)
 }
 
@@ -95,7 +99,7 @@ async fn caller<S>(app: &App<S>, headers: &HeaderMap) -> Result<i64, ApiError> {
     }
 }
 
-fn parse_id(s: &str) -> Result<i64, ApiError> {
+pub(crate) fn parse_id(s: &str) -> Result<i64, ApiError> {
     s.trim()
         .parse::<i64>()
         .ok()
@@ -332,9 +336,6 @@ async fn remove_member<S: Store>(
     headers: HeaderMap,
     Path((id, user_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    use xmsg_proto::Message;
-    use xmsg_proto::v1::{AuthEvent, UsersEvent, WorkspaceMemberRemoved, auth_event, users_event};
-
     let me = caller(&app, &headers).await?;
     let (workspace_id, user_id) = (parse_id(&id)?, parse_id(&user_id)?);
     let mine = require_member(&app, workspace_id, me).await?;
@@ -354,28 +355,43 @@ async fn remove_member<S: Store>(
     if !allowed {
         return Err(ApiError::Forbidden("not allowed to remove this member"));
     }
+    remove_from_workspace(&app, workspace_id, user_id, me).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes a member (plan §6.5): the outbox event that drives the channel removal job and
+/// fan-out's deny list, then the same removal on NATS as the fast path. `by` is 0 for the
+/// system (provisioning). `false`: they weren't a member.
+pub(crate) async fn remove_from_workspace<S: Store>(
+    app: &App<S>,
+    workspace_id: i64,
+    user_id: i64,
+    by: i64,
+) -> Result<bool, ApiError> {
+    use xmsg_proto::Message;
+    use xmsg_proto::v1::{AuthEvent, UsersEvent, WorkspaceMemberRemoved, auth_event, users_event};
+
     let removed = WorkspaceMemberRemoved {
         workspace_id,
         user_id,
-        removed_by: me,
+        removed_by: by,
         removed_at_ms: Utc::now().timestamp_millis(),
     };
     let event = UsersEvent {
         event: Some(users_event::Event::MemberRemoved(removed)),
     };
-    if app
+    let was_member = app
         .store
         .remove_member(workspace_id, user_id, &event.encode_to_vec())
-        .await?
-        && let Some(tx) = &app.removals
-    {
+        .await?;
+    if was_member && let Some(tx) = &app.removals {
         let fast = AuthEvent {
             event: Some(auth_event::Event::WorkspaceMemberRemoved(removed)),
         };
         let _ = tx.send(fast.encode_to_vec());
     }
-    tracing::info!(workspace_id, user_id, by = me, "workspace member removed");
-    Ok(StatusCode::NO_CONTENT)
+    tracing::info!(workspace_id, user_id, by, "workspace member removed");
+    Ok(was_member)
 }
 
 async fn create_invite<S: Store>(

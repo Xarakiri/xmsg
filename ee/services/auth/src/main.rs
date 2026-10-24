@@ -14,34 +14,12 @@
 use std::sync::Arc;
 
 use xmsg_auth::sso::IdentityProvider;
-use xmsg_ee_license::{Action, Feature, Licence, Status};
-
-fn licence() -> Option<Licence> {
-    let text = match (
-        std::env::var("XMSG_EE_LICENSE"),
-        std::env::var("XMSG_EE_LICENSE_FILE"),
-    ) {
-        (Ok(t), _) => t,
-        (_, Ok(path)) => std::fs::read_to_string(&path).unwrap_or_else(|e| {
-            eprintln!("XMSG_EE_LICENSE_FILE {path}: {e}");
-            std::process::exit(2);
-        }),
-        _ => return None,
-    };
-    match xmsg_ee_license::verify(&text) {
-        Ok(l) => Some(l),
-        Err(e) => {
-            // Not fatal: messaging must never depend on the licence.
-            eprintln!("licence not accepted ({e}); Enterprise features are off");
-            None
-        }
-    }
-}
+use xmsg_ee_license::{Action, Feature, Status};
 
 #[tokio::main]
 async fn main() {
     let now = chrono::Utc::now();
-    let licence = licence();
+    let licence = xmsg_ee_license::from_env();
     let mut providers: Vec<Arc<dyn IdentityProvider>> = Vec::new();
     match &licence {
         Some(l) if l.allowed(Feature::Sso, Action::Use, now) => {

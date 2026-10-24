@@ -14,7 +14,7 @@ use tower::ServiceExt;
 use xmsg_auth::keys::Keys;
 use xmsg_users::api::{App, router};
 use xmsg_users::store::{
-    Accepted, Member, NewInvite, Profile, ProfileChange, Store, StoreError, Workspace,
+    Accepted, Member, NewInvite, Profile, ProfileChange, Provisioned, Store, StoreError, Workspace,
 };
 
 #[derive(Default)]
@@ -42,6 +42,77 @@ impl Memory {
 }
 
 impl Store for Memory {
+    async fn provision_user(
+        &self,
+        workspace_id: i64,
+        email: &str,
+        name: &str,
+        new_id: i64,
+    ) -> Result<(i64, bool), StoreError> {
+        let existing = self
+            .users
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, (e, _))| e == email)
+            .map(|(id, _)| *id);
+        let (id, created) = match existing {
+            Some(id) => (id, false),
+            None => {
+                let profile = Profile {
+                    user_id: new_id,
+                    name: name.into(),
+                    avatar_url: None,
+                };
+                self.users
+                    .lock()
+                    .unwrap()
+                    .insert(new_id, (email.into(), profile));
+                (new_id, true)
+            }
+        };
+        self.members
+            .lock()
+            .unwrap()
+            .entry((workspace_id, id))
+            .or_insert_with(|| "member".into());
+        Ok((id, created))
+    }
+    async fn provisioned_by_email(
+        &self,
+        workspace_id: i64,
+        email: &str,
+    ) -> Result<Option<Provisioned>, StoreError> {
+        let id = self
+            .users
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, (e, _))| e == email)
+            .map(|(id, _)| *id);
+        match id {
+            Some(id) => self.provisioned(workspace_id, id).await,
+            None => Ok(None),
+        }
+    }
+    async fn provisioned(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> Result<Option<Provisioned>, StoreError> {
+        let users = self.users.lock().unwrap();
+        let member = self
+            .members
+            .lock()
+            .unwrap()
+            .contains_key(&(workspace_id, user_id));
+        Ok(users.get(&user_id).map(|(email, p)| Provisioned {
+            user_id,
+            email: email.clone(),
+            name: p.name.clone(),
+            member,
+        }))
+    }
     async fn me(&self, user_id: i64) -> Result<Option<(String, Profile)>, StoreError> {
         Ok(self.users.lock().unwrap().get(&user_id).cloned())
     }
@@ -248,6 +319,7 @@ async fn harness() -> Harness {
         store,
         verifier: xmsg_authn::Verifier::new(url),
         removals: Some(removals),
+        provisioning_token: Some(PROVISIONING_TOKEN.into()),
     });
     Harness {
         app: router(state.clone()),
@@ -663,4 +735,169 @@ async fn who_may_remove_whom() {
         StatusCode::NOT_FOUND,
         "a removed admin is an outsider now (404, like every outsider)"
     );
+}
+
+const PROVISIONING_TOKEN: &str = "provisioning-secret";
+
+impl Harness {
+    async fn provisioning(
+        &self,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(body.map_or(Body::empty(), |b| Body::from(b.to_string())))
+            .unwrap();
+        let response = self.app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+}
+
+#[tokio::test]
+async fn provisioning_creates_finds_renames_and_deactivates_through_the_normal_removal() {
+    let h = harness().await;
+    let t = PROVISIONING_TOKEN;
+    let (status, created) = h
+        .provisioning(
+            "POST",
+            "/internal/v1/workspaces/1/users",
+            t,
+            Some(json!({"email": " Dana@Example.ORG ", "name": "Dana"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(
+        (created["email"].as_str(), created["active"].as_bool()),
+        (Some("dana@example.org"), Some(true))
+    );
+    let id = created["user_id"].as_str().unwrap().to_string();
+    // Again: the same user, not a second one.
+    let (status, again) = h
+        .provisioning(
+            "POST",
+            "/internal/v1/workspaces/1/users",
+            t,
+            Some(json!({"email": "dana@example.org"})),
+        )
+        .await;
+    assert_eq!(
+        (status, again["user_id"].as_str()),
+        (StatusCode::OK, Some(id.as_str()))
+    );
+    let (_, found) = h
+        .provisioning(
+            "GET",
+            "/internal/v1/workspaces/1/users?email=DANA@example.org",
+            t,
+            None,
+        )
+        .await;
+    assert_eq!(found["users"][0]["user_id"].as_str(), Some(id.as_str()));
+    let (status, _) = h
+        .provisioning(
+            "PATCH",
+            &format!("/internal/v1/workspaces/1/users/{id}"),
+            t,
+            Some(json!({"name": "Dana S."})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, one) = h
+        .provisioning(
+            "GET",
+            &format!("/internal/v1/workspaces/1/users/{id}"),
+            t,
+            None,
+        )
+        .await;
+    assert_eq!(one["name"], "Dana S.");
+
+    // Deactivation is the ordinary removal: outbox event and fast path, then inactive.
+    let before = h.state.store.outbox.lock().unwrap().len();
+    let (status, _) = h
+        .provisioning(
+            "DELETE",
+            &format!("/internal/v1/workspaces/1/users/{id}"),
+            t,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(h.state.store.outbox.lock().unwrap().len(), before + 1);
+    assert!(h.removed.lock().unwrap().try_recv().is_ok(), "fast path");
+    let (_, one) = h
+        .provisioning(
+            "GET",
+            &format!("/internal/v1/workspaces/1/users/{id}"),
+            t,
+            None,
+        )
+        .await;
+    assert_eq!(one["active"], false);
+    // A name is global: only the workspace's members can be renamed through it.
+    let (status, _) = h
+        .provisioning(
+            "PATCH",
+            &format!("/internal/v1/workspaces/1/users/{id}"),
+            t,
+            Some(json!({"name": "Not here"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Idempotent, and re-provisioning reactivates.
+    assert_eq!(
+        h.provisioning(
+            "DELETE",
+            &format!("/internal/v1/workspaces/1/users/{id}"),
+            t,
+            None
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    let (_, back) = h
+        .provisioning(
+            "POST",
+            "/internal/v1/workspaces/1/users",
+            t,
+            Some(json!({"email": "dana@example.org"})),
+        )
+        .await;
+    assert_eq!(back["active"], true);
+}
+
+#[tokio::test]
+async fn provisioning_needs_the_service_token_and_never_removes_the_owner() {
+    let h = harness().await;
+    let (status, _) = h
+        .provisioning("GET", "/internal/v1/workspaces/1/users", "wrong", None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // A user's own access token isn't the service token either.
+    let (status, _) = h
+        .call("GET", "/internal/v1/workspaces/1/users", Some(ALICE), None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let ws = h.workspace(ALICE, "acme").await;
+    let (status, _) = h
+        .provisioning(
+            "DELETE",
+            &format!("/internal/v1/workspaces/{ws}/users/{ALICE}"),
+            PROVISIONING_TOKEN,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }
