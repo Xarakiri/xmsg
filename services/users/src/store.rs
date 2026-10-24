@@ -46,6 +46,16 @@ pub struct Member {
     pub role: String,
 }
 
+/// A user as provisioning sees them (an identity provider's SCIM, ADR-0022).
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct Provisioned {
+    pub user_id: i64,
+    pub email: String,
+    pub name: String,
+    /// Whether they're in the workspace now (`false`: deactivated, or never added).
+    pub member: bool,
+}
+
 /// A profile change; `None` leaves the field as it is.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ProfileChange {
@@ -139,6 +149,63 @@ pub trait Store: Send + Sync + 'static {
         event: &[u8],
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
+    /// Provisioning: the user with `email`, created (without a password: they sign in
+    /// through the identity provider) if there's none, and made a `member` of the
+    /// workspace if they aren't one. `true` if the user was created.
+    fn provision_user(
+        &self,
+        _workspace_id: i64,
+        _email: &str,
+        _name: &str,
+        _new_id: i64,
+    ) -> impl Future<Output = Result<(i64, bool), StoreError>> + Send {
+        async {
+            Err(StoreError::Db(
+                "provisioning isn't supported by this store".into(),
+            ))
+        }
+    }
+
+    /// Provisioning: a user by email, and whether they're in the workspace.
+    fn provisioned_by_email(
+        &self,
+        _workspace_id: i64,
+        _email: &str,
+    ) -> impl Future<Output = Result<Option<Provisioned>, StoreError>> + Send {
+        async {
+            Err(StoreError::Db(
+                "provisioning isn't supported by this store".into(),
+            ))
+        }
+    }
+
+    /// Provisioning: one user by ID, and whether they're in the workspace.
+    fn provisioned(
+        &self,
+        _workspace_id: i64,
+        _user_id: i64,
+    ) -> impl Future<Output = Result<Option<Provisioned>, StoreError>> + Send {
+        async {
+            Err(StoreError::Db(
+                "provisioning isn't supported by this store".into(),
+            ))
+        }
+    }
+
+    /// Provisioning: the workspace's members after `after`, by ID.
+    fn provisioned_members(
+        &self,
+        _workspace_id: i64,
+        _after: i64,
+        _limit: i64,
+    ) -> impl Future<Output = Result<Vec<Provisioned>, StoreError>> + Send {
+        async {
+            Err(StoreError::Db(
+                "provisioning isn't supported by this store".into(),
+            ))
+        }
+    }
+
     /// Adds the user to the invite's workspace as a `member`.
     fn accept_invite(
         &self,
@@ -163,6 +230,91 @@ impl Postgres {
 }
 
 impl Store for Postgres {
+    async fn provision_user(
+        &self,
+        workspace_id: i64,
+        email: &str,
+        name: &str,
+        new_id: i64,
+    ) -> Result<(i64, bool), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+            .bind(email)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let (user_id, created) = match existing {
+            Some(id) => (id, false),
+            None => {
+                sqlx::query(
+                    "INSERT INTO users (id, email, password_hash, name) VALUES ($1, $2, NULL, $3)",
+                )
+                .bind(new_id)
+                .bind(email)
+                .bind(name)
+                .execute(&mut *tx)
+                .await?;
+                (new_id, true)
+            }
+        };
+        sqlx::query(
+            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'member') \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(workspace_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok((user_id, created))
+    }
+
+    async fn provisioned_by_email(
+        &self,
+        workspace_id: i64,
+        email: &str,
+    ) -> Result<Option<Provisioned>, StoreError> {
+        Ok(sqlx::query_as(
+            "SELECT u.id AS user_id, u.email, u.name, (m.user_id IS NOT NULL) AS member FROM users u \
+             LEFT JOIN workspace_members m ON m.user_id = u.id AND m.workspace_id = $1 WHERE u.email = $2",
+        )
+        .bind(workspace_id)
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    async fn provisioned(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> Result<Option<Provisioned>, StoreError> {
+        Ok(sqlx::query_as(
+            "SELECT u.id AS user_id, u.email, u.name, (m.user_id IS NOT NULL) AS member FROM users u \
+             LEFT JOIN workspace_members m ON m.user_id = u.id AND m.workspace_id = $1 WHERE u.id = $2",
+        )
+        .bind(workspace_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    async fn provisioned_members(
+        &self,
+        workspace_id: i64,
+        after: i64,
+        limit: i64,
+    ) -> Result<Vec<Provisioned>, StoreError> {
+        Ok(sqlx::query_as(
+            "SELECT u.id AS user_id, u.email, u.name, true AS member FROM workspace_members m \
+             JOIN users u ON u.id = m.user_id WHERE m.workspace_id = $1 AND u.id > $2 ORDER BY u.id LIMIT $3",
+        )
+        .bind(workspace_id)
+        .bind(after)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     async fn me(&self, user_id: i64) -> Result<Option<(String, Profile)>, StoreError> {
         let row: Option<(String, String, Option<String>)> =
             sqlx::query_as("SELECT email, name, avatar_url FROM users WHERE id = $1")

@@ -47,6 +47,9 @@ async fn main() {
             .await
             .unwrap_or_else(|e| fail(&format!("revocations: {e}"))),
         removals,
+        provisioning_token: std::env::var("XMSG_PROVISIONING_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty()),
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await

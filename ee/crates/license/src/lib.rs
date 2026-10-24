@@ -133,6 +133,30 @@ pub fn verify(text: &str) -> Result<Licence, LicenceError> {
     verify_with(text, &keys)
 }
 
+/// The installation's licence: `XMSG_EE_LICENSE`, or the file at `XMSG_EE_LICENSE_FILE`.
+/// `None` when neither is set or the licence doesn't verify (logged): messaging never
+/// depends on the licence. An unreadable licence file is a configuration error and exits.
+pub fn from_env() -> Option<Licence> {
+    let text = match (
+        std::env::var("XMSG_EE_LICENSE"),
+        std::env::var("XMSG_EE_LICENSE_FILE"),
+    ) {
+        (Ok(t), _) => t,
+        (_, Ok(path)) => std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            eprintln!("XMSG_EE_LICENSE_FILE {path}: {e}");
+            std::process::exit(2);
+        }),
+        _ => return None,
+    };
+    match verify(&text) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            eprintln!("licence not accepted ({e}); Enterprise features are off");
+            None
+        }
+    }
+}
+
 /// Verifies a licence against these public keys (base64url).
 pub fn verify_with(text: &str, keys: &[String]) -> Result<Licence, LicenceError> {
     let text = text.trim();

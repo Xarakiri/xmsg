@@ -8,6 +8,7 @@ Commercial features (ADR-0022), source-available under [`LICENSE`](LICENSE). The
 | `crates/license` | Licence keys: offline Ed25519 verification, expiry with a 30-day grace period, and the per-feature rules after it |
 | `crates/oidc` | OpenID Connect single sign-on, implementing the core auth service's `IdentityProvider` |
 | `services/auth` | `xmsg-auth-ee`: the auth service plus SSO, gated by the licence |
+| `services/scim` | `xmsg-scim-ee`: SCIM 2.0 user provisioning for a workspace, gated by the licence |
 | `tools/license` | `xmsg-license`: the vendor's key and signing tool (never shipped) |
 
 ## Licences
@@ -39,7 +40,22 @@ Run `xmsg-auth-ee` instead of `xmsg-auth`, with:
 
 The flow is the authorization code flow with PKCE; the ID token's signature, issuer, audience, expiry and nonce are checked. An account is matched by the provider's subject, or the first time by its **verified** email (and linked); otherwise a new user is created. The web app shows a "Continue with …" button per provider.
 
+## SCIM provisioning
+`xmsg-scim-ee` lets an identity provider (Okta, Entra ID, …) create, update and deactivate a workspace's people, at `/scim/v2` (SCIM 2.0 Users: filter by `userName eq`, create, get, replace, PATCH and delete). It changes nothing itself: it calls the core users service's provisioning API, so a deactivation is the ordinary workspace removal (the person stops receiving anything at once and leaves its channels).
+
+| Variable | Meaning |
+|---|---|
+| `XMSG_EE_LICENSE` / `XMSG_EE_LICENSE_FILE` | The licence (with `scim`); an expired one keeps provisioning working |
+| `XMSG_EE_SCIM_TOKEN` | The bearer token to give the identity provider (at least 32 characters) |
+| `XMSG_EE_SCIM_WORKSPACE` | The workspace ID this endpoint provisions |
+| `XMSG_USERS_URL` | The users service (default `http://users:8084`) |
+| `XMSG_PROVISIONING_TOKEN` | The same value as the users service's `XMSG_PROVISIONING_TOKEN`, which turns its provisioning API on |
+| `XMSG_EE_SCIM_PUBLIC_URL` | This API as the provider reaches it, e.g. `https://chat.example.com/scim/v2` |
+| `XMSG_EE_SCIM_PORT` | Default 8095 |
+
+`userName` is the person's email address (else their primary email is used); provisioned accounts have no password and sign in through SSO. Deactivated people stay visible with `active: false`, also after a DELETE, and creating or activating them again brings them back with the same ID. The workspace owner can't be deactivated. Groups aren't provisioned yet.
+
 ## Not yet
 - SAML and LDAP providers, enforced SSO per workspace and break-glass recovery codes.
-- SCIM provisioning, the admin console, compliance features.
+- SCIM groups, the admin console, compliance features.
 - EE container images and a Helm switch for them.

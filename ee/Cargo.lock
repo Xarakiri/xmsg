@@ -3678,6 +3678,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmsg-scim-ee"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "xmsg-ee-license",
+]
+
+[[package]]
 name = "yoke"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

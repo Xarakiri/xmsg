@@ -219,3 +219,50 @@ async fn invites_expire_and_accepting_twice_is_harmless() {
         Some("owner")
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn provisioning_creates_once_and_reactivates() {
+    let (pool, store) = setup().await;
+    let owner = user(&pool, "Owner").await;
+    let ws = workspace(&store, owner).await;
+    let email = format!("provisioned-{}@example.org", xmsg_users::new_id());
+    let (id, created) = store
+        .provision_user(ws, &email, "Pat", xmsg_users::new_id())
+        .await
+        .unwrap();
+    assert!(created);
+    let (again, created) = store
+        .provision_user(ws, &email, "Pat", xmsg_users::new_id())
+        .await
+        .unwrap();
+    assert_eq!((again, created), (id, false), "one user per email");
+    let p = store
+        .provisioned_by_email(ws, &email)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((p.user_id, p.name.as_str(), p.member), (id, "Pat", true));
+    // A user created by provisioning has no password: they sign in through the identity provider.
+    let hash: Option<String> = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(hash, None);
+    assert!(store.remove_member(ws, id, b"event").await.unwrap());
+    assert!(
+        !store.provisioned(ws, id).await.unwrap().unwrap().member,
+        "deactivated"
+    );
+    store
+        .provision_user(ws, &email, "Pat", xmsg_users::new_id())
+        .await
+        .unwrap();
+    assert!(
+        store.provisioned(ws, id).await.unwrap().unwrap().member,
+        "reactivated"
+    );
+    let page = store.provisioned_members(ws, 0, 100).await.unwrap();
+    assert!(page.iter().any(|m| m.user_id == id) && page.iter().any(|m| m.user_id == owner));
+}
