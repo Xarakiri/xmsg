@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: LicenseRef-xmsg-EE
+# The Enterprise Edition's own workspace (ADR-0022): it depends on core crates by path;
+# core never depends on it, and CE builds never compile it.
+[workspace]
+resolver = "3"
+members = ["crates/*", "services/*", "tools/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+version = "0.0.0"

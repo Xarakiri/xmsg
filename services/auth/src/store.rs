@@ -96,6 +96,41 @@ pub trait Store: Send + Sync + 'static {
         now: DateTime<Utc>,
         revoked: &Revoked<'_>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Remembers a sign-in started with an external identity provider.
+    fn save_sso_state(
+        &self,
+        state: &str,
+        s: &SsoState,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Takes (and deletes) a sign-in started less than `max_age` ago: each state is used once.
+    fn take_sso_state(
+        &self,
+        state: &str,
+        max_age: Duration,
+    ) -> impl Future<Output = Result<Option<SsoState>, StoreError>> + Send;
+
+    /// The user behind an external identity: the one already linked to it, else the one
+    /// with that (verified) email, which gets linked, else a new user without a password,
+    /// in the default workspace like any sign-up. One transaction.
+    fn external_user(
+        &self,
+        provider: &str,
+        subject: &str,
+        email: &str,
+        name: &str,
+        new_id: i64,
+    ) -> impl Future<Output = Result<i64, StoreError>> + Send;
+}
+
+/// A sign-in in progress with an external identity provider (see `sso`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SsoState {
+    pub provider: String,
+    pub nonce: String,
+    pub code_verifier: String,
+    pub return_to: String,
 }
 
 /// Encodes the outbox event for a revoked session: `(user_id, device_id) -> payload`.
@@ -119,6 +154,101 @@ impl Postgres {
 }
 
 impl Store for Postgres {
+    async fn save_sso_state(&self, state: &str, s: &SsoState) -> Result<(), StoreError> {
+        // Old, abandoned sign-ins are cleared on the way.
+        sqlx::query("DELETE FROM sso_states WHERE created_at < now() - interval '1 hour'")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO sso_states (state, provider, nonce, code_verifier, return_to) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(state)
+        .bind(&s.provider)
+        .bind(&s.nonce)
+        .bind(&s.code_verifier)
+        .bind(&s.return_to)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn take_sso_state(
+        &self,
+        state: &str,
+        max_age: Duration,
+    ) -> Result<Option<SsoState>, StoreError> {
+        let row: Option<(String, String, String, String)> = sqlx::query_as(
+            "DELETE FROM sso_states WHERE state = $1 AND created_at > now() - make_interval(secs => $2) \
+             RETURNING provider, nonce, code_verifier, return_to",
+        )
+        .bind(state)
+        .bind(max_age.num_seconds() as f64)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(
+            row.map(|(provider, nonce, code_verifier, return_to)| SsoState {
+                provider,
+                nonce,
+                code_verifier,
+                return_to,
+            }),
+        )
+    }
+
+    async fn external_user(
+        &self,
+        provider: &str,
+        subject: &str,
+        email: &str,
+        name: &str,
+        new_id: i64,
+    ) -> Result<i64, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let linked: Option<i64> = sqlx::query_scalar(
+            "SELECT user_id FROM external_identities WHERE provider = $1 AND subject = $2",
+        )
+        .bind(provider)
+        .bind(subject)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(user_id) = linked {
+            tx.commit().await?;
+            return Ok(user_id);
+        }
+        let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+            .bind(email)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let user_id = match existing {
+            Some(id) => id,
+            None => {
+                sqlx::query(
+                    "INSERT INTO users (id, email, password_hash, name) VALUES ($1, $2, NULL, $3)",
+                )
+                .bind(new_id)
+                .bind(email)
+                .bind(name)
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (1, $1, 'member')")
+                    .bind(new_id)
+                    .execute(&mut *tx)
+                    .await?;
+                new_id
+            }
+        };
+        sqlx::query(
+            "INSERT INTO external_identities (provider, subject, user_id) VALUES ($1, $2, $3)",
+        )
+        .bind(provider)
+        .bind(subject)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(user_id)
+    }
+
     async fn create_user(
         &self,
         id: i64,

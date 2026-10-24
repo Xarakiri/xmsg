@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: LicenseRef-xmsg-EE
+[package]
+name = "xmsg-auth-ee"
+description = "The auth service with Enterprise Edition single sign-on (OIDC), gated by the licence key"
+edition.workspace = true
+license = "LicenseRef-xmsg-EE"
+license-file = "../../LICENSE"
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[features]
+test-keys = ["xmsg-ee-license/test-keys"]
+
+[[bin]]
+name = "xmsg-auth-ee"
+path = "src/main.rs"
+
+[dependencies]
+xmsg-auth = { path = "../../../services/auth" }
+xmsg-ee-license = { path = "../../crates/license" }
+xmsg-ee-oidc = { path = "../../crates/oidc" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1.44"

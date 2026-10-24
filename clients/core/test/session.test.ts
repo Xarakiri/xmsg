@@ -101,3 +101,12 @@ test("no stored token means not logged in, without calling the server", async ()
   await assert.rejects(new Session(api, new MemoryStore(null), new FakeLocks()).accessToken(), (e) => e instanceof ApiError && e.status === 401);
   assert.deepEqual(api.presented, []);
 });
+
+test("single sign-on hands the session over in the URL fragment, or why it failed", async () => {
+  const { fromSsoFragment } = await import("../src/api.ts");
+  const ok = fromSsoFragment("#access_token=a.b.c&refresh_token=r1&user_id=7&session_id=9&expires_in=900");
+  assert.deepEqual(ok.tokens, { access_token: "a.b.c", refresh_token: "r1", user_id: "7", session_id: "9", expires_in: 900 });
+  assert.deepEqual(fromSsoFragment("#sso_error=this%20sign-in%20link%20has%20expired"), { error: "this sign-in link has expired" });
+  assert.deepEqual(fromSsoFragment("#channel=7"), {}, "other fragments are left alone");
+  assert.deepEqual(fromSsoFragment(""), {});
+});

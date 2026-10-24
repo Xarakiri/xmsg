@@ -55,6 +55,29 @@ export interface SearchHit {
   body: string;
 }
 
+/**
+ * What single sign-on left in the URL fragment when it sent the browser back: the session's
+ * tokens, or why it failed. Fragments never reach a server; read once, then cleared.
+ */
+export function fromSsoFragment(hash: string): { tokens?: Tokens; error?: string } {
+  const params = new URLSearchParams(hash.replace(/^#/, ""));
+  const error = params.get("sso_error");
+  if (error) return { error };
+  const access = params.get("access_token");
+  const refresh = params.get("refresh_token");
+  const userId = params.get("user_id");
+  if (!access || !refresh || !userId) return {};
+  return {
+    tokens: {
+      access_token: access,
+      refresh_token: refresh,
+      user_id: userId,
+      session_id: params.get("session_id") ?? "",
+      expires_in: Number(params.get("expires_in") ?? "0"),
+    },
+  };
+}
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -234,6 +257,17 @@ export class Api {
       rootMsgSeq: Number(r.root_msg_seq),
       body: r.body,
     }));
+  }
+
+  /** Identity providers to offer on the sign-in page (empty without single sign-on). */
+  async ssoProviders(): Promise<{ id: string; name: string }[]> {
+    const reply = await call<{ providers: { id: string; name: string }[] }>(`${this.endpoints.auth}/v1/sso/providers`, { method: "GET" });
+    return reply.providers;
+  }
+
+  /** Where the browser goes to sign in with a provider (a full-page navigation). */
+  ssoStartUrl(providerId: string, returnTo = "/"): string {
+    return `${this.endpoints.auth}/v1/sso/${encodeURIComponent(providerId)}/start?return_to=${encodeURIComponent(returnTo)}`;
   }
 
   /** The server's VAPID public key, for `pushManager.subscribe` (plan §5.11). */

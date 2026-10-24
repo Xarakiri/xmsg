@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit } from "@xmsg/client-core";
+import { ApiError, fromSsoFragment, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 import { disablePush, enablePush, pushState, type PushState } from "./push.ts";
 import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
 import { useNames } from "./useNames.ts";
+
+// Back from single sign-on: the session's tokens (or the reason it failed) are in the
+// fragment. Taken once, and removed from the address bar and history at once.
+const sso = fromSsoFragment(location.hash);
+if (sso.tokens || sso.error) history.replaceState(null, "", location.pathname + location.search);
+if (sso.tokens) session.adopt(sso.tokens);
 
 export function App() {
   const [me, setMe] = useState<string | null>(null);
@@ -45,8 +51,12 @@ function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(sso.error ?? "");
   const [busy, setBusy] = useState(false);
+  const [providers, setProviders] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    api.ssoProviders().then(setProviders).catch(() => setProviders([]));
+  }, []);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -100,6 +110,16 @@ function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
         <button className="primary" disabled={busy}>
           {mode === "in" ? "Sign in" : "Create account"}
         </button>
+        {providers.length > 0 && (
+          <div className="sso">
+            <div className="muted small">or</div>
+            {providers.map((p) => (
+              <a key={p.id} className="button" href={api.ssoStartUrl(p.id, location.pathname)}>
+                Continue with {p.name}
+              </a>
+            ))}
+          </div>
+        )}
       </form>
     </div>
   );
