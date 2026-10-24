@@ -19,10 +19,12 @@ use serde::{Deserialize, Serialize};
 pub const PREFIX: &str = "xmsg-license-v1";
 pub const GRACE_DAYS: i64 = 30;
 
-/// xmsg's licence-signing public keys (base64url, 32 bytes). Empty until the vendor key
-/// is generated (`xmsg-license keygen`) and its public half is added here; until then no
-/// licence verifies in a release build.
-pub const VENDOR_KEYS: &[&str] = &[];
+/// xmsg's licence-signing public keys (base64url, 32 bytes), generated with
+/// `xmsg-license keygen`; the signing halves are kept by xmsg, never in this repository.
+///
+/// TESTING ONLY: this key's signing half appeared in a chat transcript, so it must be
+/// replaced by a privately generated key before any real customer licence is issued.
+pub const VENDOR_KEYS: &[&str] = &["DEZkr-8x2Di_HMST5adgqLPwsqhHtejZTV2fdUu1-S4"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -273,6 +275,17 @@ mod tests {
         assert!(!l.allowed(Feature::Admin, Action::Configure, expired));
         // Features not licensed: never.
         assert!(!licence(vec![Feature::Sso]).allowed(Feature::Scim, Action::Use, active));
+    }
+
+    #[test]
+    fn the_built_in_keys_are_valid_ed25519_public_keys() {
+        for k in VENDOR_KEYS {
+            let bytes: [u8; 32] = URL_SAFE_NO_PAD.decode(k).unwrap().try_into().unwrap();
+            assert!(VerifyingKey::from_bytes(&bytes).is_ok(), "{k}");
+        }
+        // A licence signed by someone else's key is still refused.
+        let forged = sign(&licence(vec![Feature::Sso]), &key());
+        assert_eq!(verify(&forged), Err(LicenceError::BadSignature));
     }
 
     #[test]

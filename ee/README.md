@@ -15,6 +15,8 @@ A licence is one line, `xmsg-license-v1.<payload>.<signature>`: customer, dates,
 
 **Expiry never locks anyone out** (ADR-0022): for 30 days nothing changes but warnings; after that SSO, LDAP and SCIM sign-in keep working but can't be reconfigured, legal holds and retention stay enforced, the admin console turns read-only, and exports stop. Messaging is never licensed.
 
+**The built-in key is for testing only:** its signing half appeared in a chat transcript. Replace it with a privately generated key before any real customer licence is issued.
+
 **Setting up the vendor key (once):** run `cargo run -p xmsg-license-tool -- keygen`, keep the signing key secret, and put the public key into `VENDOR_KEYS` in `crates/license/src/lib.rs`. Until then no licence verifies in a release build. Then:
 
 ```bash
