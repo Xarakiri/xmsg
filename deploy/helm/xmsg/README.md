@@ -63,7 +63,7 @@ enterprise:
   # and XMSG_EE_SCIM_TOKEN (what the identity provider sends) in secretEnv
 ```
 
-The admin console's API runs too, at `https://<host>/admin/api`. `XMSG_AUTH_PUBLIC_URL` and `XMSG_WEB_URL` default to `https://<ingress.host>/auth` and `https://<ingress.host>`. LDAP settings go in `auth.env` and `secretEnv` the same way (`XMSG_EE_LDAP_*`). Without a valid licence, auth behaves like the Community Edition and SCIM doesn't start.
+The admin console runs too, at `https://<host>/admin/`. `XMSG_AUTH_PUBLIC_URL` and `XMSG_WEB_URL` default to `https://<ingress.host>/auth` and `https://<ingress.host>`. LDAP settings go in `auth.env` and `secretEnv` the same way (`XMSG_EE_LDAP_*`). Without a valid licence, auth behaves like the Community Edition and SCIM doesn't start.
 
 ## Notes
 - **Partitions** are fixed per installation; changing `partitions` on an existing install is refused at startup by every service (ADR-0021).

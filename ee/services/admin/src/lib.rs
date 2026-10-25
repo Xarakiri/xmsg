@@ -9,6 +9,8 @@
 //!
 //! Callers need an access token of a workspace owner or admin (the licence: of any
 //! workspace; usage: of that one). Usage needs a licence with `admin`.
+//!
+//! It also serves the console itself (the built `admin-console`) at `/admin/`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -55,18 +57,32 @@ pub struct App<S> {
     pub licence: Option<Licence>,
 }
 
-pub fn router<S: Store>(app: Arc<App<S>>) -> Router {
-    Router::new()
+/// The API, plus the console's files from `console` (a built `admin-console`) when given:
+/// paths it doesn't have get its `index.html`, so the console's own links work.
+pub fn router<S: Store>(app: Arc<App<S>>, console: Option<&std::path::Path>) -> Router {
+    let mut router = Router::new()
         .route("/admin/api/v1/licence", get(licence::<S>))
         .route("/admin/api/v1/workspaces/{ws}/usage", get(usage::<S>))
-        .route("/healthz", get(|| async { "ok" }))
-        .with_state(app)
+        .route("/admin/api/{*rest}", get(|| async { ApiError::NotFound }))
+        .route("/healthz", get(|| async { "ok" }));
+    if let Some(dir) = console {
+        let files = tower_http::services::ServeDir::new(dir)
+            .fallback(tower_http::services::ServeFile::new(dir.join("index.html")));
+        router = router
+            .route(
+                "/admin",
+                get(|| async { axum::response::Redirect::permanent("/admin/") }),
+            )
+            .nest_service("/admin/", files);
+    }
+    router.with_state(app)
 }
 
 pub enum ApiError {
     BadRequest(&'static str),
     Unauthorized,
     Forbidden(&'static str),
+    NotFound,
     Unavailable,
 }
 
@@ -76,6 +92,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "invalid or missing access token"),
             ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
+            ApiError::NotFound => (StatusCode::NOT_FOUND, "not found"),
             ApiError::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "try again later"),
         };
         (status, Json(json!({ "error": message }))).into_response()
