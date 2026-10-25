@@ -58,6 +58,8 @@ pub struct Extensions {
     pub providers: Vec<std::sync::Arc<dyn sso::IdentityProvider>>,
     /// Whether workspaces may change their SSO policy (the licence allows configuration).
     pub sso_policy_editable: bool,
+    /// A directory (LDAP) that the password form checks before local passwords.
+    pub directory: Option<std::sync::Arc<dyn sso::Directory>>,
 }
 
 /// Runs the auth service: config from the environment, Postgres, the HTTP API, plus
@@ -66,6 +68,7 @@ pub async fn serve(extensions: Extensions) {
     let Extensions {
         providers,
         sso_policy_editable,
+        directory,
     } = extensions;
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -130,6 +133,7 @@ pub async fn serve(extensions: Extensions) {
         reuse_grace_secs: config.reuse_grace_secs,
         revocations,
         sso,
+        directory,
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await

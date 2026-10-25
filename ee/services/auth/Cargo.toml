@@ -20,6 +20,7 @@ path = "src/main.rs"
 xmsg-auth = { path = "../../../services/auth" }
 xmsg-ee-license = { path = "../../crates/license" }
 xmsg-ee-oidc = { path = "../../crates/oidc" }
+xmsg-ee-ldap = { path = "../../crates/ldap" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.44"

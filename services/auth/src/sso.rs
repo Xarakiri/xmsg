@@ -68,6 +68,22 @@ pub trait IdentityProvider: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<ExternalIdentity, String>>;
 }
 
+/// A directory that checks a sign-in name and password itself (LDAP, Active Directory):
+/// the password form talks to it before local passwords. The Enterprise Edition
+/// registers one through `serve`.
+pub trait Directory: Send + Sync + 'static {
+    /// Stable ID, used for linking accounts (like a provider's ID).
+    fn id(&self) -> &str;
+    /// `Ok(Some(identity))` if the directory knows this login and the password is right,
+    /// `Ok(None)` if not (unknown name or wrong password), `Err` if it can't be asked.
+    /// The identity's email is trusted: the directory is the organisation's own.
+    fn authenticate<'a>(
+        &'a self,
+        login: &'a str,
+        password: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ExternalIdentity>, String>>;
+}
+
 /// Registered providers and where the browser reaches us.
 pub struct Sso {
     pub providers: HashMap<String, Arc<dyn IdentityProvider>>,

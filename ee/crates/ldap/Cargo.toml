@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: LicenseRef-xmsg-EE
+[package]
+name = "xmsg-ee-ldap"
+description = "LDAP / Active Directory sign-in for the auth service's directory extension point"
+edition.workspace = true
+license = "LicenseRef-xmsg-EE"
+license-file = "../../LICENSE"
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+xmsg-auth = { path = "../../../services/auth" }
+base64 = "0.23.1"
+ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros"] }
