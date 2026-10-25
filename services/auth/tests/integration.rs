@@ -277,3 +277,82 @@ async fn ending_a_session_writes_one_revocation_to_the_outbox() {
         "a replay of a dead session emits nothing"
     );
 }
+
+#[tokio::test]
+#[ignore]
+async fn enforced_sso_and_recovery_codes_follow_membership() {
+    let store = store().await;
+    let pool = sqlx::PgPool::connect(&std::env::var("XMSG_IT_PG").unwrap())
+        .await
+        .unwrap();
+    let workspace_id = new_id();
+    sqlx::query("INSERT INTO workspaces (id, name, slug) VALUES ($1, 'IT', $2)")
+        .bind(workspace_id)
+        .bind(format!("it-{workspace_id}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (admin, _, _) = session(&store, Duration::hours(1)).await;
+    let (member, _, _) = session(&store, Duration::hours(1)).await;
+    for (user, role) in [(admin, "admin"), (member, "member")] {
+        sqlx::query(
+            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, $3)",
+        )
+        .bind(workspace_id)
+        .bind(user)
+        .bind(role)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        store.role(workspace_id, admin).await.unwrap().as_deref(),
+        Some("admin")
+    );
+    assert!(!store.sso_enforced(workspace_id).await.unwrap());
+    assert!(!store.sso_required(member).await.unwrap());
+    store
+        .set_sso_enforced(workspace_id, true, admin)
+        .await
+        .unwrap();
+    assert!(store.sso_enforced(workspace_id).await.unwrap());
+    assert!(store.sso_required(member).await.unwrap());
+    store
+        .set_sso_enforced(workspace_id, false, admin)
+        .await
+        .unwrap();
+    assert!(!store.sso_required(member).await.unwrap());
+    assert!(!store.has_external_identity(admin).await.unwrap());
+
+    let hashes = vec![token_hash("code-a"), token_hash("code-b")];
+    store
+        .replace_recovery_codes(workspace_id, admin, &hashes)
+        .await
+        .unwrap();
+    store
+        .replace_recovery_codes(workspace_id, member, &[token_hash("code-m")])
+        .await
+        .unwrap();
+    // Once each, only by the holder, only while an owner or admin.
+    assert!(store.use_recovery_code(admin, &hashes[0]).await.unwrap());
+    assert!(!store.use_recovery_code(admin, &hashes[0]).await.unwrap());
+    assert!(!store.use_recovery_code(member, &hashes[1]).await.unwrap());
+    assert!(
+        !store
+            .use_recovery_code(member, &token_hash("code-m"))
+            .await
+            .unwrap()
+    );
+    // Replacing drops the old ones.
+    store
+        .replace_recovery_codes(workspace_id, admin, &[token_hash("code-c")])
+        .await
+        .unwrap();
+    assert!(!store.use_recovery_code(admin, &hashes[1]).await.unwrap());
+    assert!(
+        store
+            .use_recovery_code(admin, &token_hash("code-c"))
+            .await
+            .unwrap()
+    );
+}

@@ -71,5 +71,13 @@ async fn main() {
             ),
         }
     }
-    xmsg_auth::serve(providers).await;
+    // Changing a workspace's SSO policy is configuration: it needs a current licence.
+    let sso_policy_editable = licence
+        .as_ref()
+        .is_some_and(|l| l.allowed(Feature::Sso, Action::Configure, now));
+    xmsg_auth::serve(xmsg_auth::Extensions {
+        providers,
+        sso_policy_editable,
+    })
+    .await;
 }

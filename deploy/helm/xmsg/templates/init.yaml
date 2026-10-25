@@ -98,6 +98,7 @@ spec:
               then psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-001_schema.sql; fi
               && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-002_push.sql
               && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-003_sso.sql
+              && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-004_sso_policy.sql
           envFrom:
             - secretRef: { name: {{ include "xmsg.secretName" . }} }
           volumeMounts: [{ name: init, mountPath: /init }]

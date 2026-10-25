@@ -3,5 +3,5 @@
 
 #[tokio::main]
 async fn main() {
-    xmsg_auth::serve(Vec::new()).await;
+    xmsg_auth::serve(xmsg_auth::Extensions::default()).await;
 }

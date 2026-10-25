@@ -40,6 +40,14 @@ Run `xmsg-auth-ee` instead of `xmsg-auth`, with:
 
 The flow is the authorization code flow with PKCE; the ID token's signature, issuer, audience, expiry and nonce are checked. An account is matched by the provider's subject, or the first time by its **verified** email (and linked); otherwise a new user is created. The web app shows a "Continue with …" button per provider.
 
+## Enforced SSO and recovery codes
+A workspace's owners and admins can require single sign-on: `PUT /auth/v1/workspaces/{ws}/sso {"enforced": true}`. From then on its members can't sign in with a password (`403`), only through the identity provider.
+
+- Whoever enforces it must have signed in through SSO once (so it works for them), and gets **10 one-time recovery codes** in the reply. Keep them somewhere safe: they're the way in when the provider is down (`POST /auth/v1/login/recovery {email, code}`, or "Use a recovery code" on the sign-in page).
+- Any owner or admin can get fresh codes at any time (`POST /auth/v1/workspaces/{ws}/sso/recovery-codes`), which replaces their old ones. A code stops working once used, or when its holder is no longer an owner or admin.
+- Changing the policy needs a current licence with `sso`; recovery codes never do. Enforcement only applies while an identity provider is configured: back on the Community Edition, passwords work again, so nobody is locked out (ADR-0022).
+- Sessions that already exist keep working until they expire or sign out.
+
 ## SCIM provisioning
 `xmsg-scim-ee` lets an identity provider (Okta, Entra ID, …) create, update and deactivate a workspace's people, at `/scim/v2` (SCIM 2.0 Users: filter by `userName eq`, create, get, replace, PATCH and delete). It changes nothing itself: it calls the core users service's provisioning API, so a deactivation is the ordinary workspace removal (the person stops receiving anything at once and leaves its channels).
 
@@ -56,6 +64,6 @@ The flow is the authorization code flow with PKCE; the ID token's signature, iss
 `userName` is the person's email address (else their primary email is used); provisioned accounts have no password and sign in through SSO. Deactivated people stay visible with `active: false`, also after a DELETE, and creating or activating them again brings them back with the same ID. The workspace owner can't be deactivated. Groups aren't provisioned yet.
 
 ## Not yet
-- SAML and LDAP providers, enforced SSO per workspace and break-glass recovery codes.
+- SAML and LDAP providers.
 - SCIM groups, the admin console, compliance features.
 - EE container images and a Helm switch for them.

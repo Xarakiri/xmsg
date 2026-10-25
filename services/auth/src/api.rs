@@ -39,12 +39,14 @@ pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
         .route("/.well-known/jwks.json", get(jwks::<S>))
         .route("/healthz", get(|| async { "ok" }))
         .merge(crate::sso::routes::<S>())
+        .merge(crate::sso_policy::routes::<S>())
         .with_state(auth)
 }
 
 pub enum ApiError {
     BadRequest(&'static str),
     Unauthorized,
+    Forbidden(&'static str),
     Conflict(&'static str),
     Internal,
 }
@@ -54,6 +56,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "invalid credentials"),
+            ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::Internal => (StatusCode::SERVICE_UNAVAILABLE, "try again later"),
         };
@@ -93,7 +96,7 @@ pub struct Login {
     platform: String,
 }
 
-fn default_platform() -> String {
+pub(crate) fn default_platform() -> String {
     "web".into()
 }
 
@@ -114,7 +117,7 @@ pub struct Tokens {
 }
 
 /// Lower-cased and trimmed, so one person can't register twice by case.
-fn normalize_email(email: &str) -> Result<String, ApiError> {
+pub(crate) fn normalize_email(email: &str) -> Result<String, ApiError> {
     let email = email.trim().to_lowercase();
     let valid = email.len() <= 254
         && email
@@ -165,6 +168,12 @@ async fn login<S: Store>(
     let Some(user_id) = user_id.filter(|_| ok) else {
         return Err(ApiError::Unauthorized);
     };
+    // Enforced SSO only counts while a provider exists to sign in with (ADR-0022).
+    if auth.sso.is_some() && auth.store.sso_required(user_id).await? {
+        return Err(ApiError::Forbidden(
+            "this workspace signs in with single sign-on",
+        ));
+    }
     let tokens = auth.start_session(user_id, &req.platform).await?;
     tracing::info!(user_id, session_id = tokens.session_id, "logged in");
     Ok(Json(tokens))
@@ -315,9 +324,62 @@ mod tests {
         outbox: Mutex<Vec<Vec<u8>>>,
         sso: Mutex<HashMap<String, crate::store::SsoState>>,
         links: Mutex<HashMap<String, i64>>,
+        /// (workspace, user) → role.
+        members: Mutex<HashMap<(i64, i64), String>>,
+        enforced: Mutex<HashMap<i64, bool>>,
+        /// code hash → (workspace, user, used).
+        codes: Mutex<HashMap<String, (i64, i64, bool)>>,
     }
 
     impl Store for Memory {
+        async fn sso_required(&self, user_id: i64) -> Result<bool, StoreError> {
+            let enforced = self.enforced.lock().unwrap();
+            Ok(self
+                .members
+                .lock()
+                .unwrap()
+                .keys()
+                .any(|(ws, u)| *u == user_id && enforced.get(ws) == Some(&true)))
+        }
+        async fn role(&self, ws: i64, user_id: i64) -> Result<Option<String>, StoreError> {
+            Ok(self.members.lock().unwrap().get(&(ws, user_id)).cloned())
+        }
+        async fn sso_enforced(&self, ws: i64) -> Result<bool, StoreError> {
+            Ok(self.enforced.lock().unwrap().get(&ws) == Some(&true))
+        }
+        async fn set_sso_enforced(&self, ws: i64, on: bool, _by: i64) -> Result<(), StoreError> {
+            self.enforced.lock().unwrap().insert(ws, on);
+            Ok(())
+        }
+        async fn has_external_identity(&self, user_id: i64) -> Result<bool, StoreError> {
+            Ok(self.links.lock().unwrap().values().any(|u| *u == user_id))
+        }
+        async fn replace_recovery_codes(
+            &self,
+            ws: i64,
+            user_id: i64,
+            hashes: &[String],
+        ) -> Result<(), StoreError> {
+            let mut codes = self.codes.lock().unwrap();
+            codes.retain(|_, (w, u, _)| !(*w == ws && *u == user_id));
+            codes.extend(hashes.iter().map(|h| (h.clone(), (ws, user_id, false))));
+            Ok(())
+        }
+        async fn use_recovery_code(&self, user_id: i64, hash: &str) -> Result<bool, StoreError> {
+            let members = self.members.lock().unwrap();
+            let mut codes = self.codes.lock().unwrap();
+            match codes.get_mut(hash) {
+                Some((ws, u, used)) if *u == user_id && !*used => {
+                    let admin = matches!(
+                        members.get(&(*ws, user_id)).map(String::as_str),
+                        Some("owner" | "admin")
+                    );
+                    *used = admin;
+                    Ok(admin)
+                }
+                _ => Ok(false),
+            }
+        }
         async fn save_sso_state(
             &self,
             state: &str,
@@ -998,5 +1060,318 @@ mod tests {
             (second.session_id, "refresh token reused")
         );
         assert_eq!(auth.store.outbox.lock().unwrap().len(), 2);
+    }
+
+    async fn send(
+        app: &Router,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("authorization", format!("Bearer {token}"));
+        let body = match body {
+            Some(b) => {
+                request = request.header("content-type", "application/json");
+                Body::from(b.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    fn with_sso(editable: bool) -> (Router, Arc<Auth<Memory>>) {
+        let mut sso = crate::sso::Sso::new(
+            vec![Arc::new(Fake)],
+            "https://chat.example/auth".into(),
+            "https://chat.example".into(),
+        );
+        sso.policy_editable = editable;
+        let auth = Arc::new(Auth {
+            store: Memory::default(),
+            keys: Keys::generate(),
+            access_ttl_secs: 900,
+            refresh_ttl_secs: 3600,
+            reuse_grace_secs: 30,
+            revocations: None,
+            sso: Some(sso),
+        });
+        (router(auth.clone()), auth)
+    }
+
+    /// Ann (owner of workspace 1) and Bob (member), both with passwords; Ann's access token.
+    async fn workspace_of_two(app: &Router, auth: &Auth<Memory>) -> (i64, String) {
+        for (email, name) in [("ann@example.org", "Ann"), ("bob@example.org", "Bob")] {
+            let (status, _) = call(app, "/v1/signup", serde_json::json!({"email": email, "password": "correct horse battery", "name": name})).await;
+            assert_eq!(status, StatusCode::CREATED);
+        }
+        let id = |e: &str| auth.store.users.lock().unwrap()[e].user_id;
+        let (ann, bob) = (id("ann@example.org"), id("bob@example.org"));
+        {
+            let mut members = auth.store.members.lock().unwrap();
+            members.insert((1, ann), "owner".into());
+            members.insert((1, bob), "member".into());
+        }
+        let (_, tokens) = call(
+            app,
+            "/v1/login",
+            serde_json::json!({"email": "ann@example.org", "password": "correct horse battery"}),
+        )
+        .await;
+        (ann, tokens["access_token"].as_str().unwrap().to_string())
+    }
+
+    async fn password_login(app: &Router, email: &str) -> StatusCode {
+        call(
+            app,
+            "/v1/login",
+            serde_json::json!({"email": email, "password": "correct horse battery"}),
+        )
+        .await
+        .0
+    }
+
+    #[tokio::test]
+    async fn enforced_sso_refuses_passwords_and_recovery_codes_get_admins_in() {
+        let (app, auth) = with_sso(true);
+        let (_ann, token) = workspace_of_two(&app, &auth).await;
+        let enforce = Some(serde_json::json!({"enforced": true}));
+
+        // Only someone who has signed in through SSO may enforce it.
+        let (status, _) = send(&app, "PUT", "/v1/workspaces/1/sso", &token, enforce.clone()).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let (_, to_idp) = get(&app, "/v1/sso/fake/start").await;
+        get(
+            &app,
+            &format!(
+                "/v1/sso/fake/callback?code=ann-sub&state={}",
+                query_param(&to_idp, "state")
+            ),
+        )
+        .await;
+
+        let (status, reply) =
+            send(&app, "PUT", "/v1/workspaces/1/sso", &token, enforce.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let codes: Vec<String> = serde_json::from_value(reply["recovery_codes"].clone()).unwrap();
+        assert_eq!(codes.len(), crate::sso_policy::RECOVERY_CODES);
+        let (_, policy) = send(&app, "GET", "/v1/workspaces/1/sso", &token, None).await;
+        assert_eq!(
+            policy,
+            serde_json::json!({"enforced": true, "available": true, "editable": true})
+        );
+
+        // Passwords stop working for every member; outsiders and wrong tokens get nothing.
+        assert_eq!(
+            password_login(&app, "bob@example.org").await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            password_login(&app, "ann@example.org").await,
+            StatusCode::FORBIDDEN
+        );
+        let (_, bob) = {
+            auth.store.enforced.lock().unwrap().insert(1, false);
+            let r = call(&app, "/v1/login", serde_json::json!({"email": "bob@example.org", "password": "correct horse battery"})).await;
+            auth.store.enforced.lock().unwrap().insert(1, true);
+            r
+        };
+        let bob_token = bob["access_token"].as_str().unwrap();
+        let (status, _) = send(
+            &app,
+            "PUT",
+            "/v1/workspaces/1/sso",
+            bob_token,
+            Some(serde_json::json!({"enforced": false})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "members can't change it");
+        let (status, _) = send(
+            &app,
+            "POST",
+            "/v1/workspaces/1/sso/recovery-codes",
+            bob_token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _) = send(&app, "GET", "/v1/workspaces/1/sso", "not-a-token", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // A recovery code works once, however it's typed, and only for its holder.
+        let recover = |email: &str, code: &str| serde_json::json!({"email": email, "code": code});
+        let typed = codes[0].to_uppercase().replace('-', " ");
+        let (status, tokens) = call(
+            &app,
+            "/v1/login/recovery",
+            recover("ann@example.org", &typed),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{tokens}");
+        assert!(tokens["access_token"].is_string());
+        assert_eq!(
+            call(
+                &app,
+                "/v1/login/recovery",
+                recover("ann@example.org", &codes[0])
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                &app,
+                "/v1/login/recovery",
+                recover("bob@example.org", &codes[1])
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                &app,
+                "/v1/login/recovery",
+                recover("nobody@example.org", &codes[1])
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+
+        // New codes replace the old ones.
+        let (status, fresh) = send(
+            &app,
+            "POST",
+            "/v1/workspaces/1/sso/recovery-codes",
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            call(
+                &app,
+                "/v1/login/recovery",
+                recover("ann@example.org", &codes[1])
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let fresh = fresh["recovery_codes"][0].as_str().unwrap();
+        assert_eq!(
+            call(
+                &app,
+                "/v1/login/recovery",
+                recover("ann@example.org", fresh)
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+
+        // A demoted admin's codes stop working.
+        let (status, more) = send(
+            &app,
+            "POST",
+            "/v1/workspaces/1/sso/recovery-codes",
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let ann = auth.store.users.lock().unwrap()["ann@example.org"].user_id;
+        auth.store
+            .members
+            .lock()
+            .unwrap()
+            .insert((1, ann), "member".into());
+        let code = more["recovery_codes"][0].as_str().unwrap();
+        assert_eq!(
+            call(&app, "/v1/login/recovery", recover("ann@example.org", code))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn the_policy_is_locked_without_a_licence_and_ignored_without_sso() {
+        let (app, auth) = with_sso(false);
+        let (_, token) = workspace_of_two(&app, &auth).await;
+        let (status, body) = send(
+            &app,
+            "PUT",
+            "/v1/workspaces/1/sso",
+            &token,
+            Some(serde_json::json!({"enforced": true})),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (
+                StatusCode::FORBIDDEN,
+                Some("the licence doesn't allow changing single sign-on")
+            )
+        );
+        // Recovery codes never need the licence.
+        let (status, _) = send(
+            &app,
+            "POST",
+            "/v1/workspaces/1/sso/recovery-codes",
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        // Back on the Community Edition (no providers) an enforced workspace signs in with
+        // passwords again: nobody is locked out.
+        let ce = Arc::new(Auth {
+            store: Memory::default(),
+            keys: Keys::generate(),
+            access_ttl_secs: 900,
+            refresh_ttl_secs: 3600,
+            reuse_grace_secs: 30,
+            revocations: None,
+            sso: None,
+        });
+        let ce_app = router(ce.clone());
+        let (_, token) = workspace_of_two(&ce_app, &ce).await;
+        ce.store.enforced.lock().unwrap().insert(1, true);
+        assert_eq!(
+            password_login(&ce_app, "bob@example.org").await,
+            StatusCode::OK
+        );
+        let (status, _) = send(
+            &ce_app,
+            "PUT",
+            "/v1/workspaces/1/sso",
+            &token,
+            Some(serde_json::json!({"enforced": false})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "nothing to configure without SSO"
+        );
+        let (_, policy) = send(&ce_app, "GET", "/v1/workspaces/1/sso", &token, None).await;
+        assert_eq!(policy["available"], false);
     }
 }

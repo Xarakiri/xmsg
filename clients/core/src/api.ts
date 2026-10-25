@@ -114,6 +114,11 @@ export class Api {
     return call(`${this.endpoints.auth}/v1/login`, { method: "POST", body: json({ email, password, platform }) });
   }
 
+  /** Break-glass sign-in for a workspace admin when single sign-on is down: each code works once. */
+  loginWithRecoveryCode(email: string, code: string, platform = "web"): Promise<Tokens> {
+    return call(`${this.endpoints.auth}/v1/login/recovery`, { method: "POST", body: json({ email, code, platform }) });
+  }
+
   refresh(refreshToken: string): Promise<Tokens> {
     return call(`${this.endpoints.auth}/v1/token/refresh`, { method: "POST", body: json({ refresh_token: refreshToken }) });
   }
