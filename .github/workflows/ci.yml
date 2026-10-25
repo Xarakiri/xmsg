@@ -347,6 +347,11 @@ jobs:
           XMSG_IT_KAFKA: localhost:9092
           XMSG_IT_CQL: localhost:9042
         run: cargo test -p xmsg-persister --test integration -- --ignored --test-threads=1
+      - name: Rate limits shared through Valkey
+        if: matrix.relay == 'poller'
+        env:
+          XMSG_IT_VALKEY: redis://localhost:6379
+        run: cargo test -p xmsg-ratelimit -- --ignored
       - name: Auth integration tests (real PostgreSQL)
         if: matrix.relay == 'poller'
         env:

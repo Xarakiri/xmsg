@@ -155,11 +155,12 @@ defmodule XmsgGateway.Socket do
           %SendResult{reason: :REJECT_REASON_UNAVAILABLE} ->
             {:ok, state}
 
-          %SendResult{reason: reason, detail: detail} ->
+          %SendResult{reason: reason, detail: detail, retry_after_ms: retry_after_ms} ->
             rejected = %SendRejected{
               client_msg_id: req.client_msg_id,
               reason: reason,
-              detail: detail
+              detail: detail,
+              retry_after_ms: retry_after_ms
             }
 
             {:push, {:binary, encode(%ServerFrame{frame: {:send_rejected, rejected}})}, state}

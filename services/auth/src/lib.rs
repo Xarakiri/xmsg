@@ -6,6 +6,7 @@
 pub mod api;
 pub mod config;
 pub mod keys;
+pub mod limits;
 pub mod password;
 pub mod revocation;
 pub mod sso;
@@ -125,6 +126,10 @@ pub async fn serve(extensions: Extensions) {
         sso.policy_editable = sso_policy_editable;
         Some(sso)
     };
+    let limits = limits::AuthLimits::from_env().await.unwrap_or_else(|e| {
+        eprintln!("rate limits: {e}");
+        std::process::exit(2);
+    });
     let auth = Arc::new(Auth {
         store,
         keys: config.keys,
@@ -134,6 +139,7 @@ pub async fn serve(extensions: Extensions) {
         revocations,
         sso,
         directory,
+        limits,
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await
@@ -142,10 +148,14 @@ pub async fn serve(extensions: Extensions) {
             std::process::exit(1);
         });
     tracing::info!(port = config.port, "auth ready");
-    axum::serve(listener, router(auth))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server");
+    // The peer's address feeds the per-IP limits (directly, or behind XMSG_PROXY_HOPS).
+    axum::serve(
+        listener,
+        router(auth).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .expect("server");
 }
 
 /// SIGINT or SIGTERM. Kubernetes and systemd stop services with SIGTERM; without a

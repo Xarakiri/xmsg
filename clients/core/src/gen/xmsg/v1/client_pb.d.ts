@@ -422,6 +422,13 @@ export declare type SendRejected = Message<"xmsg.v1.SendRejected"> & {
    * @generated from field: string detail = 3;
    */
   detail: string;
+
+  /**
+   * With REJECT_REASON_RATE_LIMITED: when the client may send again.
+   *
+   * @generated from field: uint32 retry_after_ms = 4;
+   */
+  retryAfterMs: number;
 };
 
 /**

@@ -131,6 +131,9 @@ test("a rejected send becomes a visible error, never silently dropped", () => {
   s = reduce(s, { type: "send", channelId: "7", clientMsgId: "c-10", body: "y", at: 2 });
   s = reduce(s, { type: "sendRejected", clientMsgId: "c-10", reason: RejectReason.INVALID, detail: "too long" });
   assert.equal(s.messages["7"]![1]!.status, "rejected");
+  s = reduce(s, { type: "send", channelId: "7", clientMsgId: "c-11", body: "z", at: 3 });
+  s = reduce(s, { type: "sendRejected", clientMsgId: "c-11", reason: RejectReason.RATE_LIMITED, detail: "" });
+  assert.match(s.messages["7"]![2]!.error!, /too fast/);
 });
 
 test("membership events update members, and being removed marks the channel left", () => {

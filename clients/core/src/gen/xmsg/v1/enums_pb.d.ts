@@ -143,6 +143,13 @@ export enum RejectReason {
    * @generated from enum value: REJECT_REASON_UNAVAILABLE = 5;
    */
   UNAVAILABLE = 5,
+
+  /**
+   * Too many sends in a short time; `retry_after_ms` says when to try again.
+   *
+   * @generated from enum value: REJECT_REASON_RATE_LIMITED = 6;
+   */
+  RATE_LIMITED = 6,
 }
 
 /**

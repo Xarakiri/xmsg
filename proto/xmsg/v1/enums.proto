@@ -36,6 +36,8 @@ enum RejectReason {
   REJECT_REASON_FORBIDDEN = 3;
   REJECT_REASON_INVALID = 4;
   REJECT_REASON_UNAVAILABLE = 5;
+  // Too many sends in a short time; `retry_after_ms` says when to try again.
+  REJECT_REASON_RATE_LIMITED = 6;
 }
 
 enum PresenceStatus {

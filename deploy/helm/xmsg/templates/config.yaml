@@ -22,6 +22,25 @@ data:
   XMSG_SEQUENCER_URL: "http://{{ $full }}-sequencer:8090"
   XMSG_OUTBOX_MODE: {{ .Values.outbox.mode | quote }}
   XMSG_PUSH_SUBJECT: {{ .Values.push.subject | quote }}
+  # Proxies in front of the services, for client addresses: the ingress (if any) and the web pod's nginx.
+  XMSG_PROXY_HOPS: {{ default (ternary "2" "1" .Values.ingress.enabled) .Values.proxyHops | quote }}
+  {{- with .Values.rateLimits }}
+  {{- with .sends }}
+  XMSG_RATE_SENDS: {{ . | quote }}
+  {{- end }}
+  {{- with .loginPerAccount }}
+  XMSG_RATE_LOGIN_PER_ACCOUNT: {{ . | quote }}
+  {{- end }}
+  {{- with .loginPerIp }}
+  XMSG_RATE_LOGIN_PER_IP: {{ . | quote }}
+  {{- end }}
+  {{- with .signupPerIp }}
+  XMSG_RATE_SIGNUP_PER_IP: {{ . | quote }}
+  {{- end }}
+  {{- with .recoveryPerAccount }}
+  XMSG_RATE_RECOVERY_PER_ACCOUNT: {{ . | quote }}
+  {{- end }}
+  {{- end }}
   {{- with (include "xmsg.valkeyUrl" .) }}
   XMSG_VALKEY_URL: {{ . | quote }}
   {{- end }}

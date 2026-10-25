@@ -332,4 +332,5 @@ defmodule Xmsg.V1.SendResult do
   field :accepted, 1, type: :bool
   field :reason, 2, type: Xmsg.V1.RejectReason, enum: true
   field :detail, 3, type: :string
+  field :retry_after_ms, 4, type: :uint32, json_name: "retryAfterMs"
 end
