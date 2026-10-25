@@ -10,7 +10,8 @@ Commercial features (ADR-0022), source-available under [`LICENSE`](LICENSE). The
 | `crates/ldap` | LDAP / Active Directory sign-in, implementing the core auth service's `Directory` |
 | `services/auth` | `xmsg-auth-ee`: the auth service plus SSO, gated by the licence |
 | `services/scim` | `xmsg-scim-ee`: SCIM 2.0 user provisioning for a workspace, gated by the licence |
-| `services/admin` | `xmsg-admin-ee`: the admin console's API (licence status, workspace usage) |
+| `services/admin` | `xmsg-admin-ee`: the admin console's API (licence status, workspace usage), and the console itself |
+| `admin-console` | The admin console (React), served at `/admin/` |
 | `tools/license` | `xmsg-license`: the vendor's key and signing tool (never shipped) |
 
 ## Licences
@@ -79,17 +80,26 @@ A workspace's owners and admins can require single sign-on: `PUT /auth/v1/worksp
 
 `userName` is the person's email address (else their primary email is used); provisioned accounts have no password and sign in through SSO. Deactivated people stay visible with `active: false`, also after a DELETE, and creating or activating them again brings them back with the same ID. The workspace owner can't be deactivated. Groups aren't provisioned yet.
 
-## Admin console API
+## Admin console
+At `https://<host>/admin/`, for workspace owners and admins, signed in with their xmsg session (same origin as the web app):
+
+- **Overview:** the licence (status, expiry, seats used of licensed, features) and the workspace's usage.
+- **Members:** everyone with their role; the owner makes people admins or members; owners and admins remove people (members only, for admins), as in the core rules.
+- **Security:** whether single sign-on is required, turning it on or off (with the licence), and new recovery codes (always).
+
+Develop it with `npm run dev` in `admin-console` (port 5174; it forwards `/admin/api`, `/auth` and `/users` to local services).
+
+### Its API
 `xmsg-admin-ee` serves what the Community Edition's APIs don't show, read-only (so it keeps working after the licence expires), to workspace owners and admins with their usual access token:
 
 - `GET /admin/api/v1/licence`: customer, dates, status (`active`, `grace`, `expired`), features, seats licensed and used (people in at least one workspace). Says `{"licensed": false}` without a licence.
 - `GET /admin/api/v1/workspaces/{ws}/usage`: members by role, joins in the last 30 days, channels by type, archived channels, live sessions, members signed in through SSO or the directory, whether SSO is enforced. Needs a licence with `admin`.
 
-Settings: `XMSG_DATABASE_URL`, `XMSG_AUTH_JWKS_URL`, `XMSG_EE_ADMIN_PORT` (default 8096) and the licence. Member roles, removals, invites and the SSO policy go through the core APIs (`PATCH /users/v1/workspaces/{ws}/members/{id} {"role"}` lets the owner make someone an admin or a member).
+Settings: `XMSG_DATABASE_URL`, `XMSG_AUTH_JWKS_URL`, `XMSG_EE_ADMIN_PORT` (default 8096), `XMSG_EE_ADMIN_CONSOLE_DIR` (the built console; the image has it) and the licence. Member roles, removals, invites and the SSO policy go through the core APIs (`PATCH /users/v1/workspaces/{ws}/members/{id} {"role"}` lets the owner make someone an admin or a member).
 
 ## Images and Helm
 `deploy/Dockerfile` builds one image with `xmsg-auth-ee`, `xmsg-scim-ee` and `xmsg-admin-ee` (from the repository root: `docker build -f ee/deploy/Dockerfile -t registry.example.com/xmsg/enterprise:0.1.0 .`). The Helm chart's `enterprise` values run auth and the admin API from it (at `/admin/api`) and add SCIM; see the chart's README.
 
 ## Not yet
 - SAML.
-- SCIM groups, the admin console's web UI, custom roles, compliance features.
+- SCIM groups, custom roles, bulk operations, the audit log viewer, compliance features.

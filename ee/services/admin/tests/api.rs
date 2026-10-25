@@ -66,6 +66,18 @@ fn licence(features: Vec<Feature>, expires_in_days: i64) -> Licence {
     }
 }
 
+/// A stand-in for the built console.
+fn console_dir() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("xmsg-admin-console-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("index.html"), "<title>xmsg admin</title>").unwrap();
+        std::fs::write(dir.join("assets/app.js"), "console.log(1)").unwrap();
+        dir
+    })
+}
+
 struct Harness {
     base: String,
     keys: Arc<Keys>,
@@ -97,7 +109,7 @@ async fn harness(licence: Option<Licence>) -> Harness {
         licence,
     });
     Harness {
-        base: serve(router(app)).await,
+        base: serve(router(app, Some(console_dir()))).await,
         keys,
         http: reqwest::Client::new(),
     }
@@ -157,6 +169,38 @@ async fn admins_see_the_licence_and_their_workspaces_usage() {
         400
     );
     assert_eq!(h.get("/healthz", None).await.0, 200);
+}
+
+#[tokio::test]
+async fn the_console_is_served_with_its_own_links_working() {
+    let h = harness(None).await;
+    let page = |path: &'static str| {
+        let h = &h;
+        async move {
+            let r = h
+                .http
+                .get(format!("{}{path}", h.base))
+                .send()
+                .await
+                .unwrap();
+            (r.status().as_u16(), r.text().await.unwrap())
+        }
+    };
+    assert!(page("/admin/").await.1.contains("xmsg admin"));
+    assert_eq!(page("/admin/assets/app.js").await.1, "console.log(1)");
+    assert!(
+        page("/admin/members").await.1.contains("xmsg admin"),
+        "unknown paths get the app"
+    );
+    assert!(
+        page("/admin").await.1.contains("xmsg admin"),
+        "redirected to /admin/"
+    );
+    assert_eq!(
+        page("/admin/api/v1/nope").await.0,
+        404,
+        "the API doesn't fall back to the page"
+    );
 }
 
 #[tokio::test]

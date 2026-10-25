@@ -65,7 +65,8 @@ spec:
       http:
         paths:
           {{- if .Values.enterprise.enabled }}
-          - path: /admin/api
+          # The admin console and its API.
+          - path: /admin
             pathType: Prefix
             backend: { service: { name: {{ $full }}-admin, port: { name: http } } }
           {{- end }}

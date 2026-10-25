@@ -1,8 +1,16 @@
 # SPDX-License-Identifier: LicenseRef-xmsg-EE
 # The Enterprise Edition services in one image (ADR-0022): xmsg-auth-ee (the auth service
-# with SSO and LDAP, in place of xmsg-auth), xmsg-scim-ee and xmsg-admin-ee. Build from the repository
+# with SSO and LDAP, in place of xmsg-auth), xmsg-scim-ee and xmsg-admin-ee (which also
+# serves the admin console, built here too). Build from the repository
 # root, since EE depends on the core crates:
 #   docker build -f ee/deploy/Dockerfile -t xmsg/enterprise .
+FROM node:26 AS console
+WORKDIR /src
+COPY ee/admin-console/package.json ee/admin-console/package-lock.json ./
+RUN npm ci
+COPY ee/admin-console ./
+RUN npm run build
+
 FROM rust:1.99-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler cmake && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
@@ -14,4 +22,5 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 xmsg
 COPY --from=build /out/ /usr/local/bin/
+COPY --from=console /src/dist/ /usr/share/xmsg/admin-console/
 USER 10001

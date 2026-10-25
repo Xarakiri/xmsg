@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-xmsg-EE
 //! xmsg-admin-ee: the admin console's API. `XMSG_DATABASE_URL`, `XMSG_AUTH_JWKS_URL`,
-//! `XMSG_EE_ADMIN_PORT` (default 8096) and the licence (`XMSG_EE_LICENSE` or
+//! `XMSG_EE_ADMIN_PORT` (default 8096), `XMSG_EE_ADMIN_CONSOLE_DIR` (the built console,
+//! default `/usr/share/xmsg/admin-console`; the API alone if it isn't there) and the licence (`XMSG_EE_LICENSE` or
 //! `XMSG_EE_LICENSE_FILE`; without one it reports "unlicensed" and shows no analytics).
 
 use std::sync::Arc;
@@ -42,7 +43,18 @@ async fn main() {
         .await
         .unwrap_or_else(|e| fail(&format!("bind :{port}: {e}")));
     tracing::info!(port, "admin API listening");
-    axum::serve(listener, router(app))
+    let console = std::path::PathBuf::from(
+        std::env::var("XMSG_EE_ADMIN_CONSOLE_DIR")
+            .unwrap_or_else(|_| "/usr/share/xmsg/admin-console".into()),
+    );
+    let console = if console.join("index.html").is_file() {
+        tracing::info!(dir = %console.display(), "serving the admin console at /admin/");
+        Some(console)
+    } else {
+        tracing::warn!(dir = %console.display(), "no admin console there: serving the API only");
+        None
+    };
+    axum::serve(listener, router(app, console.as_deref()))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

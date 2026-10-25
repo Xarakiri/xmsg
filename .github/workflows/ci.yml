@@ -205,6 +205,16 @@ jobs:
           cargo fmt --all --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --locked --features xmsg-ee-license/test-keys
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: ee/admin-console/package-lock.json
+      - name: Admin console (typecheck and build)
+        working-directory: ee/admin-console
+        run: |
+          npm ci
+          npm run build
       - name: LDAP sign-in against OpenLDAP
         working-directory: ee
         env:
