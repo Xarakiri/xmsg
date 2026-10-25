@@ -10,19 +10,65 @@
 //! `XMSG_EE_OIDC_CLIENT_SECRET`, optionally `XMSG_EE_OIDC_ID` (default `oidc`),
 //! `XMSG_EE_OIDC_NAME` (the button text, default "Single sign-on") and
 //! `XMSG_EE_OIDC_TRUST_UNVERIFIED_EMAIL=true`.
+//!
+//! LDAP / Active Directory sign-in (the password form checks the directory first):
+//! `XMSG_EE_LDAP_URL`, `XMSG_EE_LDAP_BIND_DN`, `XMSG_EE_LDAP_BIND_PASSWORD`,
+//! `XMSG_EE_LDAP_BASE_DN`, optionally `XMSG_EE_LDAP_USER_FILTER`,
+//! `XMSG_EE_LDAP_EMAIL_ATTRIBUTE`, `XMSG_EE_LDAP_NAME_ATTRIBUTE`,
+//! `XMSG_EE_LDAP_SUBJECT_ATTRIBUTE` and `XMSG_EE_LDAP_STARTTLS=true`.
 
 use std::sync::Arc;
 
-use xmsg_auth::sso::IdentityProvider;
+use xmsg_auth::sso::{Directory, IdentityProvider};
 use xmsg_ee_license::{Action, Feature, Status};
+
+/// The LDAP directory, when `XMSG_EE_LDAP_URL` is set.
+fn ldap() -> Option<Arc<dyn Directory>> {
+    let url = std::env::var("XMSG_EE_LDAP_URL")
+        .ok()
+        .filter(|u| !u.is_empty())?;
+    let env = |name: &str| {
+        std::env::var(name).unwrap_or_else(|_| {
+            eprintln!("{name} must be set with XMSG_EE_LDAP_URL");
+            std::process::exit(2);
+        })
+    };
+    let optional = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let mut config = xmsg_ee_ldap::Config::new(
+        url,
+        env("XMSG_EE_LDAP_BIND_DN"),
+        env("XMSG_EE_LDAP_BIND_PASSWORD"),
+        env("XMSG_EE_LDAP_BASE_DN"),
+    );
+    if let Some(filter) = optional("XMSG_EE_LDAP_USER_FILTER") {
+        config.user_filter = filter;
+    }
+    if let Some(attr) = optional("XMSG_EE_LDAP_EMAIL_ATTRIBUTE") {
+        config.email_attribute = attr;
+    }
+    if let Some(attr) = optional("XMSG_EE_LDAP_NAME_ATTRIBUTE") {
+        config.name_attribute = attr;
+    }
+    config.subject_attribute = optional("XMSG_EE_LDAP_SUBJECT_ATTRIBUTE");
+    config.starttls = optional("XMSG_EE_LDAP_STARTTLS").as_deref() == Some("true");
+    match xmsg_ee_ldap::Ldap::new(config) {
+        Ok(ldap) => Some(Arc::new(ldap)),
+        Err(e) => {
+            eprintln!("LDAP: {e}");
+            std::process::exit(2);
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
     let now = chrono::Utc::now();
     let licence = xmsg_ee_license::from_env();
     let mut providers: Vec<Arc<dyn IdentityProvider>> = Vec::new();
+    let mut directory: Option<Arc<dyn Directory>> = None;
     match &licence {
         Some(l) if l.allowed(Feature::Sso, Action::Use, now) => {
+            directory = ldap();
             if let Ok(issuer) = std::env::var("XMSG_EE_OIDC_ISSUER") {
                 let env = |name: &str| {
                     std::env::var(name).unwrap_or_else(|_| {
@@ -78,6 +124,7 @@ async fn main() {
     xmsg_auth::serve(xmsg_auth::Extensions {
         providers,
         sso_policy_editable,
+        directory,
     })
     .await;
 }

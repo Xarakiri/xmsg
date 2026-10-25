@@ -7,6 +7,7 @@ Commercial features (ADR-0022), source-available under [`LICENSE`](LICENSE). The
 |---|---|
 | `crates/license` | Licence keys: offline Ed25519 verification, expiry with a 30-day grace period, and the per-feature rules after it |
 | `crates/oidc` | OpenID Connect single sign-on, implementing the core auth service's `IdentityProvider` |
+| `crates/ldap` | LDAP / Active Directory sign-in, implementing the core auth service's `Directory` |
 | `services/auth` | `xmsg-auth-ee`: the auth service plus SSO, gated by the licence |
 | `services/scim` | `xmsg-scim-ee`: SCIM 2.0 user provisioning for a workspace, gated by the licence |
 | `tools/license` | `xmsg-license`: the vendor's key and signing tool (never shipped) |
@@ -40,6 +41,20 @@ Run `xmsg-auth-ee` instead of `xmsg-auth`, with:
 
 The flow is the authorization code flow with PKCE; the ID token's signature, issuer, audience, expiry and nonce are checked. An account is matched by the provider's subject, or the first time by its **verified** email (and linked); otherwise a new user is created. The web app shows a "Continue with …" button per provider.
 
+## LDAP and Active Directory
+With `XMSG_EE_LDAP_URL` set (and a licence with `sso`), `xmsg-auth-ee` checks the sign-in form's name and password against the directory **before** local passwords. It binds as a service account, finds exactly one entry matching the user filter (the login is escaped), and binds as that entry with the password given. The entry's email, name and stable ID become the identity: the account is matched and linked like an SSO sign-in, and a directory sign-in counts as SSO when the workspace enforces it.
+
+If the directory doesn't know the login, the password is wrong, or the directory can't be reached (logged), the form falls back to local passwords, which enforced SSO still refuses.
+
+| Variable | Meaning |
+|---|---|
+| `XMSG_EE_LDAP_URL` | `ldaps://dc.example.com` (or `ldap://…` with `XMSG_EE_LDAP_STARTTLS=true`) |
+| `XMSG_EE_LDAP_BIND_DN` / `XMSG_EE_LDAP_BIND_PASSWORD` | The read-only service account that searches |
+| `XMSG_EE_LDAP_BASE_DN` | Where people are, e.g. `ou=people,dc=example,dc=com` |
+| `XMSG_EE_LDAP_USER_FILTER` | Default `(|(uid={login})(mail={login}))`; for Active Directory e.g. `(&(objectClass=user)(|(sAMAccountName={login})(mail={login})))` |
+| `XMSG_EE_LDAP_EMAIL_ATTRIBUTE` / `XMSG_EE_LDAP_NAME_ATTRIBUTE` | Defaults `mail` and `displayName` (else `cn`); entries without an email can't sign in |
+| `XMSG_EE_LDAP_SUBJECT_ATTRIBUTE` | A stable ID: `entryUUID` (OpenLDAP) or `objectGUID` (Active Directory). Without it the DN is used, which changes if the entry moves |
+
 ## Enforced SSO and recovery codes
 A workspace's owners and admins can require single sign-on: `PUT /auth/v1/workspaces/{ws}/sso {"enforced": true}`. From then on its members can't sign in with a password (`403`), only through the identity provider.
 
@@ -64,6 +79,6 @@ A workspace's owners and admins can require single sign-on: `PUT /auth/v1/worksp
 `userName` is the person's email address (else their primary email is used); provisioned accounts have no password and sign in through SSO. Deactivated people stay visible with `active: false`, also after a DELETE, and creating or activating them again brings them back with the same ID. The workspace owner can't be deactivated. Groups aren't provisioned yet.
 
 ## Not yet
-- SAML and LDAP providers.
+- SAML.
 - SCIM groups, the admin console, compliance features.
 - EE container images and a Helm switch for them.

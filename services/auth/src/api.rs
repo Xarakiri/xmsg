@@ -28,6 +28,8 @@ pub struct Auth<S> {
     pub revocations: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
     /// External identity providers (single sign-on), when any are registered.
     pub sso: Option<crate::sso::Sso>,
+    /// A directory (LDAP) the password form checks first, when one is registered.
+    pub directory: Option<Arc<dyn crate::sso::Directory>>,
 }
 
 pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
@@ -156,6 +158,11 @@ async fn login<S: Store>(
     State(auth): State<Arc<Auth<S>>>,
     Json(req): Json<Login>,
 ) -> Result<Json<Tokens>, ApiError> {
+    if let Some(directory) = &auth.directory
+        && let Some(tokens) = directory_login(&auth, directory.as_ref(), &req).await?
+    {
+        return Ok(Json(tokens));
+    }
     let email = normalize_email(&req.email).map_err(|_| ApiError::Unauthorized)?;
     let credentials = auth.store.credentials(&email).await?;
     // Unknown users are checked against a dummy hash so both paths take the same time.
@@ -177,6 +184,54 @@ async fn login<S: Store>(
     let tokens = auth.start_session(user_id, &req.platform).await?;
     tracing::info!(user_id, session_id = tokens.session_id, "logged in");
     Ok(Json(tokens))
+}
+
+/// Signs in through the directory: the person is found (or created and linked) by the
+/// directory's identity, like single sign-on, so enforced SSO doesn't refuse them.
+/// `None` lets the form fall back to local passwords: the directory doesn't know the
+/// login, the password is wrong, or it can't be reached (logged).
+async fn directory_login<S: Store>(
+    auth: &Auth<S>,
+    directory: &dyn crate::sso::Directory,
+    req: &Login,
+) -> Result<Option<Tokens>, ApiError> {
+    let login = req.email.trim();
+    if login.is_empty() || req.password.is_empty() {
+        return Ok(None);
+    }
+    let identity = match directory.authenticate(login, &req.password).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            tracing::warn!(directory = directory.id(), error = %e, "directory unavailable; trying local passwords");
+            return Ok(None);
+        }
+    };
+    let Ok(email) = normalize_email(&identity.email) else {
+        tracing::warn!(
+            directory = directory.id(),
+            "directory entry without a usable email"
+        );
+        return Ok(None);
+    };
+    let user_id = auth
+        .store
+        .external_user(
+            directory.id(),
+            &identity.subject,
+            &email,
+            &identity.name,
+            new_id(),
+        )
+        .await?;
+    let tokens = auth.start_session(user_id, &req.platform).await?;
+    tracing::info!(
+        user_id,
+        session_id = tokens.session_id,
+        directory = directory.id(),
+        "logged in through the directory"
+    );
+    Ok(Some(tokens))
 }
 
 async fn refresh<S: Store>(
@@ -548,6 +603,7 @@ mod tests {
             refresh_ttl_secs: 3600,
             reuse_grace_secs: 30,
             revocations: None,
+            directory: None,
             sso: None,
         });
         (router(auth.clone()), auth)
@@ -567,6 +623,7 @@ mod tests {
             refresh_ttl_secs: 3600,
             reuse_grace_secs: 30,
             revocations: Some(tx),
+            directory: None,
             sso: None,
         });
         (router(auth.clone()), auth, rx)
@@ -648,6 +705,7 @@ mod tests {
             refresh_ttl_secs: 3600,
             reuse_grace_secs: 30,
             revocations: None,
+            directory: None,
             sso: Some(crate::sso::Sso::new(
                 vec![Arc::new(Fake)],
                 "https://chat.example/auth/".into(),
@@ -1107,6 +1165,7 @@ mod tests {
             refresh_ttl_secs: 3600,
             reuse_grace_secs: 30,
             revocations: None,
+            directory: None,
             sso: Some(sso),
         });
         (router(auth.clone()), auth)
@@ -1349,6 +1408,7 @@ mod tests {
             refresh_ttl_secs: 3600,
             reuse_grace_secs: 30,
             revocations: None,
+            directory: None,
             sso: None,
         });
         let ce_app = router(ce.clone());
@@ -1373,5 +1433,110 @@ mod tests {
         );
         let (_, policy) = send(&ce_app, "GET", "/v1/workspaces/1/sso", &token, None).await;
         assert_eq!(policy["available"], false);
+    }
+
+    /// Knows `ann` (or her email) with password `directory secret`; `down` can't be reached.
+    struct FakeDirectory;
+    impl crate::sso::Directory for FakeDirectory {
+        fn id(&self) -> &str {
+            "ldap"
+        }
+        fn authenticate<'a>(
+            &'a self,
+            login: &'a str,
+            password: &'a str,
+        ) -> crate::sso::BoxFuture<'a, Result<Option<crate::sso::ExternalIdentity>, String>>
+        {
+            Box::pin(async move {
+                if login == "down" {
+                    return Err("connection refused".into());
+                }
+                let known = login == "ann" || login == "ann@example.org";
+                Ok((known && password == "directory secret").then(|| {
+                    crate::sso::ExternalIdentity {
+                        subject: "uid=ann,ou=people".into(),
+                        email: "Ann@Example.org".into(),
+                        email_verified: true,
+                        name: "Ann".into(),
+                    }
+                }))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn the_directory_signs_people_in_first_and_counts_as_single_sign_on() {
+        let (_, auth) = with_sso(true);
+        let auth = Arc::new(Auth {
+            store: Memory::default(),
+            keys: Keys::generate(),
+            access_ttl_secs: 900,
+            refresh_ttl_secs: 3600,
+            reuse_grace_secs: 30,
+            revocations: None,
+            directory: Some(Arc::new(FakeDirectory)),
+            sso: Arc::into_inner(auth).unwrap().sso,
+        });
+        let app = router(auth.clone());
+        let (_, token) = workspace_of_two(&app, &auth).await;
+        let ann = auth.store.users.lock().unwrap()["ann@example.org"].user_id;
+
+        // A directory sign-in by user name links Ann's existing account.
+        let (status, tokens) = call(
+            &app,
+            "/v1/login",
+            serde_json::json!({"email": "ann", "password": "directory secret"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{tokens}");
+        assert_eq!(tokens["user_id"], ann.to_string());
+        assert_eq!(
+            auth.store.links.lock().unwrap()["ldap:uid=ann,ou=people"],
+            ann
+        );
+
+        // That's an SSO identity: she may enforce SSO, and the directory still signs her in.
+        let (status, _) = send(
+            &app,
+            "PUT",
+            "/v1/workspaces/1/sso",
+            &token,
+            Some(serde_json::json!({"enforced": true})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            password_login(&app, "ann@example.org").await,
+            StatusCode::FORBIDDEN,
+            "local password refused"
+        );
+        let (status, _) = call(
+            &app,
+            "/v1/login",
+            serde_json::json!({"email": "ann@example.org", "password": "directory secret"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Unknown to the directory, or it's down: local passwords as before.
+        auth.store.enforced.lock().unwrap().insert(1, false);
+        assert_eq!(
+            password_login(&app, "bob@example.org").await,
+            StatusCode::OK
+        );
+        let (status, _) = call(
+            &app,
+            "/v1/login",
+            serde_json::json!({"email": "down", "password": "x"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = call(
+            &app,
+            "/v1/login",
+            serde_json::json!({"email": "ann", "password": "wrong"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }
