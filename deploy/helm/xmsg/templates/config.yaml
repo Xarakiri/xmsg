@@ -44,7 +44,24 @@ type: Opaque
 stringData:
   XMSG_DATABASE_URL: {{ required "postgres.url is required (or secrets.existingSecret)" .Values.postgres.url | quote }}
   XMSG_AUTH_KEY: {{ required "secrets.authKey is required (or secrets.existingSecret)" .Values.secrets.authKey | quote }}
+  {{- if and .Values.enterprise.enabled .Values.enterprise.scim.enabled }}
+  XMSG_PROVISIONING_TOKEN: {{ required "enterprise.scim.provisioningToken is required with SCIM (or secrets.existingSecret)" .Values.enterprise.scim.provisioningToken | quote }}
+  {{- end }}
   {{- if .Values.push.enabled }}
   XMSG_PUSH_VAPID_PRIVATE_KEY: {{ required "secrets.vapidPrivateKey is required when push is enabled" .Values.secrets.vapidPrivateKey | quote }}
+  {{- end }}
+{{- end }}
+{{- if and .Values.enterprise.enabled (not .Values.enterprise.existingSecret) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "xmsg.enterpriseSecretName" . }}
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  XMSG_EE_LICENSE: {{ required "enterprise.license is required (or enterprise.existingSecret)" .Values.enterprise.license | quote }}
+  {{- range $k, $v := .Values.enterprise.secretEnv }}
+  {{ $k }}: {{ $v | quote }}
   {{- end }}
 {{- end }}

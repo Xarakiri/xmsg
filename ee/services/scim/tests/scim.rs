@@ -399,6 +399,13 @@ async fn paging_auth_and_the_rules_of_the_workspace() {
     assert_eq!(page["itemsPerPage"], 2);
     assert_eq!(page["Resources"][0]["userName"], "p0@example.org");
 
+    let health = h
+        .http
+        .get(format!("{}/healthz", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(health.status(), 200, "probes need no token");
     let (status, err) = h.call_as("wrong", "GET", "/Users", None).await;
     assert_eq!((status, err["status"].as_str()), (401, Some("401")));
     let (status, _) = h

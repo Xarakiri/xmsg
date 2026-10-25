@@ -37,7 +37,8 @@ valkey:
   url: ""                       # when not bundled, e.g. redis://valkey:6379
 
 secrets:
-  # An existing Secret with XMSG_DATABASE_URL, XMSG_AUTH_KEY and XMSG_PUSH_VAPID_PRIVATE_KEY.
+  # An existing Secret with XMSG_DATABASE_URL, XMSG_AUTH_KEY, XMSG_PUSH_VAPID_PRIVATE_KEY
+  # (and XMSG_PROVISIONING_TOKEN with SCIM).
   # When empty, the chart creates one from the values below.
   existingSecret: ""
   authKey: ""                   # 32 random bytes, base64 (openssl rand -base64 32)
@@ -89,6 +90,30 @@ ingress:
   host: chat.example.com
   annotations: {}
   tls: []                       # [{ secretName: chat-tls, hosts: [chat.example.com] }]
+
+# The Enterprise Edition (ADR-0022): auth runs xmsg-auth-ee (single sign-on, LDAP, enforced
+# SSO) from the enterprise image, and SCIM provisioning can run too. Needs a licence; without
+# a valid one auth behaves like the Community Edition.
+enterprise:
+  enabled: false
+  image: enterprise             # <image.registry>/<this>:<image.tag>
+  # An existing Secret with XMSG_EE_LICENSE and any secret settings (e.g.
+  # XMSG_EE_OIDC_CLIENT_SECRET, XMSG_EE_LDAP_BIND_PASSWORD, XMSG_EE_SCIM_TOKEN). When
+  # empty, the chart creates one from `license` and `secretEnv`.
+  existingSecret: ""
+  license: ""
+  secretEnv: {}                 # { XMSG_EE_OIDC_CLIENT_SECRET: "…", XMSG_EE_LDAP_BIND_PASSWORD: "…" }
+  auth:
+    # Non-secret settings for xmsg-auth-ee (see the EE README), e.g.
+    # { XMSG_EE_OIDC_ISSUER: https://acme.okta.com, XMSG_EE_OIDC_CLIENT_ID: xmsg }.
+    # XMSG_AUTH_PUBLIC_URL and XMSG_WEB_URL default to https://<ingress.host>(/auth).
+    env: {}
+  scim:
+    enabled: false
+    workspaceId: ""             # the workspace the identity provider provisions
+    # The users service's provisioning API token, shared with SCIM (any long random
+    # string); the token for the identity provider goes in secretEnv as XMSG_EE_SCIM_TOKEN.
+    provisioningToken: ""
 
 # Topics, keyspace and Postgres schema, as pre-install hooks.
 init:

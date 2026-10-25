@@ -19,6 +19,11 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- default (printf "%s-secrets" (include "xmsg.fullname" .)) .Values.secrets.existingSecret -}}
 {{- end -}}
 
+{{/* The licence and the Enterprise Edition's secrets (OIDC client secret, LDAP bind password, SCIM token). */}}
+{{- define "xmsg.enterpriseSecretName" -}}
+{{- default (printf "%s-enterprise" (include "xmsg.fullname" .)) .Values.enterprise.existingSecret -}}
+{{- end -}}
+
 {{- define "xmsg.natsUrl" -}}
 {{- if .Values.nats.bundled -}}nats://{{ include "xmsg.fullname" . }}-nats:4222{{- else -}}{{ required "nats.url is required when nats.bundled is false" .Values.nats.url }}{{- end -}}
 {{- end -}}
@@ -29,11 +34,16 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 
 {{/*
 The Rust services: name, binary and HTTP port (0 = a worker without one). Optional ones
-are left out when their backend isn't configured.
+are left out when their backend isn't configured. With `enterprise.enabled`, auth runs the
+Enterprise Edition binary from the enterprise image, and SCIM can be added.
 */}}
 {{- define "xmsg.components" -}}
+{{- $auth := dict "name" "auth" "bin" "xmsg-auth" "port" 8081 "portEnv" "XMSG_AUTH_PORT" -}}
+{{- if .Values.enterprise.enabled -}}
+{{- $auth = dict "name" "auth" "bin" "xmsg-auth-ee" "port" 8081 "portEnv" "XMSG_AUTH_PORT" "enterprise" true -}}
+{{- end -}}
 {{- $c := list
-  (dict "name" "auth" "bin" "xmsg-auth" "port" 8081 "portEnv" "XMSG_AUTH_PORT")
+  $auth
   (dict "name" "users" "bin" "xmsg-users" "port" 8084 "portEnv" "XMSG_USERS_PORT")
   (dict "name" "channels" "bin" "xmsg-channels" "port" 8082 "portEnv" "XMSG_CHANNELS_PORT")
   (dict "name" "messages" "bin" "xmsg-messages" "port" 8083 "portEnv" "XMSG_MESSAGES_PORT")
@@ -46,6 +56,7 @@ are left out when their backend isn't configured.
   (dict "name" "presence" "bin" "xmsg-presence" "port" 0)
 -}}
 {{- if .Values.push.enabled -}}{{- $c = append $c (dict "name" "push" "bin" "xmsg-push" "port" 8086 "portEnv" "XMSG_PUSH_PORT") -}}{{- end -}}
+{{- if and .Values.enterprise.enabled .Values.enterprise.scim.enabled -}}{{- $c = append $c (dict "name" "scim" "bin" "xmsg-scim-ee" "port" 8095 "portEnv" "XMSG_EE_SCIM_PORT" "enterprise" true) -}}{{- end -}}
 {{- if .Values.opensearch.url -}}{{- $c = append $c (dict "name" "search-indexer" "bin" "xmsg-search-indexer" "port" 0) -}}{{- end -}}
 {{- toJson $c -}}
 {{- end -}}

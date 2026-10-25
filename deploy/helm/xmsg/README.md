@@ -46,6 +46,25 @@ helm install chat deploy/helm/xmsg -n xmsg --create-namespace -f my-values.yaml
 
 Secrets can come from your own Secret instead (`secrets.existingSecret`, keys `XMSG_DATABASE_URL`, `XMSG_AUTH_KEY`, `XMSG_PUSH_VAPID_PRIVATE_KEY`).
 
+## Enterprise Edition
+Build the enterprise image too (its Dockerfile lives with the Enterprise Edition sources; see their README), then:
+
+```yaml
+enterprise:
+  enabled: true                     # auth runs xmsg-auth-ee from <registry>/enterprise
+  license: "xmsg-license-v1.…"      # or existingSecret with XMSG_EE_LICENSE
+  auth:
+    env: { XMSG_EE_OIDC_ISSUER: https://acme.okta.com, XMSG_EE_OIDC_CLIENT_ID: xmsg }
+  secretEnv: { XMSG_EE_OIDC_CLIENT_SECRET: "…" }
+  scim:                             # optional: provisioning at https://<host>/scim/v2
+    enabled: true
+    workspaceId: "1"
+    provisioningToken: "…"          # any long random string (users service ↔ SCIM)
+  # and XMSG_EE_SCIM_TOKEN (what the identity provider sends) in secretEnv
+```
+
+`XMSG_AUTH_PUBLIC_URL` and `XMSG_WEB_URL` default to `https://<ingress.host>/auth` and `https://<ingress.host>`. LDAP settings go in `auth.env` and `secretEnv` the same way (`XMSG_EE_LDAP_*`). Without a valid licence, auth behaves like the Community Edition and SCIM doesn't start.
+
 ## Notes
 - **Partitions** are fixed per installation; changing `partitions` on an existing install is refused at startup by every service (ADR-0021).
 - **Outbox:** the Rust poller by default; with Debezium relaying the outbox, set `outbox.mode: cleanup` (see `services/outbox`).

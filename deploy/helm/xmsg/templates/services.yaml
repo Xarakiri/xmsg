@@ -22,15 +22,34 @@ spec:
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }
       containers:
         - name: {{ $c.name }}
-          image: {{ include "xmsg.image" (list $root "services") }}
+          image: {{ include "xmsg.image" (list $root (ternary $root.Values.enterprise.image "services" (default false $c.enterprise))) }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           command: [{{ $c.bin | quote }}]
           envFrom:
             - configMapRef: { name: {{ $full }}-env }
             - secretRef: { name: {{ include "xmsg.secretName" $root }} }
+            {{- if $c.enterprise }}
+            - secretRef: { name: {{ include "xmsg.enterpriseSecretName" $root }} }
+            {{- end }}
           {{- if gt (int $c.port) 0 }}
           env:
             - { name: {{ $c.portEnv }}, value: {{ $c.port | quote }} }
+            {{- if and (eq $c.name "auth") $root.Values.enterprise.enabled }}
+            {{- if not (hasKey $root.Values.enterprise.auth.env "XMSG_AUTH_PUBLIC_URL") }}
+            - { name: XMSG_AUTH_PUBLIC_URL, value: "https://{{ $root.Values.ingress.host }}/auth" }
+            {{- end }}
+            {{- if not (hasKey $root.Values.enterprise.auth.env "XMSG_WEB_URL") }}
+            - { name: XMSG_WEB_URL, value: "https://{{ $root.Values.ingress.host }}" }
+            {{- end }}
+            {{- range $k, $v := $root.Values.enterprise.auth.env }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+            {{- end }}
+            {{- if eq $c.name "scim" }}
+            - { name: XMSG_EE_SCIM_WORKSPACE, value: {{ required "enterprise.scim.workspaceId is required with SCIM" $root.Values.enterprise.scim.workspaceId | quote }} }
+            - { name: XMSG_USERS_URL, value: "http://{{ $full }}-users:8084" }
+            - { name: XMSG_EE_SCIM_PUBLIC_URL, value: "https://{{ $root.Values.ingress.host }}/scim/v2" }
+            {{- end }}
           ports:
             - { name: http, containerPort: {{ $c.port }} }
           readinessProbe:

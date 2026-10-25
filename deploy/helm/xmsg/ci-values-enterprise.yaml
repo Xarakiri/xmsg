@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Added to ci-values.yaml in CI: the Enterprise Edition switch with SCIM (not a real licence).
+enterprise:
+  enabled: true
+  license: "xmsg-license-v1.ci.ci"
+  secretEnv: { XMSG_EE_SCIM_TOKEN: "ci-scim-token-0123456789abcdef0123456789" }
+  auth:
+    env: { XMSG_EE_OIDC_ISSUER: "https://idp.example.com", XMSG_EE_OIDC_CLIENT_ID: "xmsg" }
+  scim: { enabled: true, workspaceId: "1", provisioningToken: "ci-provisioning-token" }

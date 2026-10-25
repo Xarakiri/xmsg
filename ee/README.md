@@ -78,7 +78,9 @@ A workspace's owners and admins can require single sign-on: `PUT /auth/v1/worksp
 
 `userName` is the person's email address (else their primary email is used); provisioned accounts have no password and sign in through SSO. Deactivated people stay visible with `active: false`, also after a DELETE, and creating or activating them again brings them back with the same ID. The workspace owner can't be deactivated. Groups aren't provisioned yet.
 
+## Images and Helm
+`deploy/Dockerfile` builds one image with `xmsg-auth-ee` and `xmsg-scim-ee` (from the repository root: `docker build -f ee/deploy/Dockerfile -t registry.example.com/xmsg/enterprise:0.1.0 .`). The Helm chart's `enterprise` values run auth from it and add SCIM; see the chart's README.
+
 ## Not yet
 - SAML.
 - SCIM groups, the admin console, compliance features.
-- EE container images and a Helm switch for them.
