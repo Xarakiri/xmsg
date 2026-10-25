@@ -155,6 +155,28 @@ defmodule XmsgGateway.SocketTest do
     assert rejected.detail == "message body is empty"
   end
 
+  test "a rate-limited send tells the client when to try again", %{port: port} do
+    Bus.Local.put_responder(fn _subject, _body ->
+      {:ok,
+       SendResult.encode(%SendResult{
+         accepted: false,
+         reason: :REJECT_REASON_RATE_LIMITED,
+         detail: "too many messages",
+         retry_after_ms: 4_000
+       })}
+    end)
+
+    {c, _} = connect_as(port, 12)
+    req = %SendMessageRequest{channel_id: 100, client_msg_id: "c-5", body: "hi"}
+    c = WsClient.send_frame(c, %ClientFrame{frame: {:send_message, req}})
+
+    assert {_c, %ServerFrame{frame: {:send_rejected, rejected}}, _} =
+             WsClient.recv_server_frame(c)
+
+    assert rejected.reason == :REJECT_REASON_RATE_LIMITED
+    assert rejected.retry_after_ms == 4_000
+  end
+
   test "an unavailable service gets no ack and no rejection, so the client retries", %{port: port} do
     Bus.Local.put_responder(fn _subject, _body ->
       {:ok, SendResult.encode(%SendResult{accepted: false, reason: :REJECT_REASON_UNAVAILABLE})}

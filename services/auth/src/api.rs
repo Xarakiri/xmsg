@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -12,6 +12,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::keys::Keys;
+use crate::limits::ClientIp;
 use crate::revocation::Recorder;
 use crate::store::{NewRefresh, Rotation, Store, StoreError};
 use crate::{new_id, password, random_token, token_hash};
@@ -30,6 +31,8 @@ pub struct Auth<S> {
     pub sso: Option<crate::sso::Sso>,
     /// A directory (LDAP) the password form checks first, when one is registered.
     pub directory: Option<Arc<dyn crate::sso::Directory>>,
+    /// Sign-in rate limits.
+    pub limits: crate::limits::AuthLimits,
 }
 
 pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
@@ -42,6 +45,10 @@ pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .merge(crate::sso::routes::<S>())
         .merge(crate::sso_policy::routes::<S>())
+        .layer(axum::middleware::from_fn_with_state(
+            auth.clone(),
+            crate::limits::client_ip::<S>,
+        ))
         .with_state(auth)
 }
 
@@ -50,6 +57,8 @@ pub enum ApiError {
     Unauthorized,
     Forbidden(&'static str),
     Conflict(&'static str),
+    /// Rate-limited: try again after this long.
+    TooManyRequests(std::time::Duration),
     Internal,
 }
 
@@ -61,6 +70,15 @@ impl IntoResponse for ApiError {
             ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::Internal => (StatusCode::SERVICE_UNAVAILABLE, "try again later"),
+            ApiError::TooManyRequests(wait) => {
+                let seconds = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [("retry-after", seconds.to_string())],
+                    Json(serde_json::json!({ "error": "too many attempts, try again later", "retry_after": seconds })),
+                )
+                    .into_response();
+            }
         };
         (status, Json(serde_json::json!({ "error": message }))).into_response()
     }
@@ -134,8 +152,14 @@ pub(crate) fn normalize_email(email: &str) -> Result<String, ApiError> {
 
 async fn signup<S: Store>(
     State(auth): State<Arc<Auth<S>>>,
+    Extension(ip): Extension<ClientIp>,
     Json(req): Json<Signup>,
 ) -> Result<(StatusCode, Json<SignupReply>), ApiError> {
+    let checks: Vec<_> = ip
+        .key("signup", auth.limits.signup_per_ip)
+        .into_iter()
+        .collect();
+    auth.limits.check(&checks).await?;
     let email = normalize_email(&req.email)?;
     password::validate(&req.password).map_err(ApiError::BadRequest)?;
     let name = req.name.trim();
@@ -156,8 +180,14 @@ async fn signup<S: Store>(
 
 async fn login<S: Store>(
     State(auth): State<Arc<Auth<S>>>,
+    Extension(ip): Extension<ClientIp>,
     Json(req): Json<Login>,
 ) -> Result<Json<Tokens>, ApiError> {
+    // Counted before any password is checked: guessing costs nothing past the limit.
+    let account = req.email.trim().to_lowercase();
+    let mut checks = vec![(format!("login:a:{account}"), auth.limits.login_per_account)];
+    checks.extend(ip.key("login", auth.limits.login_per_ip));
+    auth.limits.check(&checks).await?;
     if let Some(directory) = &auth.directory
         && let Some(tokens) = directory_login(&auth, directory.as_ref(), &req).await?
     {
@@ -604,6 +634,7 @@ mod tests {
             reuse_grace_secs: 30,
             revocations: None,
             directory: None,
+            limits: crate::limits::AuthLimits::memory(),
             sso: None,
         });
         (router(auth.clone()), auth)
@@ -624,6 +655,7 @@ mod tests {
             reuse_grace_secs: 30,
             revocations: Some(tx),
             directory: None,
+            limits: crate::limits::AuthLimits::memory(),
             sso: None,
         });
         (router(auth.clone()), auth, rx)
@@ -706,6 +738,7 @@ mod tests {
             reuse_grace_secs: 30,
             revocations: None,
             directory: None,
+            limits: crate::limits::AuthLimits::memory(),
             sso: Some(crate::sso::Sso::new(
                 vec![Arc::new(Fake)],
                 "https://chat.example/auth/".into(),
@@ -1166,6 +1199,7 @@ mod tests {
             reuse_grace_secs: 30,
             revocations: None,
             directory: None,
+            limits: crate::limits::AuthLimits::memory(),
             sso: Some(sso),
         });
         (router(auth.clone()), auth)
@@ -1409,6 +1443,7 @@ mod tests {
             reuse_grace_secs: 30,
             revocations: None,
             directory: None,
+            limits: crate::limits::AuthLimits::memory(),
             sso: None,
         });
         let ce_app = router(ce.clone());
@@ -1475,6 +1510,7 @@ mod tests {
             reuse_grace_secs: 30,
             revocations: None,
             directory: Some(Arc::new(FakeDirectory)),
+            limits: crate::limits::AuthLimits::memory(),
             sso: Arc::into_inner(auth).unwrap().sso,
         });
         let app = router(auth.clone());
@@ -1538,5 +1574,73 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn password_guessing_is_limited_per_account_and_per_address() {
+        use crate::limits::AuthLimits;
+        use xmsg_ratelimit::Rule;
+        let minute = std::time::Duration::from_secs(60);
+        let auth = Arc::new(Auth {
+            store: Memory::default(),
+            keys: Keys::generate(),
+            access_ttl_secs: 900,
+            refresh_ttl_secs: 3600,
+            reuse_grace_secs: 30,
+            revocations: None,
+            directory: None,
+            limits: AuthLimits {
+                login_per_account: Rule::new(3, minute),
+                login_per_ip: Rule::new(5, minute),
+                proxy_hops: 1,
+                ..AuthLimits::memory()
+            },
+            sso: None,
+        });
+        let app = router(auth);
+        let login = |email: &'static str, from: &'static str| {
+            let app = app.clone();
+            async move {
+                let request = Request::post("/v1/login")
+                    .header("content-type", "application/json")
+                    .header("x-forwarded-for", from)
+                    .body(Body::from(
+                        serde_json::json!({"email": email, "password": "wrong guess"}).to_string(),
+                    ))
+                    .unwrap();
+                let response = app.oneshot(request).await.unwrap();
+                let retry = response.headers().get("retry-after").cloned();
+                (response.status(), retry)
+            }
+        };
+        for _ in 0..3 {
+            assert_eq!(
+                login("ann@example.org", "1.1.1.1").await.0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        // The fourth guess at Ann, even from elsewhere and with different case, is refused.
+        let (status, retry) = login("ANN@example.org", "2.2.2.2").await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        let seconds: u64 = retry.unwrap().to_str().unwrap().parse().unwrap();
+        assert!((1..=60).contains(&seconds), "{seconds}");
+        // One address trying many accounts runs into its own limit (its sixth attempt).
+        assert_eq!(
+            login("bob@example.org", "1.1.1.1").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            login("cy@example.org", "1.1.1.1").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            login("eve@example.org", "1.1.1.1").await.0,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        // Others are unaffected.
+        assert_eq!(
+            login("dee@example.org", "3.3.3.3").await.0,
+            StatusCode::UNAUTHORIZED
+        );
     }
 }

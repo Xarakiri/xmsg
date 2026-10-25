@@ -305,6 +305,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "backon"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
+dependencies = [
+ "fastrand",
+]
+
+[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2827,9 +2836,12 @@ version = "0.32.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "014cc767fefab6a3e798ca45112bccad9c6e0e218fbd49720042716c73cfef44"
 dependencies = [
+ "arc-swap",
+ "backon",
  "bytes",
  "cfg-if",
  "combine",
+ "futures-channel",
  "futures-util",
  "itoa",
  "num-bigint",
@@ -4823,6 +4835,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xmsg-proto",
+ "xmsg-ratelimit",
 ]
 
 [[package]]
@@ -4948,6 +4961,7 @@ dependencies = [
  "xmsg-authn",
  "xmsg-partition",
  "xmsg-proto",
+ "xmsg-ratelimit",
 ]
 
 [[package]]
@@ -5022,6 +5036,15 @@ dependencies = [
  "web-push",
  "xmsg-authn",
  "xmsg-proto",
+]
+
+[[package]]
+name = "xmsg-ratelimit"
+version = "0.0.0"
+dependencies = [
+ "redis",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

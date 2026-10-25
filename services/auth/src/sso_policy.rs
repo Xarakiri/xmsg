@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -24,6 +24,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::api::{ApiError, Auth, Tokens, normalize_email};
+use crate::limits::ClientIp;
 use crate::store::Store;
 use crate::token_hash;
 
@@ -195,8 +196,16 @@ pub struct Recover {
 
 async fn recover<S: Store>(
     State(auth): State<Arc<Auth<S>>>,
+    Extension(ip): Extension<ClientIp>,
     Json(req): Json<Recover>,
 ) -> Result<Json<Tokens>, ApiError> {
+    let account = req.email.trim().to_lowercase();
+    let mut checks = vec![(
+        format!("recovery:a:{account}"),
+        auth.limits.recovery_per_account,
+    )];
+    checks.extend(ip.key("login", auth.limits.login_per_ip));
+    auth.limits.check(&checks).await?;
     let email = normalize_email(&req.email).map_err(|_| ApiError::Unauthorized)?;
     let Some(credentials) = auth.store.credentials(&email).await? else {
         return Err(ApiError::Unauthorized);

@@ -61,6 +61,7 @@ defmodule Xmsg.V1.RejectReason do
   field :REJECT_REASON_FORBIDDEN, 3
   field :REJECT_REASON_INVALID, 4
   field :REJECT_REASON_UNAVAILABLE, 5
+  field :REJECT_REASON_RATE_LIMITED, 6
 end
 
 defmodule Xmsg.V1.PresenceStatus do

@@ -12,6 +12,7 @@ publish.workspace = true
 xmsg-proto = { path = "../../crates/xmsg-proto" }
 xmsg-partition = { path = "../../crates/xmsg-partition" }
 xmsg-authn = { path = "../../crates/xmsg-authn" }
+xmsg-ratelimit = { path = "../../crates/xmsg-ratelimit" }
 axum = "0.8.9"
 scylla = "1.5.0"
 serde = { version = "1.0.229", features = ["derive"] }

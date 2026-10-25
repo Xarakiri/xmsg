@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 xmsg-proto = { path = "../../crates/xmsg-proto" }
+xmsg-ratelimit = { path = "../../crates/xmsg-ratelimit" }
 async-nats = "0.46.0"
 argon2 = "0.6.0"
 axum = "0.8.9"

@@ -195,9 +195,13 @@ impl Stack {
             services.push(nats);
         }
         services.extend([
+            // The harness signs up, logs in and sends from one address far faster than the
+            // production limits allow; they're not what's under test here.
             Service::new("auth", bin("xmsg-auth"), repo, logs)
                 .env("XMSG_AUTH_KEY", key)
                 .env("XMSG_DATABASE_URL", &database)
+                .env("XMSG_RATE_SIGNUP_PER_IP", "100000/1m")
+                .env("XMSG_RATE_LOGIN_PER_IP", "100000/1m")
                 .ready(&["auth ready"]),
             Service::new("channels", bin("xmsg-channels"), repo, logs)
                 .env("XMSG_DATABASE_URL", &database)
@@ -205,6 +209,7 @@ impl Stack {
                 .ready(&["channels ready"]),
             Service::new("messages", bin("xmsg-messages"), repo, logs)
                 .env("XMSG_AUTH_JWKS_URL", &jwks)
+                .env("XMSG_RATE_SENDS", "100000/1s")
                 .ready(&["messages service ready", "history reads ready"]),
             Service::new("persister", bin("xmsg-persister"), repo, logs)
                 .ready(&["persister ready"]),

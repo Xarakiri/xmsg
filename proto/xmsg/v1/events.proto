@@ -213,4 +213,6 @@ message SendResult {
   bool accepted = 1;
   RejectReason reason = 2;
   string detail = 3;
+  // With REJECT_REASON_RATE_LIMITED: when the client may send again.
+  uint32 retry_after_ms = 4;
 }

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "xmsg-ratelimit"
+description = "Rate limits shared by all instances of a service, counted in Valkey"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+redis = { version = "0.32", default-features = false, features = ["tokio-comp", "script", "connection-manager"] }
+tokio = { version = "1.54.0", features = ["sync", "time", "macros"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros"] }

@@ -168,6 +168,7 @@ defmodule Xmsg.V1.SendRejected do
   field :client_msg_id, 1, type: :string, json_name: "clientMsgId"
   field :reason, 2, type: Xmsg.V1.RejectReason, enum: true
   field :detail, 3, type: :string
+  field :retry_after_ms, 4, type: :uint32, json_name: "retryAfterMs"
 end
 
 defmodule Xmsg.V1.SendAck do

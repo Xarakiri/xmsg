@@ -91,6 +91,19 @@ ingress:
   annotations: {}
   tls: []                       # [{ secretName: chat-tls, hosts: [chat.example.com] }]
 
+# Proxies between clients and the services, for per-address rate limits: empty means
+# 2 with the chart's ingress (ingress + the web pod's nginx), 1 without. Add one for each
+# load balancer or CDN that appends to X-Forwarded-For.
+proxyHops: ""
+
+# Rate limits (counted in Valkey), as "count/window" like 20/10s; empty keeps the default.
+rateLimits:
+  sends: ""                     # per person (default 20/10s)
+  loginPerAccount: ""           # default 10/5m
+  loginPerIp: ""                # default 50/5m
+  signupPerIp: ""               # default 10/1h
+  recoveryPerAccount: ""        # default 5/15m
+
 # The Enterprise Edition (ADR-0022): auth runs xmsg-auth-ee (single sign-on, LDAP, enforced
 # SSO) from the enterprise image, and SCIM provisioning can run too. Needs a licence; without
 # a valid one auth behaves like the Community Edition.

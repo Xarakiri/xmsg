@@ -35,7 +35,7 @@ Gateways close the session's sockets and refuse its access tokens until `refuse_
 ## Not yet
 - Magic links, Google/GitHub OAuth (the identity-provider interface); SAML/OIDC/LDAP and SCIM are Enterprise Edition ([ADR-0022](../../docs/adr/0022-open-core-licensing.md)).
 - `user.banned` (revoking every session of a user) and an admin API to end someone's sessions.
-- Login rate limiting, email verification, password reset, signing-key rotation (the JWKS can already publish a next key).
+- Email verification, password reset, signing-key rotation (the JWKS can already publish a next key).
 
 ## Configuration
 
@@ -49,6 +49,14 @@ Gateways close the session's sockets and refuse its access tokens until `refuse_
 | `XMSG_NATS_URL` | *(none)* | NATS for the revocation fast path (without it, revocations travel through the outbox only) |
 | `XMSG_AUTH_REFRESH_TTL_SECS` | `2592000` | refresh-token lifetime (30 days) |
 | `XMSG_AUTH_REUSE_GRACE_SECS` | `30` | how long a rotated refresh token may still be presented; `0` disables the grace |
+| `XMSG_VALKEY_URL` | *(none)* | Valkey for rate limits shared by all instances (without it each counts its own) |
+| `XMSG_RATE_LOGIN_PER_ACCOUNT` | `10/5m` | password and directory sign-ins per account (counted before the password is checked) |
+| `XMSG_RATE_LOGIN_PER_IP` | `50/5m` | sign-ins and recovery codes per client address |
+| `XMSG_RATE_SIGNUP_PER_IP` | `10/1h` | sign-ups per client address |
+| `XMSG_RATE_RECOVERY_PER_ACCOUNT` | `5/15m` | recovery-code sign-ins per account |
+| `XMSG_PROXY_HOPS` | `0` | trusted proxies in front, each appending to `X-Forwarded-For` (2 behind an ingress and the web pod's nginx); `0` uses the TCP peer |
+
+Over a limit the answer is `429` with `Retry-After`. Limits fail open: if Valkey can't be reached, nobody is refused.
 
 ## Tests
 

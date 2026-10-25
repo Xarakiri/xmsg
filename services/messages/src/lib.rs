@@ -71,28 +71,54 @@ pub fn validate(event: &InboundEvent) -> Result<(), (RejectReason, String)> {
     Ok(())
 }
 
+/// How fast one person may send (plan §11): `XMSG_RATE_SENDS`, default 20 per 10 s,
+/// counted across all instances through Valkey.
+pub struct SendLimits {
+    pub limiter: xmsg_ratelimit::Limiter,
+    pub per_user: xmsg_ratelimit::Rule,
+}
+
+pub const DEFAULT_SEND_RATE: xmsg_ratelimit::Rule =
+    xmsg_ratelimit::Rule::new(20, std::time::Duration::from_secs(10));
+
 /// Handles one encoded request from the gateway and returns the encoded reply.
-pub async fn handle(log: &impl EventLog, request: &[u8]) -> Vec<u8> {
+pub async fn handle(log: &impl EventLog, limits: &SendLimits, request: &[u8]) -> Vec<u8> {
     let result = match InboundEvent::decode(request) {
         Err(_) => rejected(RejectReason::Invalid, "malformed InboundEvent".into()),
         Ok(event) => match validate(&event) {
             Err((reason, detail)) => rejected(reason, detail),
-            Ok(()) => match log.append(event.channel_id, event.encode_to_vec()).await {
-                Ok(()) => SendResult {
-                    accepted: true,
-                    ..Default::default()
-                },
-                Err(error) => {
-                    tracing::warn!(%error, channel_id = event.channel_id, "append to messages.in failed");
-                    rejected(
-                        RejectReason::Unavailable,
-                        "temporarily unavailable, retry".into(),
-                    )
-                }
-            },
+            Ok(()) => send(log, limits, event).await,
         },
     };
     result.encode_to_vec()
+}
+
+async fn send(log: &impl EventLog, limits: &SendLimits, event: InboundEvent) -> SendResult {
+    let key = format!("send:u:{}", event.actor_id);
+    if let xmsg_ratelimit::Decision::Limited { retry_after } =
+        limits.limiter.check(&key, limits.per_user).await
+    {
+        tracing::debug!(actor_id = event.actor_id, "send rate-limited");
+        return SendResult {
+            accepted: false,
+            reason: RejectReason::RateLimited as i32,
+            detail: "you're sending too fast; wait a moment".into(),
+            retry_after_ms: retry_after.as_millis() as u32,
+        };
+    }
+    match log.append(event.channel_id, event.encode_to_vec()).await {
+        Ok(()) => SendResult {
+            accepted: true,
+            ..Default::default()
+        },
+        Err(error) => {
+            tracing::warn!(%error, channel_id = event.channel_id, "append to messages.in failed");
+            rejected(
+                RejectReason::Unavailable,
+                "temporarily unavailable, retry".into(),
+            )
+        }
+    }
 }
 
 fn rejected(reason: RejectReason, detail: String) -> SendResult {
@@ -100,6 +126,7 @@ fn rejected(reason: RejectReason, detail: String) -> SendResult {
         accepted: false,
         reason: reason as i32,
         detail,
+        ..Default::default()
     }
 }
 
@@ -108,6 +135,14 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use xmsg_proto::v1::{ChannelCreated, SendMessage};
+
+    /// Generous: only the rate-limit test runs into it.
+    fn limits() -> SendLimits {
+        SendLimits {
+            limiter: xmsg_ratelimit::Limiter::memory("test"),
+            per_user: xmsg_ratelimit::Rule::new(1_000, std::time::Duration::from_secs(10)),
+        }
+    }
 
     #[derive(Default)]
     struct FakeLog {
@@ -148,7 +183,7 @@ mod tests {
     #[tokio::test]
     async fn valid_send_is_appended_keyed_by_channel() {
         let log = FakeLog::default();
-        let result = reply(handle(&log, &send("hello").encode_to_vec()).await);
+        let result = reply(handle(&log, &limits(), &send("hello").encode_to_vec()).await);
         assert!(result.accepted);
         let appended = log.appended.lock().unwrap();
         assert_eq!(appended.len(), 1);
@@ -183,12 +218,12 @@ mod tests {
         ];
 
         for case in cases {
-            let result = reply(handle(&log, &case.encode_to_vec()).await);
+            let result = reply(handle(&log, &limits(), &case.encode_to_vec()).await);
             assert!(!result.accepted, "{case:?} should be rejected");
             assert_eq!(result.reason, RejectReason::Invalid as i32);
         }
         assert_eq!(
-            handle(&log, b"\xff\xff").await,
+            handle(&log, &limits(), b"\xff\xff").await,
             rejected(RejectReason::Invalid, "malformed InboundEvent".into()).encode_to_vec()
         );
         assert!(log.appended.lock().unwrap().is_empty());
@@ -198,7 +233,7 @@ mod tests {
     async fn the_longest_allowed_body_is_accepted() {
         let log = FakeLog::default();
         let body = "é".repeat(MAX_BODY_CHARS); // characters, not bytes
-        assert!(reply(handle(&log, &send(&body).encode_to_vec()).await).accepted);
+        assert!(reply(handle(&log, &limits(), &send(&body).encode_to_vec()).await).accepted);
     }
 
     #[tokio::test]
@@ -207,8 +242,29 @@ mod tests {
             fail: true,
             ..Default::default()
         };
-        let result = reply(handle(&log, &send("hello").encode_to_vec()).await);
+        let result = reply(handle(&log, &limits(), &send("hello").encode_to_vec()).await);
         assert!(!result.accepted);
         assert_eq!(result.reason, RejectReason::Unavailable as i32);
+    }
+
+    #[tokio::test]
+    async fn fast_senders_are_told_to_wait_and_nothing_is_appended() {
+        let log = FakeLog::default();
+        let limits = SendLimits {
+            limiter: xmsg_ratelimit::Limiter::memory("test"),
+            per_user: xmsg_ratelimit::Rule::new(2, std::time::Duration::from_secs(10)),
+        };
+        for _ in 0..2 {
+            assert!(reply(handle(&log, &limits, &send("hi").encode_to_vec()).await).accepted);
+        }
+        let result = reply(handle(&log, &limits, &send("hi").encode_to_vec()).await);
+        assert!(!result.accepted);
+        assert_eq!(result.reason, RejectReason::RateLimited as i32);
+        assert!(result.retry_after_ms > 0 && result.retry_after_ms <= 10_000);
+        assert_eq!(log.appended.lock().unwrap().len(), 2);
+        // Another person isn't affected.
+        let mut other = send("hi");
+        other.actor_id += 1;
+        assert!(reply(handle(&log, &limits, &other.encode_to_vec()).await).accepted);
     }
 }

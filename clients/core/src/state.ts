@@ -179,6 +179,7 @@ export function rejectText(reason: RejectReason, detail = ""): string {
     [RejectReason.FORBIDDEN]: "Not allowed here",
     [RejectReason.INVALID]: "Invalid message",
     [RejectReason.UNAVAILABLE]: "Service unavailable",
+    [RejectReason.RATE_LIMITED]: "Sending too fast: wait a moment and try again",
   };
   return text[reason] ?? (detail || "Rejected");
 }

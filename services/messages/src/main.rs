@@ -101,6 +101,16 @@ async fn main() -> ExitCode {
         tracing::info!(port = config.http_port, "history reads ready");
     }
 
+    let limits = std::sync::Arc::new(xmsg_messages::SendLimits {
+        limiter: xmsg_ratelimit::Limiter::from_env("messages").await,
+        per_user: match xmsg_ratelimit::Rule::from_env(
+            "XMSG_RATE_SENDS",
+            xmsg_messages::DEFAULT_SEND_RATE,
+        ) {
+            Ok(rule) => rule,
+            Err(e) => return fail(&e),
+        },
+    });
     tracing::info!(
         subject = SEND_SUBJECT,
         queue = QUEUE_GROUP,
@@ -115,9 +125,9 @@ async fn main() -> ExitCode {
             msg = requests.next() => {
                 let Some(msg) = msg else { break };
                 let Some(reply_to) = msg.reply.clone() else { continue };
-                let (log, client) = (log.clone(), client.clone());
+                let (log, client, limits) = (log.clone(), client.clone(), limits.clone());
                 tokio::spawn(async move {
-                    let reply = handle(log.as_ref(), &msg.payload).await;
+                    let reply = handle(log.as_ref(), &limits, &msg.payload).await;
                     if let Err(e) = client.publish(reply_to, reply.into()).await {
                         tracing::warn!(error = %e, "reply failed");
                     }
