@@ -35,7 +35,8 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{/*
 The Rust services: name, binary and HTTP port (0 = a worker without one). Optional ones
 are left out when their backend isn't configured. With `enterprise.enabled`, auth runs the
-Enterprise Edition binary from the enterprise image, and SCIM can be added.
+Enterprise Edition binary from the enterprise image, the admin API runs, and SCIM can
+be added.
 */}}
 {{- define "xmsg.components" -}}
 {{- $auth := dict "name" "auth" "bin" "xmsg-auth" "port" 8081 "portEnv" "XMSG_AUTH_PORT" -}}
@@ -56,6 +57,7 @@ Enterprise Edition binary from the enterprise image, and SCIM can be added.
   (dict "name" "presence" "bin" "xmsg-presence" "port" 0)
 -}}
 {{- if .Values.push.enabled -}}{{- $c = append $c (dict "name" "push" "bin" "xmsg-push" "port" 8086 "portEnv" "XMSG_PUSH_PORT") -}}{{- end -}}
+{{- if .Values.enterprise.enabled -}}{{- $c = append $c (dict "name" "admin" "bin" "xmsg-admin-ee" "port" 8096 "portEnv" "XMSG_EE_ADMIN_PORT" "enterprise" true) -}}{{- end -}}
 {{- if and .Values.enterprise.enabled .Values.enterprise.scim.enabled -}}{{- $c = append $c (dict "name" "scim" "bin" "xmsg-scim-ee" "port" 8095 "portEnv" "XMSG_EE_SCIM_PORT" "enterprise" true) -}}{{- end -}}
 {{- if .Values.opensearch.url -}}{{- $c = append $c (dict "name" "search-indexer" "bin" "xmsg-search-indexer" "port" 0) -}}{{- end -}}
 {{- toJson $c -}}

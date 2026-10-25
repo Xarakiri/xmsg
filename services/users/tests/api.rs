@@ -197,6 +197,27 @@ impl Store for Memory {
         }
         Ok(removed)
     }
+    async fn set_role(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        role: &str,
+    ) -> Result<bool, StoreError> {
+        Ok(
+            match self
+                .members
+                .lock()
+                .unwrap()
+                .get_mut(&(workspace_id, user_id))
+            {
+                Some(r) => {
+                    *r = role.to_string();
+                    true
+                }
+                None => false,
+            },
+        )
+    }
     async fn role(&self, workspace_id: i64, user_id: i64) -> Result<Option<String>, StoreError> {
         Ok(self
             .members
@@ -735,6 +756,60 @@ async fn who_may_remove_whom() {
         StatusCode::NOT_FOUND,
         "a removed admin is an outsider now (404, like every outsider)"
     );
+}
+
+#[tokio::test]
+async fn only_the_owner_changes_roles() {
+    let h = harness().await;
+    h.state
+        .store
+        .members
+        .lock()
+        .unwrap()
+        .insert((1, ALICE), "owner".into());
+    h.state
+        .store
+        .members
+        .lock()
+        .unwrap()
+        .insert((1, BOB), "admin".into());
+    let set = |by: i64, who: i64, role: &str| {
+        let h = &h;
+        let body = json!({ "role": role });
+        async move {
+            h.call(
+                "PATCH",
+                &format!("/v1/workspaces/1/members/{who}"),
+                Some(by),
+                Some(body),
+            )
+            .await
+            .0
+        }
+    };
+    assert_eq!(
+        set(BOB, CAROL, "admin").await,
+        StatusCode::FORBIDDEN,
+        "admins don't promote"
+    );
+    assert_eq!(
+        set(ALICE, CAROL, "owner").await,
+        StatusCode::BAD_REQUEST,
+        "ownership isn't handed out this way"
+    );
+    assert_eq!(
+        set(ALICE, CAROL, "superuser").await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        set(ALICE, ALICE, "member").await,
+        StatusCode::FORBIDDEN,
+        "the owner stays the owner"
+    );
+    assert_eq!(set(ALICE, CAROL, "admin").await, StatusCode::NO_CONTENT);
+    assert_eq!(h.state.store.members.lock().unwrap()[&(1, CAROL)], "admin");
+    assert_eq!(set(ALICE, BOB, "member").await, StatusCode::NO_CONTENT);
+    assert_eq!(set(ALICE, 999, "admin").await, StatusCode::NOT_FOUND);
 }
 
 const PROVISIONING_TOKEN: &str = "provisioning-secret";

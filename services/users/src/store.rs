@@ -126,6 +126,14 @@ pub trait Store: Send + Sync + 'static {
         user_id: i64,
     ) -> impl Future<Output = Result<Option<String>, StoreError>> + Send;
 
+    /// Changes a member's role. `false`: they aren't a member.
+    fn set_role(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        role: &str,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
     /// Members by ascending user ID, starting after `after`.
     fn members(
         &self,
@@ -429,6 +437,23 @@ impl Store for Postgres {
         }
         tx.commit().await?;
         Ok(removed)
+    }
+
+    async fn set_role(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        role: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = sqlx::query(
+            "UPDATE workspace_members SET role = $3 WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(workspace_id)
+        .bind(user_id)
+        .bind(role)
+        .execute(&self.pool)
+        .await?;
+        Ok(changed.rows_affected() == 1)
     }
 
     async fn role(&self, workspace_id: i64, user_id: i64) -> Result<Option<String>, StoreError> {

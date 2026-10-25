@@ -10,6 +10,7 @@ Commercial features (ADR-0022), source-available under [`LICENSE`](LICENSE). The
 | `crates/ldap` | LDAP / Active Directory sign-in, implementing the core auth service's `Directory` |
 | `services/auth` | `xmsg-auth-ee`: the auth service plus SSO, gated by the licence |
 | `services/scim` | `xmsg-scim-ee`: SCIM 2.0 user provisioning for a workspace, gated by the licence |
+| `services/admin` | `xmsg-admin-ee`: the admin console's API (licence status, workspace usage) |
 | `tools/license` | `xmsg-license`: the vendor's key and signing tool (never shipped) |
 
 ## Licences
@@ -78,9 +79,17 @@ A workspace's owners and admins can require single sign-on: `PUT /auth/v1/worksp
 
 `userName` is the person's email address (else their primary email is used); provisioned accounts have no password and sign in through SSO. Deactivated people stay visible with `active: false`, also after a DELETE, and creating or activating them again brings them back with the same ID. The workspace owner can't be deactivated. Groups aren't provisioned yet.
 
+## Admin console API
+`xmsg-admin-ee` serves what the Community Edition's APIs don't show, read-only (so it keeps working after the licence expires), to workspace owners and admins with their usual access token:
+
+- `GET /admin/api/v1/licence`: customer, dates, status (`active`, `grace`, `expired`), features, seats licensed and used (people in at least one workspace). Says `{"licensed": false}` without a licence.
+- `GET /admin/api/v1/workspaces/{ws}/usage`: members by role, joins in the last 30 days, channels by type, archived channels, live sessions, members signed in through SSO or the directory, whether SSO is enforced. Needs a licence with `admin`.
+
+Settings: `XMSG_DATABASE_URL`, `XMSG_AUTH_JWKS_URL`, `XMSG_EE_ADMIN_PORT` (default 8096) and the licence. Member roles, removals, invites and the SSO policy go through the core APIs (`PATCH /users/v1/workspaces/{ws}/members/{id} {"role"}` lets the owner make someone an admin or a member).
+
 ## Images and Helm
-`deploy/Dockerfile` builds one image with `xmsg-auth-ee` and `xmsg-scim-ee` (from the repository root: `docker build -f ee/deploy/Dockerfile -t registry.example.com/xmsg/enterprise:0.1.0 .`). The Helm chart's `enterprise` values run auth from it and add SCIM; see the chart's README.
+`deploy/Dockerfile` builds one image with `xmsg-auth-ee`, `xmsg-scim-ee` and `xmsg-admin-ee` (from the repository root: `docker build -f ee/deploy/Dockerfile -t registry.example.com/xmsg/enterprise:0.1.0 .`). The Helm chart's `enterprise` values run auth and the admin API from it (at `/admin/api`) and add SCIM; see the chart's README.
 
 ## Not yet
 - SAML.
-- SCIM groups, the admin console, compliance features.
+- SCIM groups, the admin console's web UI, custom roles, compliance features.

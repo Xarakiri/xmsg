@@ -237,6 +237,15 @@ async fn provisioning_creates_once_and_reactivates() {
         .await
         .unwrap();
     assert_eq!((again, created), (id, false), "one user per email");
+    // Role changes (the owner's PATCH) land on the membership row.
+    assert!(store.set_role(ws, id, "admin").await.unwrap());
+    assert_eq!(store.role(ws, id).await.unwrap().as_deref(), Some("admin"));
+    assert!(
+        !store
+            .set_role(ws, xmsg_users::new_id(), "admin")
+            .await
+            .unwrap()
+    );
     let p = store
         .provisioned_by_email(ws, &email)
         .await

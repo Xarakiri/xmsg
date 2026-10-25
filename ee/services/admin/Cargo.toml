@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: LicenseRef-xmsg-EE
+[package]
+name = "xmsg-admin-ee"
+description = "The admin console's API: licence status and workspace usage"
+edition.workspace = true
+license = "LicenseRef-xmsg-EE"
+license-file = "../../LICENSE"
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[features]
+test-keys = ["xmsg-ee-license/test-keys"]
+
+[[bin]]
+name = "xmsg-admin-ee"
+path = "src/main.rs"
+
+[dependencies]
+xmsg-authn = { path = "../../../crates/xmsg-authn" }
+xmsg-ee-license = { path = "../../crates/license" }
+axum = "0.8.9"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+serde_json = "1.0.154"
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "macros"] }
+tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+xmsg-auth = { path = "../../../services/auth" }
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
