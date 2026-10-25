@@ -6,12 +6,21 @@ defmodule XmsgGateway.WsClient do
 
   defstruct [:conn, :ref, :ws, frames: []]
 
-  def connect(port) do
+  def connect(port, headers \\ []) do
+    {:ok, c} = try_connect(port, headers)
+    c
+  end
+
+  @doc "`{:ok, client}`, or `{:refused, status, headers}` when the upgrade is turned down."
+  def try_connect(port, headers \\ []) do
     {:ok, conn} = Mint.HTTP.connect(:http, "localhost", port, mode: :passive, protocols: [:http1])
-    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, "/ws", [])
+    {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, "/ws", headers)
     {conn, status, headers} = await_upgrade(conn, ref, nil, [])
-    {:ok, conn, ws} = Mint.WebSocket.new(conn, ref, status, headers)
-    %__MODULE__{conn: conn, ref: ref, ws: ws}
+
+    case Mint.WebSocket.new(conn, ref, status, headers) do
+      {:ok, conn, ws} -> {:ok, %__MODULE__{conn: conn, ref: ref, ws: ws}}
+      {:error, _conn, _reason} -> {:refused, status, headers}
+    end
   end
 
   defp await_upgrade(conn, ref, status, headers) do

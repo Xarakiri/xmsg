@@ -6,6 +6,7 @@ defmodule XmsgGateway.Application do
   @impl true
   def start(_type, _args) do
     http = {Bandit, plug: XmsgGateway.Router, port: XmsgGateway.Config.port(), scheme: :http}
+    XmsgGateway.Admission.init()
 
     children =
       XmsgGateway.Config.bus().child_specs() ++
@@ -19,6 +20,10 @@ defmodule XmsgGateway.Application do
           XmsgGateway.Revocations,
           {Registry,
            keys: :duplicate, name: XmsgGateway.Users, partitions: System.schedulers_online()},
+          {Registry,
+           keys: :duplicate,
+           name: XmsgGateway.Admission.preauth_registry(),
+           partitions: System.schedulers_online()},
           {Registry,
            keys: :duplicate,
            name: XmsgGateway.Presence.registry(),

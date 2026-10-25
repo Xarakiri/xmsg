@@ -17,6 +17,15 @@ defmodule XmsgGateway.Config do
   def kafka_bootstrap, do: get(:kafka_bootstrap)
   def revocations_replay?, do: Application.get_env(:xmsg_gateway, :revocations_replay, false)
 
+  # Admission control and per-connection limits (XmsgGateway.Admission, XmsgGateway.Socket).
+  def admission_rate, do: Application.get_env(:xmsg_gateway, :admission_rate, 2_000)
+  def max_connections, do: Application.get_env(:xmsg_gateway, :max_connections, 0)
+  def preauth_per_ip, do: Application.get_env(:xmsg_gateway, :preauth_per_ip, 100)
+  def proxy_hops, do: Application.get_env(:xmsg_gateway, :proxy_hops, 0)
+  @doc "Client frames per second per connection, and the burst allowed above it."
+  def frame_rate, do: Application.get_env(:xmsg_gateway, :frame_rate, 30)
+  def frame_burst, do: Application.get_env(:xmsg_gateway, :frame_burst, 100)
+
   @doc "`kafka_bootstrap` as brod endpoints."
   def kafka_endpoints do
     kafka_bootstrap()

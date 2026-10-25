@@ -2,14 +2,29 @@
 defmodule XmsgGateway.Router do
   @moduledoc false
   use Plug.Router
+  require Logger
 
   plug(:match)
   plug(:dispatch)
 
   get "/ws" do
-    conn
-    |> WebSockAdapter.upgrade(XmsgGateway.Socket, %{}, timeout: 70_000, compress: false)
-    |> halt()
+    forwarded = conn |> get_req_header("x-forwarded-for") |> List.first()
+    ip = XmsgGateway.ClientIp.from(conn.remote_ip, forwarded, XmsgGateway.Config.proxy_hops())
+
+    case XmsgGateway.Admission.check(ip) do
+      :ok ->
+        conn
+        |> WebSockAdapter.upgrade(XmsgGateway.Socket, %{ip: ip}, timeout: 70_000, compress: false)
+        |> halt()
+
+      {:refuse, reason} ->
+        Logger.debug("admission refused (#{reason})")
+
+        conn
+        |> put_resp_header("retry-after", Integer.to_string(XmsgGateway.Admission.retry_after()))
+        |> send_resp(503, "busy, retry later")
+        |> halt()
+    end
   end
 
   get "/healthz" do
