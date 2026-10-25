@@ -245,6 +245,7 @@ jobs:
             -f deploy/helm/xmsg/ci-values-enterprise.yaml > rendered-enterprise.yaml
           grep -q 'command: \["xmsg-auth-ee"\]' rendered-enterprise.yaml
           grep -q 'command: \["xmsg-scim-ee"\]' rendered-enterprise.yaml
+          grep -q 'command: \["xmsg-admin-ee"\]' rendered-enterprise.yaml
       - name: Validate against the Kubernetes schemas
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform

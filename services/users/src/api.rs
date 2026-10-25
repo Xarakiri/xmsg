@@ -44,7 +44,7 @@ pub fn router<S: Store>(app: Arc<App<S>>) -> Router {
         .route("/v1/workspaces/{id}/invites", post(create_invite::<S>))
         .route(
             "/v1/workspaces/{id}/members/{user_id}",
-            delete(remove_member::<S>),
+            delete(remove_member::<S>).patch(set_member_role::<S>),
         )
         .route("/v1/invites/{code}/accept", post(accept_invite::<S>))
         .route("/healthz", get(|| async { "ok" }))
@@ -356,6 +356,47 @@ async fn remove_member<S: Store>(
         return Err(ApiError::Forbidden("not allowed to remove this member"));
     }
     remove_from_workspace(&app, workspace_id, user_id, me).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct SetRole {
+    role: String,
+}
+
+/// Changes a member's role: only the owner, between `admin` and `member` (ownership isn't
+/// handed out here, and the owner's own role never changes).
+async fn set_member_role<S: Store>(
+    State(app): State<Arc<App<S>>>,
+    headers: HeaderMap,
+    Path((id, user_id)): Path<(String, String)>,
+    Json(body): Json<SetRole>,
+) -> Result<StatusCode, ApiError> {
+    let me = caller(&app, &headers).await?;
+    let (workspace_id, user_id) = (parse_id(&id)?, parse_id(&user_id)?);
+    if require_member(&app, workspace_id, me).await? != "owner" {
+        return Err(ApiError::Forbidden("only the owner changes roles"));
+    }
+    if body.role != "admin" && body.role != "member" {
+        return Err(ApiError::BadRequest("role must be admin or member"));
+    }
+    if user_id == me {
+        return Err(ApiError::Forbidden("the owner's role doesn't change"));
+    }
+    if !app
+        .store
+        .set_role(workspace_id, user_id, &body.role)
+        .await?
+    {
+        return Err(ApiError::NotFound("not a member of this workspace"));
+    }
+    tracing::info!(
+        workspace_id,
+        user_id,
+        role = body.role,
+        by = me,
+        "member role changed"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

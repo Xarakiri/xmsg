@@ -64,6 +64,11 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+          {{- if .Values.enterprise.enabled }}
+          - path: /admin/api
+            pathType: Prefix
+            backend: { service: { name: {{ $full }}-admin, port: { name: http } } }
+          {{- end }}
           {{- if and .Values.enterprise.enabled .Values.enterprise.scim.enabled }}
           # SCIM straight to its service: identity providers call it, browsers don't.
           - path: /scim
