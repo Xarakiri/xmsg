@@ -122,6 +122,50 @@ pub trait Store: Send + Sync + 'static {
         name: &str,
         new_id: i64,
     ) -> impl Future<Output = Result<i64, StoreError>> + Send;
+
+    /// Whether any workspace the user belongs to enforces single sign-on.
+    fn sso_required(&self, user_id: i64) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// The user's role in the workspace, if they're a member.
+    fn role(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> impl Future<Output = Result<Option<String>, StoreError>> + Send;
+
+    fn sso_enforced(
+        &self,
+        workspace_id: i64,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    fn set_sso_enforced(
+        &self,
+        workspace_id: i64,
+        enforced: bool,
+        by: i64,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Whether the user has ever signed in through an identity provider.
+    fn has_external_identity(
+        &self,
+        user_id: i64,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Replaces the user's recovery codes for the workspace (hashes) with these.
+    fn replace_recovery_codes(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        code_hashes: &[String],
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Uses up one of the user's recovery codes: true if it was unused and its holder is
+    /// still an owner or admin of the workspace it was made for.
+    fn use_recovery_code(
+        &self,
+        user_id: i64,
+        code_hash: &str,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 }
 
 /// A sign-in in progress with an external identity provider (see `sso`).
@@ -154,6 +198,105 @@ impl Postgres {
 }
 
 impl Store for Postgres {
+    async fn sso_required(&self, user_id: i64) -> Result<bool, StoreError> {
+        let required: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM workspace_members m \
+             JOIN workspace_sso s ON s.workspace_id = m.workspace_id \
+             WHERE m.user_id = $1 AND s.enforced)",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(required)
+    }
+
+    async fn role(&self, workspace_id: i64, user_id: i64) -> Result<Option<String>, StoreError> {
+        Ok(sqlx::query_scalar(
+            "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(workspace_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    async fn sso_enforced(&self, workspace_id: i64) -> Result<bool, StoreError> {
+        let enforced: Option<bool> =
+            sqlx::query_scalar("SELECT enforced FROM workspace_sso WHERE workspace_id = $1")
+                .bind(workspace_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(enforced.unwrap_or(false))
+    }
+
+    async fn set_sso_enforced(
+        &self,
+        workspace_id: i64,
+        enforced: bool,
+        by: i64,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO workspace_sso (workspace_id, enforced, updated_by) VALUES ($1, $2, $3) \
+             ON CONFLICT (workspace_id) DO UPDATE \
+             SET enforced = EXCLUDED.enforced, updated_by = EXCLUDED.updated_by, updated_at = now()",
+        )
+        .bind(workspace_id)
+        .bind(enforced)
+        .bind(by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn has_external_identity(&self, user_id: i64) -> Result<bool, StoreError> {
+        let linked: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM external_identities WHERE user_id = $1)",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(linked)
+    }
+
+    async fn replace_recovery_codes(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+        code_hashes: &[String],
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM recovery_codes WHERE workspace_id = $1 AND user_id = $2")
+            .bind(workspace_id)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO recovery_codes (code_hash, user_id, workspace_id) \
+             SELECT h, $2, $3 FROM unnest($1::text[]) AS h",
+        )
+        .bind(code_hashes)
+        .bind(user_id)
+        .bind(workspace_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn use_recovery_code(&self, user_id: i64, code_hash: &str) -> Result<bool, StoreError> {
+        let used = sqlx::query(
+            "UPDATE recovery_codes r SET used_at = now() \
+             WHERE r.code_hash = $1 AND r.user_id = $2 AND r.used_at IS NULL \
+             AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = r.workspace_id \
+                         AND m.user_id = r.user_id AND m.role IN ('owner', 'admin'))",
+        )
+        .bind(code_hash)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(used.rows_affected() == 1)
+    }
+
     async fn save_sso_state(&self, state: &str, s: &SsoState) -> Result<(), StoreError> {
         // Old, abandoned sign-ins are cleared on the way.
         sqlx::query("DELETE FROM sso_states WHERE created_at < now() - interval '1 hour'")

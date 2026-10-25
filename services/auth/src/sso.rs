@@ -75,6 +75,8 @@ pub struct Sso {
     pub public_url: String,
     /// Where signed-in users land, e.g. https://chat.example.com.
     pub web_url: String,
+    /// Whether workspaces may change their SSO policy (the licence decides; off by default).
+    pub policy_editable: bool,
 }
 
 impl Sso {
@@ -90,6 +92,7 @@ impl Sso {
                 .collect(),
             public_url: public_url.trim_end_matches('/').to_string(),
             web_url: web_url.trim_end_matches('/').to_string(),
+            policy_editable: false,
         }
     }
 

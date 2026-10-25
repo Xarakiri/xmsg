@@ -9,6 +9,7 @@ pub mod keys;
 pub mod password;
 pub mod revocation;
 pub mod sso;
+pub mod sso_policy;
 pub mod store;
 
 use std::sync::Arc;
@@ -49,10 +50,23 @@ pub fn token_hash(token: &str) -> String {
         .collect()
 }
 
-/// Runs the auth service: config from the environment, Postgres, the HTTP API. The
-/// Enterprise Edition passes its identity providers (single sign-on); the Community
-/// Edition none.
-pub async fn serve(providers: Vec<std::sync::Arc<dyn sso::IdentityProvider>>) {
+/// What the Enterprise Edition adds to the auth service; the Community Edition passes
+/// `Extensions::default()`.
+#[derive(Default)]
+pub struct Extensions {
+    /// External identity providers (single sign-on).
+    pub providers: Vec<std::sync::Arc<dyn sso::IdentityProvider>>,
+    /// Whether workspaces may change their SSO policy (the licence allows configuration).
+    pub sso_policy_editable: bool,
+}
+
+/// Runs the auth service: config from the environment, Postgres, the HTTP API, plus
+/// whatever the Enterprise Edition passes in.
+pub async fn serve(extensions: Extensions) {
+    let Extensions {
+        providers,
+        sso_policy_editable,
+    } = extensions;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -104,7 +118,9 @@ pub async fn serve(providers: Vec<std::sync::Arc<dyn sso::IdentityProvider>>) {
             std::process::exit(2);
         });
         tracing::info!(providers = providers.len(), "single sign-on enabled");
-        Some(sso::Sso::new(providers, public_url, web_url))
+        let mut sso = sso::Sso::new(providers, public_url, web_url);
+        sso.policy_editable = sso_policy_editable;
+        Some(sso)
     };
     let auth = Arc::new(Auth {
         store,

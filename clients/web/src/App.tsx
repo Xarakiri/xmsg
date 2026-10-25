@@ -47,9 +47,10 @@ function errorText(e: unknown): string {
 }
 
 function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
-  const [mode, setMode] = useState<"in" | "up">("in");
+  const [mode, setMode] = useState<"in" | "up" | "code">("in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState(sso.error ?? "");
   const [busy, setBusy] = useState(false);
@@ -64,7 +65,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
     setError("");
     try {
       if (mode === "up") await api.signup(email, password, name);
-      session.adopt(await api.login(email, password));
+      session.adopt(mode === "code" ? await api.loginWithRecoveryCode(email, code) : await api.login(email, password));
       onSignedIn(session.userId);
     } catch (err) {
       setError(errorText(err));
@@ -95,20 +96,27 @@ function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
           Email
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
         </label>
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={mode === "up" ? 10 : undefined}
-            autoComplete={mode === "up" ? "new-password" : "current-password"}
-          />
-        </label>
+        {mode === "code" ? (
+          <label>
+            Recovery code
+            <input value={code} onChange={(e) => setCode(e.target.value)} required autoComplete="one-time-code" placeholder="xxxx-xxxx-xxxx-xxxx" />
+          </label>
+        ) : (
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={mode === "up" ? 10 : undefined}
+              autoComplete={mode === "up" ? "new-password" : "current-password"}
+            />
+          </label>
+        )}
         {error && <p className="error">{error}</p>}
         <button className="primary" disabled={busy}>
-          {mode === "in" ? "Sign in" : "Create account"}
+          {mode === "up" ? "Create account" : "Sign in"}
         </button>
         {providers.length > 0 && (
           <div className="sso">
@@ -118,6 +126,9 @@ function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
                 Continue with {p.name}
               </a>
             ))}
+            <button type="button" className="link small" onClick={() => setMode(mode === "code" ? "in" : "code")}>
+              {mode === "code" ? "Sign in with a password" : "Use a recovery code"}
+            </button>
           </div>
         )}
       </form>
