@@ -14,6 +14,13 @@ if config_env() != :test do
     # Rebuild the revocation deny set from Kafka auth.events on start.
     revocations_replay: env.("XMSG_REVOCATIONS_REPLAY", "true") == "true",
     kafka_bootstrap: env.("XMSG_KAFKA_BOOTSTRAP", "127.0.0.1:9092"),
+    # Admission control and per-connection limits (XmsgGateway.Admission).
+    admission_rate: String.to_integer(env.("XMSG_ADMISSION_RATE", "2000")),
+    max_connections: String.to_integer(env.("XMSG_MAX_CONNECTIONS", "0")),
+    preauth_per_ip: String.to_integer(env.("XMSG_PREAUTH_PER_IP", "100")),
+    proxy_hops: String.to_integer(env.("XMSG_PROXY_HOPS", "0")),
+    frame_rate: String.to_integer(env.("XMSG_FRAME_RATE", "30")),
+    frame_burst: String.to_integer(env.("XMSG_FRAME_BURST", "100")),
     nats: %{
       host: env.("XMSG_NATS_HOST", "127.0.0.1"),
       port: String.to_integer(env.("XMSG_NATS_PORT", "4222"))

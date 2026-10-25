@@ -20,9 +20,12 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 
 - **After a (re)start** the deny set is rebuilt from the last 16 minutes of Kafka `auth.events` (the outbox copy of every revocation; `XmsgGateway.Revocations.Replay`). Nothing older can matter, because no access token lives longer. Turn it off with `XMSG_REVOCATIONS_REPLAY=false`.
 
+- **Admission control** (`XmsgGateway.Admission`), checked before the WebSocket upgrade: at most `XMSG_ADMISSION_RATE` new sessions a second per pod, an optional ceiling of `XMSG_MAX_CONNECTIONS`, and at most `XMSG_PREAUTH_PER_IP` sockets per client address that haven't authenticated yet. A refused upgrade gets `503` with a `Retry-After` of 1–5 s, and clients retry with backoff and jitter, so a reconnect storm spreads out. Client addresses come from `X-Forwarded-For` behind `XMSG_PROXY_HOPS` trusted proxies.
+- **Per-connection frame budget:** a token bucket of `XMSG_FRAME_RATE` frames a second with bursts up to `XMSG_FRAME_BURST`; a connection far over it is closed (`1008 too many frames`) and comes back through admission control.
+
 ## Not yet
 - Resume tokens are issued but not yet accepted on reconnect.
-- Refcounted per-user presence subscriptions, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`, admission control, per-connection limits, drain on deploy.
+- Refcounted per-user presence subscriptions, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`, drain on deploy.
 - Hibernation of idle connections, kernel/BEAM tuning, and the 100k-connections-per-pod capacity spike.
 
 ## Configuration (environment, `config/runtime.exs`)
@@ -37,6 +40,11 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 | `XMSG_REVOCATIONS_REPLAY` | `true` | Rebuild the revocation deny set from Kafka `auth.events` on start |
 | `XMSG_DEV_AUTH` | `false` | Also accept `dev:<user_id>` tokens (development only) |
 | `XMSG_KAFKA_BOOTSTRAP` | `127.0.0.1:9092` | Kafka, for `sessions.events` |
+| `XMSG_ADMISSION_RATE` | `2000` | New sessions a second per pod (`0`: unlimited) |
+| `XMSG_MAX_CONNECTIONS` | `0` | Connections per pod (`0`: unlimited) |
+| `XMSG_PREAUTH_PER_IP` | `100` | Unauthenticated sockets per client address (`0`: unlimited) |
+| `XMSG_PROXY_HOPS` | `0` | Trusted proxies appending to `X-Forwarded-For` (`0`: the TCP peer) |
+| `XMSG_FRAME_RATE` / `XMSG_FRAME_BURST` | `30` / `100` | Client frames a second per connection, and the burst above it |
 
 ## Protobuf modules
 `lib/xmsg_gateway/proto/` is generated from `proto/` by `tools/gen-elixir-proto.sh` (needs `protoc` and `mix escript.install hex protobuf 0.17.1`). CI fails if it's out of date.

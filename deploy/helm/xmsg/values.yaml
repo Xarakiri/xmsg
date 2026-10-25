@@ -77,6 +77,14 @@ gateway:
   resources:
     requests: { cpu: 250m, memory: 256Mi }
     limits: { memory: 1Gi }
+  # Admission control (plan §5.1): what one gateway pod takes on. Refused upgrades get 503
+  # with a jittered Retry-After, so a reconnect storm spreads out.
+  admission:
+    newSessionsPerSecond: 2000  # 0 = unlimited
+    maxConnections: 0           # per pod; 0 = unlimited
+    unauthenticatedPerIp: 100   # sockets that haven't sent a valid Connect yet
+    framesPerSecond: 30         # per connection; far beyond it the socket is closed
+    frameBurst: 100
 
 web:
   replicas: 2

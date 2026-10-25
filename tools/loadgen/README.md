@@ -4,6 +4,7 @@
 WebSocket load generator for the gateway (Phase 0 capacity spike).
 
 - Opens N connections with dev tokens (`dev:<user_id>`; the gateway needs `XMSG_DEV_AUTH=true`), ramped at a set rate, and pings each one.
+- The gateway's admission control applies: keep `--ramp` under its `XMSG_ADMISSION_RATE` (2,000 a second by default; loadgen counts a refused upgrade as failed, it doesn't retry), and set `XMSG_PREAUTH_PER_IP=0` when all connections come from one machine.
 - With `--nats`, publishes `GatewayBatch`es directly to `gw.<gateway-id>` as fan-out would (spread over `--partitions` streams, each with its own sequence, plus `StreamHeads` every second), so delivery throughput and latency can be measured without the rest of the pipeline.
 - Prints one line per second (connections, published vs received frames/s, delivery p50/p99, ping RTT p99, resyncs) and a summary.
 

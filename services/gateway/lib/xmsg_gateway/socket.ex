@@ -42,23 +42,53 @@ defmodule XmsgGateway.Socket do
   @receipt_interval_ms 1_000
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     Process.send_after(self(), :auth_timeout, Config.auth_timeout_ms())
+    ip = Map.get(opts, :ip)
+    # Counted per address until authenticated (XmsgGateway.Admission).
+    if ip, do: Registry.register(XmsgGateway.Admission.preauth_registry(), ip, nil)
 
     {:ok,
-     %{user_id: nil, conn_id: nil, session_id: 0, typing_at: %{}, active: true, receipts: %{}}}
+     %{
+       user_id: nil,
+       conn_id: nil,
+       session_id: 0,
+       typing_at: %{},
+       active: true,
+       receipts: %{},
+       ip: ip,
+       budget: {Config.frame_burst() * 1.0, System.monotonic_time(:millisecond)}
+     }}
   end
 
   @impl true
   def handle_in({data, opcode: :binary}, state) do
-    case decode(data) do
-      {:ok, %ClientFrame{frame: frame}} -> handle_frame(frame, state)
-      :error -> {:stop, :normal, {@close_policy, "malformed frame"}, state}
+    case spend(state) do
+      {:ok, state} -> handle_binary(data, state)
+      :exhausted -> {:stop, :normal, {@close_policy, "too many frames"}, state}
     end
   end
 
   def handle_in({_data, opcode: :text}, state) do
     {:stop, :normal, {@close_policy, "binary protobuf frames only"}, state}
+  end
+
+  # Per-connection frame budget (plan §11): a token bucket refilled at `frame_rate` per
+  # second up to `frame_burst`. A client far over it is closed; it reconnects through
+  # admission control like anyone else.
+  defp spend(%{budget: {tokens, at}} = state) do
+    now = System.monotonic_time(:millisecond)
+    burst = Config.frame_burst() * 1.0
+    tokens = min(burst, tokens + (now - at) * Config.frame_rate() / 1000)
+
+    if tokens >= 1, do: {:ok, %{state | budget: {tokens - 1, now}}}, else: :exhausted
+  end
+
+  defp handle_binary(data, state) do
+    case decode(data) do
+      {:ok, %ClientFrame{frame: frame}} -> handle_frame(frame, state)
+      :error -> {:stop, :normal, {@close_policy, "malformed frame"}, state}
+    end
   end
 
   @impl true
@@ -104,6 +134,7 @@ defmodule XmsgGateway.Socket do
          # Checked again once registered: a revocation that landed in between is not missed.
          false <- XmsgGateway.Revocations.revoked?(sid) do
       {:ok, _} = Registry.register(XmsgGateway.Users, user_id, nil)
+      if state.ip, do: Registry.unregister(XmsgGateway.Admission.preauth_registry(), state.ip)
       conn_id = XmsgGateway.Sessions.new_conn_id()
       XmsgGateway.Sessions.Tracker.track(conn_id, user_id)
       _ = XmsgGateway.Presence.ping(user_id, conn_id, :CONNECTION_STATE_ACTIVE)
