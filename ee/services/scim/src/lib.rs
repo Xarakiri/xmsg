@@ -71,6 +71,8 @@ pub fn router(config: Config) -> Router {
             get(one).put(replace).patch(patch).delete(delete),
         )
         .route_layer(middleware::from_fn_with_state(scim.clone(), authorize))
+        // Probes need no token.
+        .route("/healthz", get(|| async { "ok" }))
         .with_state(scim)
 }
 

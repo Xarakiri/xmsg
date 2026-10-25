@@ -240,10 +240,15 @@ jobs:
           # Search and push off too.
           helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml \
             --set opensearch.url= --set push.enabled=false > rendered-minimal.yaml
+          # The Enterprise Edition switch, with SCIM.
+          helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml \
+            -f deploy/helm/xmsg/ci-values-enterprise.yaml > rendered-enterprise.yaml
+          grep -q 'command: \["xmsg-auth-ee"\]' rendered-enterprise.yaml
+          grep -q 'command: \["xmsg-scim-ee"\]' rendered-enterprise.yaml
       - name: Validate against the Kubernetes schemas
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
-          ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml rendered-minimal.yaml
+          ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml rendered-minimal.yaml rendered-enterprise.yaml
 
   images:
     name: Container images
@@ -253,6 +258,9 @@ jobs:
       fail-fast: false
       matrix:
         image: [services, sequencer, gateway, web]
+        include:
+          - image: enterprise
+            file: ee/deploy/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -260,7 +268,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/docker/${{ matrix.image }}.Dockerfile
+          file: ${{ matrix.file || format('deploy/docker/{0}.Dockerfile', matrix.image) }}
           push: false
           tags: xmsg/${{ matrix.image }}:ci
           cache-from: type=gha,scope=${{ matrix.image }}
