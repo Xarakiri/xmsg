@@ -39,6 +39,8 @@ spec:
             - { name: XMSG_KAFKA_BOOTSTRAP, value: {{ .Values.kafka.bootstrap | quote }} }
             - { name: XMSG_PARTITIONS, value: {{ .Values.partitions | quote }} }
             - { name: XMSG_AUTH_JWKS_URL, value: "http://{{ $full }}-auth:8081/.well-known/jwks.json" }
+            # Each user's pull-mode channels, read at connect (ADR-0008).
+            - { name: XMSG_CHANNELS_URL, value: "http://{{ $full }}-channels:8082" }
             # Admission control and per-connection limits (services/gateway).
             - { name: XMSG_PROXY_HOPS, value: {{ default (ternary "2" "1" .Values.ingress.enabled) .Values.proxyHops | quote }} }
             - { name: XMSG_ADMISSION_RATE, value: {{ .Values.gateway.admission.newSessionsPerSecond | quote }} }

@@ -15,6 +15,15 @@ defmodule XmsgGateway.Bus.Local do
   end
 
   @impl true
+  def subscribe_ref(subject) do
+    {:ok, pid} = subscribe(subject)
+    {:ok, pid, subject}
+  end
+
+  @impl true
+  def unsubscribe(subject), do: Registry.unregister(@registry, subject)
+
+  @impl true
   def publish(subject, body) do
     # Exact subscriptions, plus NATS-style `prefix.*` ones matching one more token.
     patterns =

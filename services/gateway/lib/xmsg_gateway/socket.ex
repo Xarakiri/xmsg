@@ -96,6 +96,22 @@ defmodule XmsgGateway.Socket do
     {:push, {:binary, frame}, state}
   end
 
+  # Pull-mode channels (XmsgGateway.Pull): the list at connect, then fan-out's changes.
+  def handle_info({:pull_channels, ids}, %{user_id: id} = state) when not is_nil(id) do
+    Enum.each(ids, &XmsgGateway.Pull.join/1)
+    {:ok, state}
+  end
+
+  def handle_info({:pull, channel_id, true}, %{user_id: id} = state) when not is_nil(id) do
+    XmsgGateway.Pull.join(channel_id)
+    {:ok, state}
+  end
+
+  def handle_info({:pull, channel_id, false}, state) do
+    XmsgGateway.Pull.leave(channel_id)
+    {:ok, state}
+  end
+
   # Deploy drain (XmsgGateway.Drain): 1012 tells the client to reconnect elsewhere.
   def handle_info(:drain, state) do
     {:stop, :normal, {1012, "service restart"}, state}
@@ -149,6 +165,9 @@ defmodule XmsgGateway.Socket do
         resume_token: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false),
         partition_count: Config.partition_count()
       }
+
+      # Large channels arrive through this gateway's `ch.{id}` subscriptions (ADR-0008).
+      XmsgGateway.Pull.fetch_for(self(), token)
 
       {:push, {:binary, encode(%ServerFrame{frame: {:welcome, welcome}})},
        %{state | user_id: user_id, session_id: sid, conn_id: conn_id}}

@@ -49,3 +49,16 @@ defmodule Xmsg.V1.StreamHead do
   field :owner_epoch, 2, type: :uint64, json_name: "ownerEpoch"
   field :seq, 3, type: :uint64
 end
+
+defmodule Xmsg.V1.PullControl do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.PullControl",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :user_id, 1, type: :int64, json_name: "userId"
+  field :channel_id, 2, type: :int64, json_name: "channelId"
+  field :subscribe, 3, type: :bool
+end

@@ -17,6 +17,8 @@ pub struct MyChannel {
     pub kind: String,
     pub event_seq: i64,
     pub msg_seq: i64,
+    /// `push` or `pull` (ADR-0008): pull-mode channels reach gateways on `ch.{id}`.
+    pub fanout_mode: String,
 }
 
 pub trait Memberships: Send + Sync + 'static {
@@ -83,7 +85,7 @@ impl Cassandra {
         };
         let k = keyspace;
         Ok(Cassandra {
-            by_user: prepare(format!("SELECT workspace_id, channel_id, channel_type FROM {k}.channels_by_user WHERE user_id = ?"))
+            by_user: prepare(format!("SELECT workspace_id, channel_id, channel_type, fanout_mode FROM {k}.channels_by_user WHERE user_id = ?"))
                 .await?,
             head: prepare(format!("SELECT event_seq, msg_seq FROM {k}.channel_heads WHERE channel_id = ?")).await?,
             settings_by_user: prepare(format!(
@@ -140,19 +142,19 @@ impl Memberships for Cassandra {
     }
 
     async fn channels_of(&self, user_id: i64) -> Result<Vec<MyChannel>, String> {
-        let rows: Vec<(i64, i64, Option<String>)> = self
+        let rows: Vec<(i64, i64, Option<String>, Option<String>)> = self
             .session
             .execute_unpaged(&self.by_user, (user_id,))
             .await
             .map_err(err)?
             .into_rows_result()
             .map_err(err)?
-            .rows::<(i64, i64, Option<String>)>()
+            .rows::<(i64, i64, Option<String>, Option<String>)>()
             .map_err(err)?
             .collect::<Result<_, _>>()
             .map_err(err)?;
         // One head read per channel, concurrently (a few hundred channels at most per user here).
-        let heads = rows.iter().map(|(_, channel_id, _)| async move {
+        let heads = rows.iter().map(|(_, channel_id, _, _)| async move {
             self.session
                 .execute_unpaged(&self.head, (*channel_id,))
                 .await
@@ -166,7 +168,7 @@ impl Memberships for Cassandra {
         Ok(rows
             .into_iter()
             .zip(heads)
-            .map(|((workspace_id, channel_id, kind), head)| {
+            .map(|((workspace_id, channel_id, kind, mode), head)| {
                 let (event_seq, msg_seq) = head.unwrap_or_default();
                 MyChannel {
                     channel_id,
@@ -174,6 +176,7 @@ impl Memberships for Cassandra {
                     kind: kind.unwrap_or_default(),
                     event_seq: event_seq.unwrap_or_default(),
                     msg_seq: msg_seq.unwrap_or_default(),
+                    fanout_mode: mode.unwrap_or_else(|| "push".into()),
                 }
             })
             .collect())

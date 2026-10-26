@@ -34,6 +34,27 @@ defmodule XmsgGateway.Bus.Nats do
   end
 
   @impl true
+  def subscribe_ref(subject) do
+    case Process.whereis(@conn) do
+      nil ->
+        {:error, :not_connected}
+
+      pid ->
+        case Gnat.sub(pid, self(), subject) do
+          {:ok, sid} -> {:ok, pid, sid}
+          error -> error
+        end
+    end
+  end
+
+  @impl true
+  def unsubscribe(sid) do
+    Gnat.unsub(@conn, sid)
+  catch
+    :exit, reason -> {:error, reason}
+  end
+
+  @impl true
   def request(subject, body, timeout_ms) do
     case Gnat.request(@conn, subject, body, receive_timeout: timeout_ms) do
       {:ok, %{body: reply}} -> {:ok, reply}

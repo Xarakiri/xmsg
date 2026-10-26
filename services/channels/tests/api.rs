@@ -592,6 +592,7 @@ async fn my_channels_lists_heads_with_names_from_postgres() {
                 kind: "public".into(),
                 event_seq: 7,
                 msg_seq: 5,
+                fanout_mode: "pull".into(),
             },
             MyChannel {
                 channel_id: 42,
@@ -599,6 +600,7 @@ async fn my_channels_lists_heads_with_names_from_postgres() {
                 kind: "dm".into(),
                 event_seq: 2,
                 msg_seq: 1,
+                fanout_mode: "push".into(),
             },
         ],
     );
@@ -607,9 +609,18 @@ async fn my_channels_lists_heads_with_names_from_postgres() {
     assert_eq!(
         reply["channels"],
         serde_json::json!([
-            {"channel_id": id.to_string(), "workspace_id": "1", "type": "public", "name": "general", "event_seq": "7", "msg_seq": "5"},
-            {"channel_id": "42", "workspace_id": "1", "type": "dm", "name": "", "event_seq": "2", "msg_seq": "1"},
+            {"channel_id": id.to_string(), "workspace_id": "1", "type": "public", "name": "general", "event_seq": "7", "msg_seq": "5", "fanout_mode": "pull"},
+            {"channel_id": "42", "workspace_id": "1", "type": "dm", "name": "", "event_seq": "2", "msg_seq": "1", "fanout_mode": "push"},
         ])
+    );
+    // What a gateway asks for: just the pull-mode channels' IDs (ADR-0008).
+    let (status, reply) = h
+        .call("GET", "/v1/me/channels?mode=pull", Some(ALICE), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        reply,
+        serde_json::json!({ "channel_ids": [id.to_string()] })
     );
     let (status, reply) = h.call("GET", "/v1/me/channels", Some(BOB), None).await;
     assert_eq!(
@@ -717,6 +728,7 @@ async fn a_workspace_removal_leaves_that_workspaces_channels_and_records_complet
                 kind: "public".into(),
                 event_seq: 3,
                 msg_seq: 1,
+                fanout_mode: "push".into(),
             },
             MyChannel {
                 channel_id: 22,
@@ -724,6 +736,7 @@ async fn a_workspace_removal_leaves_that_workspaces_channels_and_records_complet
                 kind: "private".into(),
                 event_seq: 5,
                 msg_seq: 2,
+                fanout_mode: "push".into(),
             },
             MyChannel {
                 channel_id: 11,
@@ -731,6 +744,7 @@ async fn a_workspace_removal_leaves_that_workspaces_channels_and_records_complet
                 kind: "public".into(),
                 event_seq: 9,
                 msg_seq: 4,
+                fanout_mode: "push".into(),
             },
         ],
     );
@@ -787,6 +801,7 @@ async fn a_stale_removal_of_someone_back_in_the_workspace_does_nothing() {
             kind: "public".into(),
             event_seq: 3,
             msg_seq: 1,
+            fanout_mode: "push".into(),
         }],
     );
     // ALICE is (again) a member of workspace 2.
@@ -813,6 +828,7 @@ async fn channels_the_user_already_left_are_skipped() {
             kind: "public".into(),
             event_seq: 3,
             msg_seq: 1,
+            fanout_mode: "push".into(),
         }],
     );
     h.answer(CommandResult {
@@ -843,6 +859,7 @@ async fn settings_are_validated_published_and_listed_for_member_channels_only() 
             kind: "public".into(),
             event_seq: 3,
             msg_seq: 1,
+            fanout_mode: "push".into(),
         }],
     );
     let put = |channel: i64, body: serde_json::Value| {

@@ -123,3 +123,32 @@ export declare type StreamHead = Message<"xmsg.v1.StreamHead"> & {
  */
 export declare const StreamHeadSchema: GenMessage<StreamHead>;
 
+/**
+ * Fan-out → gateway on `gw.{gateway_id}.control`: start or stop delivering a pull-mode
+ * channel to a user connected there (they joined or left it, or it switched modes).
+ *
+ * @generated from message xmsg.v1.PullControl
+ */
+export declare type PullControl = Message<"xmsg.v1.PullControl"> & {
+  /**
+   * @generated from field: int64 user_id = 1;
+   */
+  userId: bigint;
+
+  /**
+   * @generated from field: int64 channel_id = 2;
+   */
+  channelId: bigint;
+
+  /**
+   * @generated from field: bool subscribe = 3;
+   */
+  subscribe: boolean;
+};
+
+/**
+ * Describes the message xmsg.v1.PullControl.
+ * Use `create(PullControlSchema)` to create a new message.
+ */
+export declare const PullControlSchema: GenMessage<PullControl>;
+

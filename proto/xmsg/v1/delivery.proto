@@ -36,3 +36,16 @@ message StreamHead {
   uint64 owner_epoch = 2;
   uint64 seq = 3;
 }
+
+// Pull mode (ADR-0008). Fan-out publishes each event of a pull-mode channel once, on
+// `ch.{channel_id}`, as the encoded ServerFrame: no batch and no stream, since clients
+// notice gaps by the channel's event_seq and resync (ADR-0011). Gateways subscribe while
+// a local user is a member.
+
+// Fan-out → gateway on `gw.{gateway_id}.control`: start or stop delivering a pull-mode
+// channel to a user connected there (they joined or left it, or it switched modes).
+message PullControl {
+  int64 user_id = 1;
+  int64 channel_id = 2;
+  bool subscribe = 3;
+}
