@@ -25,6 +25,8 @@ defmodule XmsgGateway.Config do
   @doc "Client frames per second per connection, and the burst allowed above it."
   def frame_rate, do: Application.get_env(:xmsg_gateway, :frame_rate, 30)
   def frame_burst, do: Application.get_env(:xmsg_gateway, :frame_burst, 100)
+  @doc "How long a shutdown spreads closing this gateway's connections (XmsgGateway.Drain)."
+  def drain_seconds, do: Application.get_env(:xmsg_gateway, :drain_seconds, 300)
 
   @doc "`kafka_bootstrap` as brod endpoints."
   def kafka_endpoints do

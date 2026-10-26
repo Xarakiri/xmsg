@@ -23,9 +23,11 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 - **Admission control** (`XmsgGateway.Admission`), checked before the WebSocket upgrade: at most `XMSG_ADMISSION_RATE` new sessions a second per pod, an optional ceiling of `XMSG_MAX_CONNECTIONS`, and at most `XMSG_PREAUTH_PER_IP` sockets per client address that haven't authenticated yet. A refused upgrade gets `503` with a `Retry-After` of 1–5 s, and clients retry with backoff and jitter, so a reconnect storm spreads out. Client addresses come from `X-Forwarded-For` behind `XMSG_PROXY_HOPS` trusted proxies.
 - **Per-connection frame budget:** a token bucket of `XMSG_FRAME_RATE` frames a second with bursts up to `XMSG_FRAME_BURST`; a connection far over it is closed (`1008 too many frames`) and comes back through admission control.
 
+- **Drain on shutdown** (`XmsgGateway.Drain`, from `Application.prep_stop/1`): on SIGTERM `/healthz` turns 503 (the readiness probe takes the pod out of its Service), upgrades are refused, and connections are closed with `1012 service restart` spread at random over `XMSG_DRAIN_SECONDS` (default 300), so clients reconnect to other pods a few at a time. The chart gives the pod `drainSeconds` + 30 s of grace and rolls a quarter of the pods at a time.
+
 ## Not yet
 - Resume tokens are issued but not yet accepted on reconnect.
-- Refcounted per-user presence subscriptions, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`, drain on deploy.
+- Refcounted per-user presence subscriptions, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`.
 - Hibernation of idle connections, kernel/BEAM tuning, and the 100k-connections-per-pod capacity spike.
 
 ## Configuration (environment, `config/runtime.exs`)
@@ -45,6 +47,7 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 | `XMSG_PREAUTH_PER_IP` | `100` | Unauthenticated sockets per client address (`0`: unlimited) |
 | `XMSG_PROXY_HOPS` | `0` | Trusted proxies appending to `X-Forwarded-For` (`0`: the TCP peer) |
 | `XMSG_FRAME_RATE` / `XMSG_FRAME_BURST` | `30` / `100` | Client frames a second per connection, and the burst above it |
+| `XMSG_DRAIN_SECONDS` | `300` | On shutdown, connections are closed spread over this long |
 
 ## Protobuf modules
 `lib/xmsg_gateway/proto/` is generated from `proto/` by `tools/gen-elixir-proto.sh` (needs `protoc` and `mix escript.install hex protobuf 0.17.1`). CI fails if it's out of date.

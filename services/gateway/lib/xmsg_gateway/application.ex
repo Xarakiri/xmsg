@@ -41,6 +41,13 @@ defmodule XmsgGateway.Application do
     Supervisor.start_link(children, strategy: :one_for_one, name: XmsgGateway.Supervisor)
   end
 
+  # Before the supervision tree stops (SIGTERM → init:stop): drain while still serving.
+  @impl true
+  def prep_stop(state) do
+    XmsgGateway.Drain.run(XmsgGateway.Config.drain_seconds() * 1000)
+    state
+  end
+
   @doc "The port the WebSocket server listens on (useful when configured with port 0)."
   def port do
     {:http, pid, _, _} =

@@ -96,6 +96,11 @@ defmodule XmsgGateway.Socket do
     {:push, {:binary, frame}, state}
   end
 
+  # Deploy drain (XmsgGateway.Drain): 1012 tells the client to reconnect elsewhere.
+  def handle_info(:drain, state) do
+    {:stop, :normal, {1012, "service restart"}, state}
+  end
+
   def handle_info(:session_revoked, state) do
     {:stop, :normal, {@close_policy, "session revoked"}, state}
   end
