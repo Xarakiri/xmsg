@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -190,15 +190,30 @@ async fn create_channel<S: Store, L: EventLog, M: Memberships>(
 
 /// The caller's channels with their heads (plan §6.6, cheap step): clients compare the
 /// heads with what they have and fetch events only for channels that moved.
+#[derive(Deserialize, Default)]
+pub struct MyChannelsQuery {
+    /// `pull`: only pull-mode channels, IDs only (what a gateway subscribes to, ADR-0008).
+    mode: Option<String>,
+}
+
 async fn my_channels<S: Store, L: EventLog, M: Memberships>(
     State(app): State<Arc<App<S, L, M>>>,
     headers: HeaderMap,
+    Query(query): Query<MyChannelsQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let me = caller(&app, &headers).await?;
     let channels = app.memberships.channels_of(me).await.map_err(|e| {
         tracing::error!(error = %e, "membership read failed");
         ApiError::Unavailable
     })?;
+    if let Some(mode) = query.mode.as_deref() {
+        let ids: Vec<String> = channels
+            .iter()
+            .filter(|c| c.fanout_mode == mode)
+            .map(|c| c.channel_id.to_string())
+            .collect();
+        return Ok(Json(json!({ "channel_ids": ids })));
+    }
     let ids: Vec<i64> = channels.iter().map(|c| c.channel_id).collect();
     let names = app.store.names(&ids).await?;
     let list: Vec<Value> = channels
@@ -211,6 +226,7 @@ async fn my_channels<S: Store, L: EventLog, M: Memberships>(
                 "name": names.get(&c.channel_id).cloned().unwrap_or_default(),
                 "event_seq": c.event_seq.to_string(),
                 "msg_seq": c.msg_seq.to_string(),
+                "fanout_mode": c.fanout_mode,
             })
         })
         .collect();

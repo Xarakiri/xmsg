@@ -28,7 +28,12 @@ defmodule XmsgGateway.Application do
            keys: :duplicate,
            name: XmsgGateway.Presence.registry(),
            partitions: System.schedulers_online()},
-          XmsgGateway.Presence
+          XmsgGateway.Presence,
+          {Registry,
+           keys: :duplicate,
+           name: XmsgGateway.Pull.members_registry(),
+           partitions: System.schedulers_online()},
+          XmsgGateway.Pull
         ] ++
         Enum.map(0..(XmsgGateway.Delivery.worker_count() - 1), &{XmsgGateway.Delivery.Worker, &1}) ++
         [

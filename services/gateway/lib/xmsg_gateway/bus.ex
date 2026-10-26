@@ -15,6 +15,15 @@ defmodule XmsgGateway.Bus do
   """
   @callback subscribe(subject :: String.t()) :: {:ok, pid()} | {:error, term()}
 
+  @doc """
+  Like `subscribe/1`, plus a reference for `unsubscribe/1` (for subscriptions that come
+  and go, like pull-mode channels).
+  """
+  @callback subscribe_ref(subject :: String.t()) :: {:ok, pid(), term()} | {:error, term()}
+
+  @doc "Ends a subscription made with `subscribe_ref/1` by the calling process."
+  @callback unsubscribe(ref :: term()) :: :ok | {:error, term()}
+
   @callback request(subject :: String.t(), body :: binary(), timeout_ms :: pos_integer()) ::
               {:ok, binary()} | {:error, term()}
 

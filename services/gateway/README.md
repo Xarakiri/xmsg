@@ -25,9 +25,11 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 
 - **Drain on shutdown** (`XmsgGateway.Drain`, from `Application.prep_stop/1`): on SIGTERM `/healthz` turns 503 (the readiness probe takes the pod out of its Service), upgrades are refused, and connections are closed with `1012 service restart` spread at random over `XMSG_DRAIN_SECONDS` (default 300), so clients reconnect to other pods a few at a time. The chart gives the pod `drainSeconds` + 30 s of grace and rolls a quarter of the pods at a time.
 
+- **Pull-mode channels** (ADR-0008, `XmsgGateway.Pull`): large channels arrive once per gateway on `ch.{channel_id}` instead of per member. At connect a socket fetches its user's pull-mode channels from the channels service (`GET /v1/me/channels?mode=pull` with the user's token; again 5 s later in case a join raced it) and registers under each; the gateway subscribes to `ch.{id}` while it has a local member (unused subscriptions are dropped every 30 s, and all are renewed after a NATS reconnect). Fan-out's `PullControl` messages on `gw.{gateway_id}.control` add or remove a connected user's channels as they join, leave or switch modes. Frames on `ch.{id}` carry no stream sequence: clients notice gaps by `event_seq` and drop duplicates the same way. Off without `XMSG_CHANNELS_URL`.
+
 ## Not yet
 - Resume tokens are issued but not yet accepted on reconnect.
-- Refcounted per-user presence subscriptions, pull-mode channel subscriptions (`ch.{id}`), `user.banned` / `workspace.member_removed`.
+- Refcounted per-user presence subscriptions, the "channel updated" bump for pull-mode channels a member isn't viewing, `user.banned` / `workspace.member_removed`.
 - Hibernation of idle connections, kernel/BEAM tuning, and the 100k-connections-per-pod capacity spike.
 
 ## Configuration (environment, `config/runtime.exs`)
@@ -48,6 +50,7 @@ Phase 0 skeleton of the realtime gateway ([plan §5.1](../../docs/architecture-p
 | `XMSG_PROXY_HOPS` | `0` | Trusted proxies appending to `X-Forwarded-For` (`0`: the TCP peer) |
 | `XMSG_FRAME_RATE` / `XMSG_FRAME_BURST` | `30` / `100` | Client frames a second per connection, and the burst above it |
 | `XMSG_DRAIN_SECONDS` | `300` | On shutdown, connections are closed spread over this long |
+| `XMSG_CHANNELS_URL` | (none) | The channels service, e.g. `http://channels:8082`, for each user's pull-mode channels; without it pull mode is off on this gateway |
 
 ## Protobuf modules
 `lib/xmsg_gateway/proto/` is generated from `proto/` by `tools/gen-elixir-proto.sh` (needs `protoc` and `mix escript.install hex protobuf 0.17.1`). CI fails if it's out of date.

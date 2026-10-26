@@ -12,7 +12,7 @@ import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
  * Describes the file xmsg/v1/delivery.proto.
  */
 export const file_xmsg_v1_delivery = /*@__PURE__*/
-  fileDesc("ChZ4bXNnL3YxL2RlbGl2ZXJ5LnByb3RvEgd4bXNnLnYxImoKDEdhdGV3YXlCYXRjaBIRCglwYXJ0aXRpb24YASABKA0SEwoLb3duZXJfZXBvY2gYAiABKAQSCwoDc2VxGAMgASgEEiUKCmRlbGl2ZXJpZXMYBCADKAsyES54bXNnLnYxLkRlbGl2ZXJ5IjIKCERlbGl2ZXJ5EhAKCHVzZXJfaWRzGAEgAygDEhQKDHNlcnZlcl9mcmFtZRgCIAEoDCIxCgtTdHJlYW1IZWFkcxIiCgVoZWFkcxgBIAMoCzITLnhtc2cudjEuU3RyZWFtSGVhZCJBCgpTdHJlYW1IZWFkEhEKCXBhcnRpdGlvbhgBIAEoDRITCgtvd25lcl9lcG9jaBgCIAEoBBILCgNzZXEYAyABKARCFQoRZGV2Lnhtc2cucHJvdG8udjFQAWIGcHJvdG8z");
+  fileDesc("ChZ4bXNnL3YxL2RlbGl2ZXJ5LnByb3RvEgd4bXNnLnYxImoKDEdhdGV3YXlCYXRjaBIRCglwYXJ0aXRpb24YASABKA0SEwoLb3duZXJfZXBvY2gYAiABKAQSCwoDc2VxGAMgASgEEiUKCmRlbGl2ZXJpZXMYBCADKAsyES54bXNnLnYxLkRlbGl2ZXJ5IjIKCERlbGl2ZXJ5EhAKCHVzZXJfaWRzGAEgAygDEhQKDHNlcnZlcl9mcmFtZRgCIAEoDCIxCgtTdHJlYW1IZWFkcxIiCgVoZWFkcxgBIAMoCzITLnhtc2cudjEuU3RyZWFtSGVhZCJBCgpTdHJlYW1IZWFkEhEKCXBhcnRpdGlvbhgBIAEoDRITCgtvd25lcl9lcG9jaBgCIAEoBBILCgNzZXEYAyABKAQiRQoLUHVsbENvbnRyb2wSDwoHdXNlcl9pZBgBIAEoAxISCgpjaGFubmVsX2lkGAIgASgDEhEKCXN1YnNjcmliZRgDIAEoCEIVChFkZXYueG1zZy5wcm90by52MVABYgZwcm90bzM");
 
 /**
  * Describes the message xmsg.v1.GatewayBatch.
@@ -41,4 +41,11 @@ export const StreamHeadsSchema = /*@__PURE__*/
  */
 export const StreamHeadSchema = /*@__PURE__*/
   messageDesc(file_xmsg_v1_delivery, 3);
+
+/**
+ * Describes the message xmsg.v1.PullControl.
+ * Use `create(PullControlSchema)` to create a new message.
+ */
+export const PullControlSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_delivery, 4);
 

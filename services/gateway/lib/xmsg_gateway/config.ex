@@ -50,6 +50,12 @@ defmodule XmsgGateway.Config do
   """
   def ephemeral_subject, do: "gw.#{gateway_id()}.ephemeral"
 
+  @doc "Pull-mode subscription changes from fan-out for this gateway (XmsgGateway.Pull)."
+  def control_subject, do: "gw.#{gateway_id()}.control"
+
+  @doc "The channels service, for each user's pull-mode channels; nil = pull mode off here."
+  def channels_url, do: Application.get_env(:xmsg_gateway, :channels_url)
+
   @doc "Where typing goes: the fan-out instance owning the channel's partition (plan §5.9)."
   def typing_subject(channel_id),
     do: "typing.#{XmsgGateway.Partition.partition(channel_id, partition_count())}"
