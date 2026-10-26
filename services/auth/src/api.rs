@@ -1580,7 +1580,9 @@ mod tests {
     async fn password_guessing_is_limited_per_account_and_per_address() {
         use crate::limits::AuthLimits;
         use xmsg_ratelimit::Rule;
-        let minute = std::time::Duration::from_secs(60);
+        // Fixed windows: a short one could end mid-test and reset the counts (it did, on
+        // CI). A year-long one practically never does.
+        let year = std::time::Duration::from_secs(365 * 24 * 3600);
         let auth = Arc::new(Auth {
             store: Memory::default(),
             keys: Keys::generate(),
@@ -1590,8 +1592,8 @@ mod tests {
             revocations: None,
             directory: None,
             limits: AuthLimits {
-                login_per_account: Rule::new(3, minute),
-                login_per_ip: Rule::new(5, minute),
+                login_per_account: Rule::new(3, year),
+                login_per_ip: Rule::new(5, year),
                 proxy_hops: 1,
                 ..AuthLimits::memory()
             },
@@ -1623,7 +1625,7 @@ mod tests {
         let (status, retry) = login("ANN@example.org", "2.2.2.2").await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
         let seconds: u64 = retry.unwrap().to_str().unwrap().parse().unwrap();
-        assert!((1..=60).contains(&seconds), "{seconds}");
+        assert!((1..=year.as_secs()).contains(&seconds), "{seconds}");
         // One address trying many accounts runs into its own limit (its sixth attempt).
         assert_eq!(
             login("bob@example.org", "1.1.1.1").await.0,
