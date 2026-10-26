@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# CI only, on top of docker-compose.app.yml: what the end-to-end smoke test needs and a
+# real installation must not have. Its stand-in push service is plain HTTP on the runner.
+services:
+  push:
+    environment:
+      XMSG_PUSH_ALLOW_HTTP: "true"
+    extra_hosts: ["host.docker.internal:host-gateway"]
