@@ -1,0 +1,2 @@
+# Your own TLS certificate and key (cert.pem, key.pem) when install.sh is asked for one.
+*.pem

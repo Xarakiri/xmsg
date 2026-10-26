@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# The Small tier's front door (ADR-0019): HTTPS for XMSG_DOMAIN, to the web app's nginx,
+# which forwards the API paths and the WebSocket. XMSG_TLS is the `tls` directive's
+# arguments, set by install.sh:
+#   an email address         -> Let's Encrypt (ACME) for XMSG_DOMAIN
+#   /certs/cert.pem /certs/key.pem -> your own certificate (put them in ./certs)
+#   internal                 -> Caddy's own CA (evaluation and tests only)
+{$XMSG_DOMAIN} {
+	tls {$XMSG_TLS}
+	encode zstd gzip
+	reverse_proxy web:8080
+}

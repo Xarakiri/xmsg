@@ -20,7 +20,8 @@ services:
     ports: ["127.0.0.1:9092:9092"]
     mem_limit: 1536m
     environment:
-      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qg # any fixed base64 UUID; one per installation
+      # A base64 UUID, fixed per installation (install.sh generates one).
+      CLUSTER_ID: ${XMSG_KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qg}
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
