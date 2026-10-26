@@ -398,6 +398,9 @@ jobs:
           ./target/release/xmsg-meta-relay > logs/meta-relay.log 2>&1 &
           XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
             ./target/release/xmsg-readstate > logs/readstate.log 2>&1 &
+          # The debezium leg runs every channel of 2+ members in pull mode (ADR-0008), so the
+          # whole smoke test goes through ch.{id}; the poller leg keeps the real thresholds.
+          ${{ matrix.relay == 'debezium' && 'XMSG_FANOUT_PULL_AT=2 XMSG_FANOUT_PUSH_BELOW=1' || '' }} \
           XMSG_STATE_DIR=$RUNNER_TEMP/seq-state XMSG_INSTANCE_ID=ci-1 XMSG_ADVERTISED_HOST=localhost \
             services/sequencer/build/install/xmsg-sequencer/bin/xmsg-sequencer > logs/sequencer.log 2>&1 &
           XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json XMSG_SEARCH_URL=http://localhost:9200 \
@@ -416,6 +419,7 @@ jobs:
           XMSG_SEQUENCER_URL=http://localhost:8090 ./target/release/xmsg-fanout > logs/fanout.log 2>&1 &
           (cd services/gateway && MIX_ENV=prod XMSG_GATEWAY_ID=ci \
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
+            XMSG_CHANNELS_URL=http://localhost:8082 \
             mix run --no-halt > ../../logs/gateway.log 2>&1 &)
           for i in $(seq 1 60); do
             curl -fs http://localhost:4000/healthz >/dev/null \

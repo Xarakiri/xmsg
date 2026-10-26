@@ -57,6 +57,10 @@ defmodule XmsgGateway.Socket do
        active: true,
        receipts: %{},
        ip: ip,
+       # Pull-mode channels this socket gets (channel => workspace), and workspaces it
+       # was removed from while connected.
+       pull: %{},
+       pull_denied: MapSet.new(),
        budget: {Config.frame_burst() * 1.0, System.monotonic_time(:millisecond)}
      }}
   end
@@ -71,6 +75,15 @@ defmodule XmsgGateway.Socket do
 
   def handle_in({_data, opcode: :text}, state) do
     {:stop, :normal, {@close_policy, "binary protobuf frames only"}, state}
+  end
+
+  defp pull_join(state, channel_id, workspace_id) do
+    if MapSet.member?(state.pull_denied, workspace_id) do
+      state
+    else
+      XmsgGateway.Pull.join(channel_id, workspace_id)
+      %{state | pull: Map.put(state.pull, channel_id, workspace_id)}
+    end
   end
 
   # Per-connection frame budget (plan §11): a token bucket refilled at `frame_rate` per
@@ -97,19 +110,31 @@ defmodule XmsgGateway.Socket do
   end
 
   # Pull-mode channels (XmsgGateway.Pull): the list at connect, then fan-out's changes.
-  def handle_info({:pull_channels, ids}, %{user_id: id} = state) when not is_nil(id) do
-    Enum.each(ids, &XmsgGateway.Pull.join/1)
-    {:ok, state}
+  def handle_info({:pull_channels, channels}, %{user_id: id} = state) when not is_nil(id) do
+    {:ok, Enum.reduce(channels, state, fn {c, w}, st -> pull_join(st, c, w) end)}
   end
 
-  def handle_info({:pull, channel_id, true}, %{user_id: id} = state) when not is_nil(id) do
-    XmsgGateway.Pull.join(channel_id)
-    {:ok, state}
+  def handle_info({:pull, channel_id, workspace_id, true}, %{user_id: id} = state)
+      when not is_nil(id) do
+    {:ok, pull_join(state, channel_id, workspace_id)}
   end
 
-  def handle_info({:pull, channel_id, false}, state) do
+  def handle_info({:pull, channel_id, _workspace_id, false}, state) do
     XmsgGateway.Pull.leave(channel_id)
-    {:ok, state}
+    {:ok, %{state | pull: Map.delete(state.pull, channel_id)}}
+  end
+
+  # Removed from a workspace: none of its pull-mode channels from now on (plan §6.5).
+  def handle_info({:workspace_removed, workspace_id}, state) do
+    left = for {c, ^workspace_id} <- state.pull, do: c
+    Enum.each(left, &XmsgGateway.Pull.leave/1)
+
+    {:ok,
+     %{
+       state
+       | pull: Map.drop(state.pull, left),
+         pull_denied: MapSet.put(state.pull_denied, workspace_id)
+     }}
   end
 
   # Deploy drain (XmsgGateway.Drain): 1012 tells the client to reconnect elsewhere.

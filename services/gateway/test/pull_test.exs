@@ -3,7 +3,17 @@ defmodule XmsgGateway.PullTest do
   use ExUnit.Case, async: false
 
   alias XmsgGateway.{Bus, Pull, WsClient}
-  alias Xmsg.V1.{ClientFrame, Connect, Pong, PullControl, ServerFrame, Welcome}
+
+  alias Xmsg.V1.{
+    AuthEvent,
+    ClientFrame,
+    Connect,
+    Pong,
+    PullControl,
+    ServerFrame,
+    Welcome,
+    WorkspaceMemberRemoved
+  }
 
   # A stand-in for the channels service: the caller's pull-mode channels, by token.
   defmodule Channels do
@@ -15,8 +25,11 @@ defmodule XmsgGateway.PullTest do
       %{"mode" => "pull"} = Plug.Conn.fetch_query_params(conn).query_params
 
       case get_req_header(conn, "authorization") do
-        ["Bearer dev:711"] -> send_resp(conn, 200, ~s({"channel_ids": ["9711"]}))
-        _ -> send_resp(conn, 401, ~s({"error": "invalid credentials"}))
+        ["Bearer dev:711"] ->
+          send_resp(conn, 200, ~s({"channels": [{"channel_id": "9711", "workspace_id": "1"}]}))
+
+        _ ->
+          send_resp(conn, 401, ~s({"error": "invalid credentials"}))
       end
     end
   end
@@ -39,12 +52,13 @@ defmodule XmsgGateway.PullTest do
     c
   end
 
-  defp control(user_id, channel_id, subscribe) do
+  defp control(user_id, channel_id, subscribe, workspace_id \\ 1) do
     body =
       PullControl.encode(%PullControl{
         user_id: user_id,
         channel_id: channel_id,
-        subscribe: subscribe
+        subscribe: subscribe,
+        workspace_id: workspace_id
       })
 
     Bus.Local.publish(XmsgGateway.Config.control_subject(), body)
@@ -108,6 +122,36 @@ defmodule XmsgGateway.PullTest do
     _c = connect_as(port, 712)
     Process.sleep(200)
     assert Registry.lookup(Pull.members_registry(), 9712) == []
+  end
+
+  test "removal from a workspace stops its pull channels at once, and keeps them off", %{
+    port: port
+  } do
+    c = connect_as(port, 721)
+    control(721, 9721, true, 5)
+    control(721, 9722, true, 6)
+    assert eventually(fn -> Registry.lookup(Pull.members_registry(), 9722) != [] end)
+
+    removed = %WorkspaceMemberRemoved{
+      workspace_id: 5,
+      user_id: 721,
+      removed_by: 1,
+      removed_at_ms: 1
+    }
+
+    Bus.Local.publish(
+      "auth.revocations",
+      AuthEvent.encode(%AuthEvent{event: {:workspace_member_removed, removed}})
+    )
+
+    assert eventually(fn -> Registry.lookup(Pull.members_registry(), 9721) == [] end)
+    # Fan-out's (or a late re-fetch's) subscribe for that workspace is refused now.
+    control(721, 9723, true, 5)
+    Process.sleep(100)
+    assert Registry.lookup(Pull.members_registry(), 9723) == []
+    # Another workspace's channel is untouched.
+    Bus.Local.publish("ch.9722", frame(7))
+    assert {_c, 7} = next_pong(c)
   end
 
   test "the channels service's answer is parsed" do

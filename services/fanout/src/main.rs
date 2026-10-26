@@ -13,11 +13,11 @@ use xmsg_fanout::sequencer::Sequencer;
 use xmsg_fanout::sessions::SessionMap;
 use xmsg_fanout::store::Store;
 use xmsg_fanout::streams::Streams;
-use xmsg_fanout::{by_gateway, recipients, typing_recipients};
+use xmsg_fanout::{by_gateway, plan, typing_recipients};
 use xmsg_proto::Message;
 use xmsg_proto::v1::{
-    Delivery, GatewayBatch, ReadReceipt, SequencedEvent, ServerFrame, SessionEvent,
-    TypingIndicator, server_frame,
+    Delivery, GatewayBatch, PullControl, ReadReceipt, SequencedEvent, ServerFrame, SessionEvent,
+    TypingIndicator, sequenced_event::Payload, server_frame,
 };
 
 const EVENTS_TOPIC: &str = "messages.persisted";
@@ -207,6 +207,9 @@ async fn main() -> ExitCode {
     let mut streams = Streams::default();
     let mut heads_tick = tokio::time::interval(Duration::from_secs(1));
     let mut announced = false;
+    // Channels that switched push/pull moments ago (ADR-0008).
+    let mut switched: std::collections::HashMap<i64, std::time::Instant> =
+        std::collections::HashMap::new();
 
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
@@ -285,16 +288,35 @@ async fn main() -> ExitCode {
             .get(event.channel_id)
             .cloned()
             .unwrap_or_default();
-        let mut to = recipients(&event, &members);
-        deny.filter(event.workspace_id, &mut to);
+        // Around a push/pull switch both paths are used for a while (ADR-0008).
+        let now = std::time::Instant::now();
+        if matches!(event.payload, Some(Payload::ChannelModeChanged(_))) {
+            switched.retain(|_, at| now.duration_since(*at) < DUAL_PUBLISH);
+            switched.insert(event.channel_id, now);
+        }
+        let dual = switched
+            .get(&event.channel_id)
+            .is_some_and(|at| now.duration_since(*at) < DUAL_PUBLISH);
+        let mut route = plan(&event, &members, dual);
+        deny.filter(event.workspace_id, &mut route.push);
 
-        let grouped = by_gateway(&to, &sessions.read().unwrap());
+        // Encoded once, the same bytes for every recipient on every gateway.
+        let frame = ServerFrame {
+            frame: Some(server_frame::Frame::Event(event.clone())),
+        }
+        .encode_to_vec();
+        // Subscriptions first, so a joiner's gateway is listening as soon as it can be.
+        send_controls(&nats, &sessions, &deny, &event, &route.controls).await;
+        if route.publish_channel
+            && let Err(e) = nats
+                .publish(format!("ch.{}", event.channel_id), frame.clone().into())
+                .await
+        {
+            tracing::warn!(error = %e, channel_id = event.channel_id, "pull-mode publish failed; clients will resync");
+        }
+
+        let grouped = by_gateway(&route.push, &sessions.read().unwrap());
         if !grouped.is_empty() {
-            // Encoded once, the same bytes for every recipient on every gateway.
-            let frame = ServerFrame {
-                frame: Some(server_frame::Frame::Event(event.clone())),
-            }
-            .encode_to_vec();
             let partition = message.partition() as u32;
             for (gateway, user_ids) in grouped {
                 let (owner_epoch, seq) = streams.next(&gateway, partition, now_ms());
@@ -319,6 +341,46 @@ async fn main() -> ExitCode {
     }
     let _ = nats.flush().await;
     ExitCode::SUCCESS
+}
+
+/// How long both paths are used after a push/pull switch (ADR-0008).
+const DUAL_PUBLISH: Duration = Duration::from_secs(10);
+
+/// Tells the gateways of each `(user, subscribe)` to start or stop the channel's pull-mode
+/// subject. A user removed from the workspace is never subscribed.
+async fn send_controls(
+    nats: &async_nats::Client,
+    sessions: &RwLock<SessionMap>,
+    deny: &DenyList,
+    event: &SequencedEvent,
+    controls: &[(i64, bool)],
+) {
+    if controls.is_empty() {
+        return;
+    }
+    // Bound first, so the sessions lock is released before any await.
+    let mut messages = Vec::new();
+    {
+        let sessions = sessions.read().unwrap();
+        for &(user_id, subscribe) in controls {
+            if subscribe && deny.denied(user_id, event.workspace_id) {
+                continue;
+            }
+            let control = PullControl {
+                user_id,
+                channel_id: event.channel_id,
+                subscribe,
+                workspace_id: event.workspace_id,
+            }
+            .encode_to_vec();
+            for gateway in sessions.gateways_of(user_id) {
+                messages.push((format!("gw.{gateway}.control"), control.clone()));
+            }
+        }
+    }
+    for (subject, body) in messages {
+        let _ = nats.publish(subject, body.into()).await;
+    }
 }
 
 /// Sends a best-effort frame (typing, receipts) to `to` on their gateways' unsequenced

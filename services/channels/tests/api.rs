@@ -620,7 +620,7 @@ async fn my_channels_lists_heads_with_names_from_postgres() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         reply,
-        serde_json::json!({ "channel_ids": [id.to_string()] })
+        serde_json::json!({ "channels": [{"channel_id": id.to_string(), "workspace_id": "1"}] })
     );
     let (status, reply) = h.call("GET", "/v1/me/channels", Some(BOB), None).await;
     assert_eq!(

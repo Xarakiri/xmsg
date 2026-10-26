@@ -144,6 +144,14 @@ export declare type PullControl = Message<"xmsg.v1.PullControl"> & {
    * @generated from field: bool subscribe = 3;
    */
   subscribe: boolean;
+
+  /**
+   * The channel's workspace: a gateway drops a user's pull channels of a workspace the
+   * moment they're removed from it (workspace.member_removed on auth.revocations).
+   *
+   * @generated from field: int64 workspace_id = 4;
+   */
+  workspaceId: bigint;
 };
 
 /**

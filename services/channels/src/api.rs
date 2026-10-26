@@ -192,7 +192,8 @@ async fn create_channel<S: Store, L: EventLog, M: Memberships>(
 /// heads with what they have and fetch events only for channels that moved.
 #[derive(Deserialize, Default)]
 pub struct MyChannelsQuery {
-    /// `pull`: only pull-mode channels, IDs only (what a gateway subscribes to, ADR-0008).
+    /// `pull`: only pull-mode channels, with their workspaces (what a gateway subscribes
+    /// to, ADR-0008).
     mode: Option<String>,
 }
 
@@ -207,12 +208,17 @@ async fn my_channels<S: Store, L: EventLog, M: Memberships>(
         ApiError::Unavailable
     })?;
     if let Some(mode) = query.mode.as_deref() {
-        let ids: Vec<String> = channels
+        let list: Vec<Value> = channels
             .iter()
             .filter(|c| c.fanout_mode == mode)
-            .map(|c| c.channel_id.to_string())
+            .map(|c| {
+                json!({
+                    "channel_id": c.channel_id.to_string(),
+                    "workspace_id": c.workspace_id.to_string(),
+                })
+            })
             .collect();
-        return Ok(Json(json!({ "channel_ids": ids })));
+        return Ok(Json(json!({ "channels": list })));
     }
     let ids: Vec<i64> = channels.iter().map(|c| c.channel_id).collect();
     let names = app.store.names(&ids).await?;
