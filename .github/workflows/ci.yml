@@ -202,8 +202,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install protoc
         run: sudo apt-get install -y --no-install-recommends protobuf-compiler
-      - name: Build the smoke test
-        run: cargo build --release -p xmsg-e2e-smoke
+      - name: Build the smoke test and xmsgctl
+        run: cargo build --release -p xmsg-e2e-smoke -p xmsgctl
       - name: Install and start the Small tier (install.sh)
         working-directory: deploy/compose
         run: |
@@ -236,6 +236,39 @@ jobs:
           XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_EXPECT_OUTBOX_RELAY: "true"
           # The push service runs in a container: it reaches the stand-in endpoint this way.
+          XMSG_PUSH_MOCK_HOST: host.docker.internal
+        run: ./target/release/xmsg-e2e-smoke
+      - name: xmsgctl health, backup, wipe, restore
+        working-directory: deploy/compose
+        run: |
+          X=../../target/release/xmsgctl
+          $X health --wait 120
+          count() { docker compose exec -T postgres psql -U xmsg -d xmsg -tAc "$1" | tr -d '[:space:]'; }
+          users=$(count 'select count(*) from users')
+          test "$users" -gt 0
+          $X backup --out "$RUNNER_TEMP/backup.tar"
+          test "$(stat -c %a "$RUNNER_TEMP/backup.tar")" = 600
+          $X health --wait 120
+          # Everything gone, then back from the archive.
+          docker compose down -v
+          $X restore "$RUNNER_TEMP/backup.tar" --yes
+          $X health --wait 180
+          test "$(count 'select count(*) from users')" = "$users"
+          echo "restored $users users"
+      - name: The restored installation works (smoke test again)
+        env:
+          XMSG_PARTITIONS: "16"
+          XMSG_KAFKA_BOOTSTRAP: localhost:9092
+          XMSG_CQL_NODES: localhost:9042
+          XMSG_AUTH_URL: http://localhost:8080/auth
+          XMSG_USERS_URL: http://localhost:8080/users
+          XMSG_CHANNELS_URL: http://localhost:8080/channels
+          XMSG_MESSAGES_URL: http://localhost:8080/messages
+          XMSG_READSTATE_URL: http://localhost:8080/readstate
+          XMSG_PUSH_URL: http://localhost:8080/push
+          XMSG_GATEWAY_URL: ws://localhost:8080/ws
+          XMSG_SEQUENCER_URL: http://localhost:8090
+          XMSG_EXPECT_OUTBOX_RELAY: "true"
           XMSG_PUSH_MOCK_HOST: host.docker.internal
         run: ./target/release/xmsg-e2e-smoke
       - name: Show logs on failure

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[package]
+name = "xmsgctl"
+description = "Operating a Small-tier installation: health checks, backup and restore"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "xmsgctl"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking"] }
+serde_json = "1.0.154"
