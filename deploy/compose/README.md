@@ -47,7 +47,7 @@ It asks for the domain and how to get the TLS certificate (Let's Encrypt, your o
 ./install.sh --search                                                    # with search (+1.5 GB)
 ```
 
-Back up `.env` together with the data: without its signing key every session ends, and without its Postgres password the database doesn't open.
+Back up with [`xmsgctl backup`](../../tools/xmsgctl/README.md), which archives `.env` together with the data: without its signing key every session ends, and without its Postgres password the database doesn't open. `xmsgctl health` checks a running installation.
 
 ## The whole application, by hand
 `docker-compose.yml` is the backends, also used for local development with the services run from source. `docker-compose.app.yml` adds the application on top: every xmsg service, the sequencer, the gateway, the web app, and **Caddy** in front for HTTPS (Let's Encrypt, your own certificate, or Caddy's internal CA for evaluation).

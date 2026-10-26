@@ -2910,7 +2910,9 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http 1.5.0",
  "http-body",
  "http-body-util",
@@ -5115,6 +5117,15 @@ dependencies = [
  "xmsg-auth",
  "xmsg-authn",
  "xmsg-proto",
+]
+
+[[package]]
+name = "xmsgctl"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "reqwest",
+ "serde_json",
 ]
 
 [[package]]
