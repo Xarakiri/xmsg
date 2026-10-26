@@ -97,6 +97,12 @@ pub enum Write {
         user_id: i64,
         workspace_id: i64,
     },
+    /// A member's new role; their other columns (`joined_at`) stay as they were.
+    MemberRole {
+        channel_id: i64,
+        user_id: i64,
+        role: &'static str,
+    },
     /// Head fields every event updates; `msg_seq` only for new messages.
     Head {
         channel_id: i64,
@@ -262,6 +268,14 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
             });
             out.push(channel_event(event, "member.left", full_payload()));
         }
+        Some(Payload::MemberRoleChanged(changed)) => {
+            out.push(Write::MemberRole {
+                channel_id: event.channel_id,
+                user_id: changed.user_id,
+                role: role_name(changed.role),
+            });
+            out.push(channel_event(event, "member.role_changed", full_payload()));
+        }
         Some(Payload::ChannelModeChanged(_)) => {
             out.push(Write::FanoutModeForMembers {
                 channel_id: event.channel_id,
@@ -299,8 +313,8 @@ fn channel_event(event: &SequencedEvent, kind: &'static str, payload: Vec<u8>) -
 mod tests {
     use super::*;
     use xmsg_proto::v1::{
-        ChannelCreated, MemberJoined, MemberLeft, MessageCreated, MessageDeleted, MessageEdited,
-        Rejected, ThreadReply,
+        ChannelCreated, MemberJoined, MemberLeft, MemberRoleChanged, MessageCreated,
+        MessageDeleted, MessageEdited, Rejected, ThreadReply,
     };
 
     fn event(event_seq: i64, payload: Payload) -> SequencedEvent {
@@ -410,6 +424,32 @@ mod tests {
             Some(Write::Head {
                 msg_seq: None,
                 membership_version: 1,
+                ..
+            })
+        ));
+
+        // A role change updates the role alone (joined_at stays), then moves the version.
+        let mut promoted = event(
+            5,
+            Payload::MemberRoleChanged(MemberRoleChanged {
+                user_id: 2,
+                role: MemberRole::Poster as i32,
+            }),
+        );
+        promoted.membership_version = 5;
+        let w = writes(&promoted, 0);
+        assert!(matches!(
+            &w[0],
+            Write::MemberRole {
+                user_id: 2,
+                role: "poster",
+                ..
+            }
+        ));
+        assert!(matches!(
+            w.last(),
+            Some(Write::Head {
+                membership_version: 5,
                 ..
             })
         ));

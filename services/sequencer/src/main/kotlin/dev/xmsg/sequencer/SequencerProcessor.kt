@@ -10,6 +10,7 @@ import dev.xmsg.proto.v1.InboundEvent
 import dev.xmsg.proto.v1.MemberJoined
 import dev.xmsg.proto.v1.MemberLeft
 import dev.xmsg.proto.v1.MemberRole
+import dev.xmsg.proto.v1.MemberRoleChanged
 import dev.xmsg.proto.v1.MemberState
 import dev.xmsg.proto.v1.MessageCreated
 import dev.xmsg.proto.v1.MessageDeleted
@@ -80,6 +81,7 @@ class SequencerProcessor(
             InboundEvent.PayloadCase.SEND_MESSAGE -> sendMessage(event, now)
             InboundEvent.PayloadCase.MEMBER_JOIN_REQUESTED -> join(event, now)
             InboundEvent.PayloadCase.MEMBER_KICK_REQUESTED -> kick(event, now)
+            InboundEvent.PayloadCase.MEMBER_ROLE_CHANGE_REQUESTED -> changeRole(event, now)
             InboundEvent.PayloadCase.REACTION_BATCH -> reactionBatch(event, now)
             InboundEvent.PayloadCase.EDIT_MESSAGE -> editMessage(event, now)
             InboundEvent.PayloadCase.DELETE_MESSAGE -> deleteMessage(event, now)
@@ -119,7 +121,13 @@ class SequencerProcessor(
             .setEventSeq(1)
             .setMembershipVersion(1)
             .setMemberCount(initial.size.toLong())
-            .setFanoutMode(if (initial.size >= thresholds.pullAt) FanoutMode.FANOUT_MODE_PULL else FanoutMode.FANOUT_MODE_PUSH)
+            .setFanoutMode(
+                if (created.type == ChannelType.CHANNEL_TYPE_BROADCAST || initial.size >= thresholds.pullAt) {
+                    FanoutMode.FANOUT_MODE_PULL
+                } else {
+                    FanoutMode.FANOUT_MODE_PUSH
+                },
+            )
             .build()
         heads.put(event.channelId, head.toByteArray())
         val members = initial.sorted().map { userId ->
@@ -341,6 +349,39 @@ class SequencerProcessor(
         }
     }
 
+    /**
+     * A channel admin sets another member's role (plan §6.7: `poster` posts in broadcast
+     * channels). Membership changes like a join, so it moves `membership_version`: the
+     * snapshots fan-out and others load carry roles too.
+     */
+    private fun changeRole(event: InboundEvent, now: Long) {
+        val head = head(event.channelId)
+            ?: return command(event, now, RejectReason.REJECT_REASON_UNKNOWN_CHANNEL)
+        val change = event.memberRoleChangeRequested
+        val role = change.role
+        if (role != MemberRole.MEMBER_ROLE_MEMBER && role != MemberRole.MEMBER_ROLE_POSTER &&
+            role != MemberRole.MEMBER_ROLE_ADMIN
+        ) {
+            return reject(event, now, RejectReason.REJECT_REASON_INVALID, "role must be member, poster or admin")
+        }
+        if (role == MemberRole.MEMBER_ROLE_POSTER && head.type != ChannelType.CHANNEL_TYPE_BROADCAST) {
+            return reject(event, now, RejectReason.REJECT_REASON_INVALID, "posters are for broadcast channels")
+        }
+        if (role(event.channelId, event.actorId) != MemberRole.MEMBER_ROLE_ADMIN || change.userId == event.actorId) {
+            return command(event, now, RejectReason.REJECT_REASON_FORBIDDEN)
+        }
+        val current = role(event.channelId, change.userId)
+            ?: return command(event, now, RejectReason.REJECT_REASON_NOT_A_MEMBER)
+        if (current == role) {
+            result(event, accepted = true, eventSeq = head.eventSeq) // nothing to change
+            return
+        }
+        members.put(memberKey(event.channelId, change.userId), memberState(role))
+        applyMembershipChange(event, head, now, delta = 0) {
+            it.setMemberRoleChanged(MemberRoleChanged.newBuilder().setUserId(change.userId).setRole(role))
+        }
+    }
+
     private fun applyMembershipChange(
         event: InboundEvent,
         head: ChannelHeadState,
@@ -359,6 +400,8 @@ class SequencerProcessor(
         result(event, accepted = true, eventSeq = eventSeq)
 
         val newMode = when {
+            // Broadcast channels are always pulled (ADR-0008): one publish, however few members.
+            head.type == ChannelType.CHANNEL_TYPE_BROADCAST -> FanoutMode.FANOUT_MODE_PULL
             head.fanoutMode != FanoutMode.FANOUT_MODE_PULL && count >= thresholds.pullAt -> FanoutMode.FANOUT_MODE_PULL
             head.fanoutMode == FanoutMode.FANOUT_MODE_PULL && count < thresholds.pushBelow -> FanoutMode.FANOUT_MODE_PUSH
             else -> head.fanoutMode

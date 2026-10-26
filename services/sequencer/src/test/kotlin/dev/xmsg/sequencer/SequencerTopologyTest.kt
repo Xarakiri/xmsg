@@ -12,6 +12,7 @@ import dev.xmsg.proto.v1.FanoutMode
 import dev.xmsg.proto.v1.InboundEvent
 import dev.xmsg.proto.v1.MemberJoinRequested
 import dev.xmsg.proto.v1.MemberKickRequested
+import dev.xmsg.proto.v1.MemberRoleChangeRequested
 import dev.xmsg.proto.v1.MemberRole
 import dev.xmsg.proto.v1.RejectReason
 import dev.xmsg.proto.v1.SendMessage
@@ -86,6 +87,13 @@ class SequencerTopologyTest {
 
     private fun kick(channel: Long, actor: Long, user: Long, request: String) =
         send(base(channel, actor, request = request).setMemberKickRequested(MemberKickRequested.newBuilder().setUserId(user)).build())
+
+    private fun setRole(channel: Long, actor: Long, user: Long, role: MemberRole, request: String) =
+        send(
+            base(channel, actor, request = request)
+                .setMemberRoleChangeRequested(MemberRoleChangeRequested.newBuilder().setUserId(user).setRole(role))
+                .build(),
+        )
 
     private fun edit(channel: Long, actor: Long, msgSeq: Long, body: String) =
         send(base(channel, actor, dedupe = "edit-$channel-$msgSeq-$body").setEditMessage(EditMessage.newBuilder().setMsgSeq(msgSeq).setMessageId(msgSeq * 1000).setBody(body)).build())
@@ -335,6 +343,51 @@ class SequencerTopologyTest {
         val events = drain()
         assertEquals(RejectReason.REJECT_REASON_FORBIDDEN, events.single { it.hasRejected() }.rejected.reason)
         assertEquals("announcement", events.single { it.hasMessageCreated() }.messageCreated.body)
+    }
+
+    @Test
+    fun `a channel admin makes a member a poster, who may then post in the broadcast channel`() {
+        create(100, alice, ChannelType.CHANNEL_TYPE_BROADCAST, bob, carol)
+        create(200, alice, ChannelType.CHANNEL_TYPE_PUBLIC, bob)
+        setRole(100, bob, carol, MemberRole.MEMBER_ROLE_POSTER, request = "member-promotes")   // bob isn't an admin
+        setRole(100, alice, alice, MemberRole.MEMBER_ROLE_MEMBER, request = "own-role")        // nobody demotes themselves
+        setRole(200, alice, bob, MemberRole.MEMBER_ROLE_POSTER, request = "poster-elsewhere")  // posters are for broadcast
+        setRole(100, alice, 99, MemberRole.MEMBER_ROLE_POSTER, request = "not-a-member")
+        setRole(100, alice, bob, MemberRole.MEMBER_ROLE_POSTER, request = "promote")
+        setRole(100, alice, bob, MemberRole.MEMBER_ROLE_POSTER, request = "promote-again")     // no change, no event
+        post(100, bob, "now I can")
+        setRole(100, alice, bob, MemberRole.MEMBER_ROLE_MEMBER, request = "demote")
+        post(100, bob, "and now I can't")
+
+        val r = drainResults()
+        assertEquals(RejectReason.REJECT_REASON_FORBIDDEN, r.getValue("member-promotes").reason)
+        assertEquals(RejectReason.REJECT_REASON_FORBIDDEN, r.getValue("own-role").reason)
+        assertEquals(RejectReason.REJECT_REASON_INVALID, r.getValue("poster-elsewhere").reason)
+        assertEquals(RejectReason.REJECT_REASON_NOT_A_MEMBER, r.getValue("not-a-member").reason)
+        assertTrue(r.getValue("promote").accepted)
+        assertTrue(r.getValue("promote-again").accepted)
+        assertTrue(r.getValue("demote").accepted)
+
+        val events = drain().filter { it.channelId == 100L }
+        val changes = events.filter { it.hasMemberRoleChanged() }
+        assertEquals(listOf(MemberRole.MEMBER_ROLE_POSTER, MemberRole.MEMBER_ROLE_MEMBER), changes.map { it.memberRoleChanged.role })
+        // A role change is a membership change: snapshots must move on too.
+        assertTrue(changes.all { it.membershipVersion == it.eventSeq })
+        assertEquals("now I can", events.single { it.hasMessageCreated() }.messageCreated.body)
+        // The post after the demotion is the one refused (the rest are the refused commands).
+        assertEquals(listOf("msg-100-$bob-and now I can't"), events.filter { it.hasRejected() && it.dedupeId.startsWith("msg-") }.map { it.dedupeId })
+    }
+
+    @Test
+    fun `broadcast channels are pulled from the start and stay pulled`() {
+        // Thresholds in this test: pull at 4 members, back to push below 3.
+        create(100, alice, ChannelType.CHANNEL_TYPE_BROADCAST, bob)
+        join(100, alice, carol, request = "add")
+        kick(100, alice, carol, request = "remove")
+        kick(100, alice, bob, request = "remove-again") // 1 member, still pulled
+        val events = drain()
+        assertTrue(events.all { it.fanoutMode == FanoutMode.FANOUT_MODE_PULL })
+        assertTrue(events.none { it.hasChannelModeChanged() })
     }
 
     @Test

@@ -31,6 +31,11 @@ defmodule Xmsg.V1.InboundEvent do
   field :reaction_batch, 16, type: Xmsg.V1.ReactionBatch, json_name: "reactionBatch", oneof: 0
   field :edit_message, 14, type: Xmsg.V1.EditMessage, json_name: "editMessage", oneof: 0
   field :delete_message, 15, type: Xmsg.V1.DeleteMessage, json_name: "deleteMessage", oneof: 0
+
+  field :member_role_change_requested, 17,
+    type: Xmsg.V1.MemberRoleChangeRequested,
+    json_name: "memberRoleChangeRequested",
+    oneof: 0
 end
 
 defmodule Xmsg.V1.EditMessage do
@@ -146,6 +151,18 @@ defmodule Xmsg.V1.MemberKickRequested do
   field :user_id, 1, type: :int64, json_name: "userId"
 end
 
+defmodule Xmsg.V1.MemberRoleChangeRequested do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.MemberRoleChangeRequested",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :user_id, 1, type: :int64, json_name: "userId"
+  field :role, 2, type: Xmsg.V1.MemberRole, enum: true
+end
+
 defmodule Xmsg.V1.SequencedEvent do
   @moduledoc false
 
@@ -185,6 +202,11 @@ defmodule Xmsg.V1.SequencedEvent do
   field :thread_reply, 20, type: Xmsg.V1.ThreadReply, json_name: "threadReply", oneof: 0
   field :message_edited, 17, type: Xmsg.V1.MessageEdited, json_name: "messageEdited", oneof: 0
   field :message_deleted, 18, type: Xmsg.V1.MessageDeleted, json_name: "messageDeleted", oneof: 0
+
+  field :member_role_changed, 21,
+    type: Xmsg.V1.MemberRoleChanged,
+    json_name: "memberRoleChanged",
+    oneof: 0
 end
 
 defmodule Xmsg.V1.MessageEdited do
@@ -232,6 +254,18 @@ defmodule Xmsg.V1.MemberJoined do
 
   use Protobuf,
     full_name: "xmsg.v1.MemberJoined",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :user_id, 1, type: :int64, json_name: "userId"
+  field :role, 2, type: Xmsg.V1.MemberRole, enum: true
+end
+
+defmodule Xmsg.V1.MemberRoleChanged do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.MemberRoleChanged",
     protoc_gen_elixir_version: "0.17.1",
     syntax: :proto3
 

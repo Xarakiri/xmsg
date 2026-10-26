@@ -17,6 +17,7 @@ Every request needs `Authorization: Bearer <access token>` from the auth service
 | POST | `/v1/dms` | `{user_ids, workspace_id?}` | one other user: the pair's DM, 201 the first time, then 200 `status: "exists"`; 2–8 others: a new group DM |
 | POST | `/v1/channels/{id}/members` | `{user_id?}` | join yourself (public channels), or invite `user_id` (any member, not in DMs) |
 | DELETE | `/v1/channels/{id}/members/{user_id}` | | leave (yourself) or remove someone (admins) |
+| PATCH | `/v1/channels/{id}/members/{user_id}` | `{role}` | a channel admin sets someone else's role: `member`, `poster` (may post in a broadcast channel) or `admin`; checked by the sequencer (400 for a poster outside broadcast channels) |
 | GET | `/healthz` | | `ok` |
 
 Membership replies: 200 `{status: "accepted", event_seq}`, 403 forbidden, 404 unknown channel or not a member, 202 `{status: "pending", request_id}` when the sequencer hasn't answered within 2 s (the client then learns the outcome from the channel's events), 503 when the command couldn't be sent.

@@ -280,6 +280,7 @@ pub fn summary(e: &SequencedEvent) -> String {
         Some(Payload::ChannelCreated(c)) => format!("created members={}", c.members.len()),
         Some(Payload::MemberJoined(j)) => format!("joined {}", j.user_id),
         Some(Payload::MemberLeft(l)) => format!("left {}", l.user_id),
+        Some(Payload::MemberRoleChanged(r)) => format!("role {} {:?}", r.user_id, r.role),
         Some(Payload::Rejected(r)) => format!("rejected {} {:?}", e.dedupe_id, r.reason),
         Some(Payload::ChannelModeChanged(m)) => format!("mode {:?}", m.mode),
         // History rebuilds an edit from the current row, so the body isn't compared.
