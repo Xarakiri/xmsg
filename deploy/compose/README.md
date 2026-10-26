@@ -49,6 +49,21 @@ It asks for the domain and how to get the TLS certificate (Let's Encrypt, your o
 
 Back up with [`xmsgctl backup`](../../tools/xmsgctl/README.md), which archives `.env` together with the data: without its signing key every session ends, and without its Postgres password the database doesn't open. `xmsgctl health` checks a running installation.
 
+## Upgrade
+Data and secrets live in Docker volumes and `.env`, not in this directory, so an upgrade swaps the release and keeps both:
+
+```bash
+xmsgctl backup --out before-upgrade.tar          # the way back (stops the stack for a few minutes)
+# get the new release's deploy/compose (git checkout v0.5.0, or unpack it); if it's a new
+# directory, copy .env into it
+./install.sh --yes --version 0.5.0               # keeps the secrets and settings, pulls, restarts
+xmsgctl health --wait 300
+```
+
+Releases say in their notes when they need more than this (a state-format migration, ADR-0003). The sequencer refuses to start if its state changelogs are missing on an installation that has processed data, rather than silently restarting its counters at zero. To go back, install the previous release again and `xmsgctl restore before-upgrade.tar --yes`: newer data formats aren't guaranteed to be readable by older versions.
+
+CI's `upgrade` job tests this path for every change: it installs the version the change lands on, seeds a channel (messages, membership, a reaction, client message ids), upgrades with the steps above, and checks that the history, an old access token, the channel's counters, dedupe, membership and reaction counts all survived.
+
 ## The whole application, by hand
 `docker-compose.yml` is the backends, also used for local development with the services run from source. `docker-compose.app.yml` adds the application on top: every xmsg service, the sequencer, the gateway, the web app, and **Caddy** in front for HTTPS (Let's Encrypt, your own certificate, or Caddy's internal CA for evaluation).
 
