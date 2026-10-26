@@ -115,9 +115,17 @@ secret() { local v; v=$(existing "$1"); [[ -n "$v" ]] && echo "$v" || eval "$2";
 auth_key=$(secret XMSG_AUTH_KEY "openssl rand -base64 32")
 postgres_password=$(secret XMSG_POSTGRES_PASSWORD "openssl rand -hex 24")
 kafka_cluster_id=$(secret XMSG_KAFKA_CLUSTER_ID "openssl rand -base64 16 | tr '+/' '-_' | tr -d '=\n'")
-# Web Push (VAPID): the raw 32-byte P-256 private key, base64url (see services/push).
-vapid=$(secret XMSG_PUSH_VAPID_PRIVATE_KEY \
-  "openssl ecparam -genkey -name prime256v1 -noout | openssl ec -outform DER 2>/dev/null | tail -c +8 | head -c 32 | base64 | tr '/+' '_-' | tr -d '=\n'")
+# Web Push (VAPID): the raw 32-byte P-256 private key (bytes 8-39 of the SEC1 DER),
+# base64url (see services/push). Through a file and dd, not `tail | head`: head exiting
+# early would kill tail with SIGPIPE, which pipefail turns into a failed install.
+vapid_key() {
+  local der
+  der=$(mktemp)
+  openssl ecparam -genkey -name prime256v1 -noout | openssl ec -outform DER -out "$der" 2>/dev/null
+  dd if="$der" bs=1 skip=7 count=32 2>/dev/null | base64 | tr '/+' '_-' | tr -d '=\n'
+  rm -f "$der"
+}
+vapid=$(secret XMSG_PUSH_VAPID_PRIVATE_KEY vapid_key)
 
 umask 077
 cat > .env.new <<EOF
