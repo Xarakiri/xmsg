@@ -19,6 +19,9 @@ defmodule XmsgGateway.Bus.Nats do
     ]
   end
 
+  # While NATS is away the connection process may exist but not be connected yet, and
+  # Gnat.sub then exits (:econnrefused). Callers retry on an error; an exit would crash
+  # them over and over until their supervisor gives up and takes the gateway down.
   @impl true
   def subscribe(subject) do
     case Process.whereis(@conn) do
@@ -31,6 +34,8 @@ defmodule XmsgGateway.Bus.Nats do
           error -> error
         end
     end
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   @impl true
@@ -45,6 +50,8 @@ defmodule XmsgGateway.Bus.Nats do
           error -> error
         end
     end
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   @impl true
