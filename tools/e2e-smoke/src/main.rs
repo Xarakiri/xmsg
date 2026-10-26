@@ -40,6 +40,8 @@
 //! XMSG_EXPECT_REVOCATION=true (optional, needs XMSG_AUTH_URL: logging out closes the
 //! session's open socket and its still-valid access token can't reconnect).
 
+mod upgrade;
+
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -68,13 +70,22 @@ struct Client {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run().await {
+    // `upgrade-seed FILE` / `upgrade-verify FILE`: the upgrade test (see upgrade.rs).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] => run().await,
+        ["upgrade-seed", file] => upgrade::seed(file).await,
+        ["upgrade-verify", file] => upgrade::verify(file).await,
+        _ => Err("usage: xmsg-e2e-smoke [upgrade-seed FILE | upgrade-verify FILE]".into()),
+    };
+    let what = args.first().map_or("end-to-end smoke test", String::as_str);
+    match result {
         Ok(()) => {
-            println!("✅ end-to-end smoke test passed");
+            println!("✅ {what} passed");
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("❌ end-to-end smoke test failed: {e}");
+            eprintln!("❌ {what} failed: {e}");
             ExitCode::FAILURE
         }
     }
@@ -1817,9 +1828,10 @@ async fn check_store(nodes: &str, channel: i64, alice: i64, bob: i64) -> Result<
 }
 
 /// Signs a user up and logs in; returns (user ID, access token).
+const PASSWORD: &str = "e2e smoke password";
+
 async fn sign_up_and_log_in(auth: &str, email: &str) -> Result<(i64, String), String> {
     let http = reqwest::Client::new();
-    let password = "e2e smoke password";
     let post = |path: &'static str, body: serde_json::Value| {
         let request = http.post(format!("{auth}{path}")).json(&body);
         async move {
@@ -1836,14 +1848,28 @@ async fn sign_up_and_log_in(auth: &str, email: &str) -> Result<(i64, String), St
     };
     post(
         "/v1/signup",
-        serde_json::json!({"email": email, "password": password, "name": "E2E"}),
+        serde_json::json!({"email": email, "password": PASSWORD, "name": "E2E"}),
     )
     .await?;
-    let tokens = post(
-        "/v1/login",
-        serde_json::json!({"email": email, "password": password}),
-    )
-    .await?;
+    log_in(auth, email).await
+}
+
+/// Logs in a user `sign_up_and_log_in` created: (user id, access token).
+async fn log_in(auth: &str, email: &str) -> Result<(i64, String), String> {
+    let response = reqwest::Client::new()
+        .post(format!("{auth}/v1/login"))
+        .json(&serde_json::json!({"email": email, "password": PASSWORD}))
+        .send()
+        .await
+        .map_err(|e| format!("/v1/login: {e}"))?;
+    let status = response.status();
+    let tokens: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("/v1/login: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("/v1/login: {status} {tokens}"));
+    }
     let user_id = tokens["user_id"]
         .as_str()
         .and_then(|s| s.parse().ok())

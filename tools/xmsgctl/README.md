@@ -24,4 +24,4 @@ xmsgctl restore xmsg.tar --yes --with-env   # a new machine: take the backup's .
 CI's `small-tier` job runs the whole round trip on a live installation: the end-to-end smoke test, then backup, `docker compose down -v`, restore, health, user counts compared, and the smoke test again.
 
 ## Not yet
-Online backups (no downtime), support bundles, `migrate-partitions` (Small → Medium).
+Online backups (no downtime), an `upgrade` command (the steps are in [the compose README](../../deploy/compose/README.md#upgrade)), support bundles, `migrate-partitions` (Small → Medium).
