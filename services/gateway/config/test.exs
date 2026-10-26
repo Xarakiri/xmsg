@@ -8,6 +8,8 @@ config :xmsg_gateway,
   auth_timeout_ms: 300,
   request_timeout_ms: 500,
   bus: XmsgGateway.Bus.Local,
-  sessions: XmsgGateway.Sessions.Local
+  sessions: XmsgGateway.Sessions.Local,
+  # The test run ends without a long drain.
+  drain_seconds: 0
 
 config :logger, level: :warning

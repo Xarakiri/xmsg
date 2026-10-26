@@ -64,14 +64,13 @@ defmodule XmsgGateway.AdmissionTest do
 
   test "a full gateway refuses new connections", %{port: port} do
     set(:admission_rate, 0)
-
-    now =
-      Registry.count(XmsgGateway.Users) + Registry.count(XmsgGateway.Admission.preauth_registry())
-
-    set(:max_connections, now + 1)
     assert {:ok, c} = WsClient.try_connect(port)
     _c = connect_as(c, 501)
+    # This test's own connection keeps the count at 1 or more, whatever else closes.
+    set(:max_connections, 1)
     assert refused?(WsClient.try_connect(port))
+    set(:max_connections, 0)
+    assert {:ok, _} = WsClient.try_connect(port)
   end
 
   test "unauthenticated sockets are capped per address, and authenticating frees a slot", %{

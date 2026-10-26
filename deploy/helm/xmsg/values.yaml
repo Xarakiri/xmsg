@@ -77,6 +77,8 @@ gateway:
   resources:
     requests: { cpu: 250m, memory: 256Mi }
     limits: { memory: 1Gi }
+  # On shutdown, connections are closed spread over this many seconds (plan §5.1: ~5 min).
+  drainSeconds: 300
   # Admission control (plan §5.1): what one gateway pod takes on. Refused upgrades get 503
   # with a jittered Retry-After, so a reconnect storm spreads out.
   admission:

@@ -240,6 +240,9 @@ impl Stack {
         )
         .env("MIX_ENV", "prod")
         .env("XMSG_GATEWAY_ID", "chaos")
+        // A short drain, so a SIGTERM restart closes its clients (1012) within the
+        // harness's grace instead of being escalated to SIGKILL.
+        .env("XMSG_DRAIN_SECONDS", "2")
         .env("XMSG_AUTH_JWKS_URL", &jwks)
         .ready(&["JWKS loaded"]);
         gateway.args = vec!["run".into(), "--no-halt".into()];

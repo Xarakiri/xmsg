@@ -10,6 +10,11 @@ metadata:
     app.kubernetes.io/component: gateway
 spec:
   replicas: {{ .Values.gateway.replicas }}
+  # A quarter of the pods at a time (plan §5.1): each drains for drainSeconds while new
+  # ones come up, so a rollout of 20 pods takes about 4 drain windows, not 20.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 25%, maxSurge: 25% }
   selector:
     matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: gateway }
   template:
@@ -18,8 +23,9 @@ spec:
         app.kubernetes.io/component: gateway
     spec:
       securityContext: { runAsNonRoot: true, runAsUser: 10001 }
-      # Connections drain to other pods on rollout (clients reconnect and resync).
-      terminationGracePeriodSeconds: 30
+      # On SIGTERM the gateway closes its connections spread over drainSeconds (clients
+      # reconnect to other pods and resync), then exits; the grace period covers that.
+      terminationGracePeriodSeconds: {{ add .Values.gateway.drainSeconds 30 }}
       containers:
         - name: gateway
           image: {{ include "xmsg.image" (list . "gateway") }}
@@ -40,6 +46,7 @@ spec:
             - { name: XMSG_PREAUTH_PER_IP, value: {{ .Values.gateway.admission.unauthenticatedPerIp | quote }} }
             - { name: XMSG_FRAME_RATE, value: {{ .Values.gateway.admission.framesPerSecond | quote }} }
             - { name: XMSG_FRAME_BURST, value: {{ .Values.gateway.admission.frameBurst | quote }} }
+            - { name: XMSG_DRAIN_SECONDS, value: {{ .Values.gateway.drainSeconds | quote }} }
           ports:
             - { name: ws, containerPort: 4000 }
           readinessProbe:

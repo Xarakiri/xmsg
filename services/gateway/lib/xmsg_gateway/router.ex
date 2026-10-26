@@ -11,7 +11,12 @@ defmodule XmsgGateway.Router do
     forwarded = conn |> get_req_header("x-forwarded-for") |> List.first()
     ip = XmsgGateway.ClientIp.from(conn.remote_ip, forwarded, XmsgGateway.Config.proxy_hops())
 
-    case XmsgGateway.Admission.check(ip) do
+    admission =
+      if XmsgGateway.Drain.draining?(),
+        do: {:refuse, :draining},
+        else: XmsgGateway.Admission.check(ip)
+
+    case admission do
       :ok ->
         conn
         |> WebSockAdapter.upgrade(XmsgGateway.Socket, %{ip: ip}, timeout: 70_000, compress: false)
@@ -27,8 +32,11 @@ defmodule XmsgGateway.Router do
     end
   end
 
+  # 503 while draining, so the readiness probe takes the pod out of its Service.
   get "/healthz" do
-    send_resp(conn, 200, "ok")
+    if XmsgGateway.Drain.draining?(),
+      do: send_resp(conn, 503, "draining"),
+      else: send_resp(conn, 200, "ok")
   end
 
   match _ do

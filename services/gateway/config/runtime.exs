@@ -21,6 +21,7 @@ if config_env() != :test do
     proxy_hops: String.to_integer(env.("XMSG_PROXY_HOPS", "0")),
     frame_rate: String.to_integer(env.("XMSG_FRAME_RATE", "30")),
     frame_burst: String.to_integer(env.("XMSG_FRAME_BURST", "100")),
+    drain_seconds: String.to_integer(env.("XMSG_DRAIN_SECONDS", "300")),
     nats: %{
       host: env.("XMSG_NATS_HOST", "127.0.0.1"),
       port: String.to_integer(env.("XMSG_NATS_PORT", "4222"))
