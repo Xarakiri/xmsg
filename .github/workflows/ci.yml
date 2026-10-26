@@ -152,7 +152,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate configuration
-        run: docker compose -f deploy/compose/docker-compose.yml config -q
+        run: |
+          docker compose -f deploy/compose/docker-compose.yml config -q
+          XMSG_AUTH_KEY=x XMSG_PUSH_VAPID_PRIVATE_KEY=x \
+            docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.app.yml config -q
       - name: Start core stack and wait for init jobs
         working-directory: deploy/compose
         run: |
@@ -173,6 +176,81 @@ jobs:
       - name: Stop
         if: always()
         working-directory: deploy/compose
+        run: docker compose down -v
+
+  small-tier:
+    name: Small-tier bundle (compose, end to end)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # The same caches as the image jobs, so these are mostly cache hits.
+      - name: Build services
+        uses: docker/build-push-action@v6
+        with: { context: ., file: deploy/docker/services.Dockerfile, load: true, tags: "xmsg/services:ci", cache-from: "type=gha,scope=services" }
+      - name: Build sequencer
+        uses: docker/build-push-action@v6
+        with: { context: ., file: deploy/docker/sequencer.Dockerfile, load: true, tags: "xmsg/sequencer:ci", cache-from: "type=gha,scope=sequencer" }
+      - name: Build gateway
+        uses: docker/build-push-action@v6
+        with: { context: ., file: deploy/docker/gateway.Dockerfile, load: true, tags: "xmsg/gateway:ci", cache-from: "type=gha,scope=gateway" }
+      - name: Build web
+        uses: docker/build-push-action@v6
+        with: { context: ., file: deploy/docker/web.Dockerfile, load: true, tags: "xmsg/web:ci", cache-from: "type=gha,scope=web" }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        run: sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - name: Build the smoke test
+        run: cargo build --release -p xmsg-e2e-smoke
+      - name: Start the Small tier
+        working-directory: deploy/compose
+        env:
+          XMSG_REGISTRY: xmsg
+          XMSG_VERSION: ci
+          XMSG_TLS: internal
+        run: |
+          # A real installation gets these from install.sh.
+          export XMSG_AUTH_KEY=$(openssl rand -base64 32)
+          openssl ecparam -genkey -name prime256v1 -noout -out "$RUNNER_TEMP/vapid.pem"
+          export XMSG_PUSH_VAPID_PRIVATE_KEY=$(openssl ec -in "$RUNNER_TEMP/vapid.pem" -outform DER 2>/dev/null | tail -c +8 | head -c 32 | base64 | tr '/+' '_-' | tr -d '=\n')
+          # docker-compose.ci.yml: test-only settings (the smoke test's plain-HTTP push endpoint).
+          export COMPOSE_FILE=docker-compose.yml:docker-compose.app.yml:docker-compose.ci.yml
+          # With search (OpenSearch and the indexer), so the smoke test covers everything.
+          export COMPOSE_PROFILES=search XMSG_SEARCH_URL=http://opensearch:9200
+          docker compose up -d --wait --wait-timeout 600 || (docker compose ps -a; exit 1)
+          docker compose ps
+      - name: HTTPS through Caddy
+        run: |
+          curl -sfk https://localhost/ | grep -q '<div id="root">'
+          curl -sfk https://localhost/auth/.well-known/jwks.json | grep -q '"keys"'
+      - name: End-to-end smoke against the bundle
+        env:
+          XMSG_PARTITIONS: "16"
+          XMSG_KAFKA_BOOTSTRAP: localhost:9092
+          XMSG_CQL_NODES: localhost:9042
+          XMSG_AUTH_URL: http://localhost:8080/auth
+          XMSG_USERS_URL: http://localhost:8080/users
+          XMSG_CHANNELS_URL: http://localhost:8080/channels
+          XMSG_MESSAGES_URL: http://localhost:8080/messages
+          XMSG_READSTATE_URL: http://localhost:8080/readstate
+          XMSG_PUSH_URL: http://localhost:8080/push
+          XMSG_GATEWAY_URL: ws://localhost:8080/ws
+          XMSG_SEQUENCER_URL: http://localhost:8090
+          XMSG_EXPECT_OUTBOX_RELAY: "true"
+          # The push service runs in a container: it reaches the stand-in endpoint this way.
+          XMSG_PUSH_MOCK_HOST: host.docker.internal
+        run: ./target/release/xmsg-e2e-smoke
+      - name: Show logs on failure
+        if: failure()
+        working-directory: deploy/compose
+        env: { COMPOSE_FILE: "docker-compose.yml:docker-compose.app.yml:docker-compose.ci.yml", COMPOSE_PROFILES: search, XMSG_AUTH_KEY: x, XMSG_PUSH_VAPID_PRIVATE_KEY: x }
+        run: docker compose logs --no-color --tail 200
+      - name: Stop
+        if: always()
+        working-directory: deploy/compose
+        env: { COMPOSE_FILE: "docker-compose.yml:docker-compose.app.yml:docker-compose.ci.yml", COMPOSE_PROFILES: search, XMSG_AUTH_KEY: x, XMSG_PUSH_VAPID_PRIVATE_KEY: x }
         run: docker compose down -v
 
   enterprise:

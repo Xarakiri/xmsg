@@ -81,8 +81,10 @@ async fn main() -> ExitCode {
             store,
             log: log.clone(),
             reactions,
+            // Unset or empty: search is off (503).
             search: std::env::var("XMSG_SEARCH_URL")
                 .ok()
+                .filter(|url| !url.is_empty())
                 .map(xmsg_messages::search::Search::new),
             verifier: match xmsg_authn::Verifier::from_env(jwks_url).await {
                 Ok(v) => v,

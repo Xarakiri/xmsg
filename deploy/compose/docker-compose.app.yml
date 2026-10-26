@@ -1,0 +1,178 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# The Small-tier application (ADR-0019) on top of docker-compose.yml's backends: every
+# xmsg service, the sequencer, the gateway, the web app, and Caddy in front (TLS, from
+# Let's Encrypt or a certificate you provide). install.sh writes the .env this reads and
+# sets COMPOSE_FILE to both files, so plain `docker compose ...` works afterwards.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml up -d
+#
+# Images are <XMSG_REGISTRY>/<name>:<XMSG_VERSION>; `docker compose build` builds them
+# from this checkout instead.
+
+x-restart: &restart
+  restart: unless-stopped
+
+# What every service reads (each ignores what it doesn't use).
+x-env: &env
+  XMSG_PARTITIONS: ${XMSG_PARTITIONS:-16}
+  XMSG_KAFKA_BOOTSTRAP: kafka:19092
+  XMSG_CQL_NODES: cassandra:9042
+  XMSG_CQL_KEYSPACE: xmsg
+  XMSG_NATS_URL: nats://nats:4222
+  XMSG_VALKEY_URL: redis://valkey:6379
+  XMSG_DATABASE_URL: postgres://xmsg:${XMSG_POSTGRES_PASSWORD:-xmsg-dev-only}@postgres:5432/xmsg
+  XMSG_AUTH_JWKS_URL: http://auth:8081/.well-known/jwks.json
+  XMSG_SEQUENCER_URL: http://sequencer:8090
+  XMSG_OUTBOX_MODE: relay
+  XMSG_PUSH_SUBJECT: ${XMSG_PUSH_SUBJECT:-mailto:admin@example.com}
+  # Caddy, then the web pod's nginx (auth's per-address rate limits).
+  XMSG_PROXY_HOPS: "2"
+  RUST_LOG: info
+
+x-service: &service
+  <<: *restart
+  image: ${XMSG_REGISTRY:-xmsg}/services:${XMSG_VERSION:-dev}
+  mem_limit: 256m
+  depends_on:
+    kafka-init: { condition: service_completed_successfully }
+    cassandra-init: { condition: service_completed_successfully }
+    postgres: { condition: service_healthy }
+    nats: { condition: service_healthy }
+    valkey: { condition: service_healthy }
+
+services:
+  # The image for every Rust service; the others name the same image.
+  auth:
+    <<: *service
+    build: { context: ../.., dockerfile: deploy/docker/services.Dockerfile }
+    command: ["xmsg-auth"]
+    environment:
+      <<: *env
+      XMSG_AUTH_KEY: "${XMSG_AUTH_KEY:?run install.sh first - XMSG_AUTH_KEY is not set}"
+  users:
+    <<: *service
+    command: ["xmsg-users"]
+    environment: { <<: *env }
+  channels:
+    <<: *service
+    command: ["xmsg-channels"]
+    environment: { <<: *env }
+  messages:
+    <<: *service
+    command: ["xmsg-messages"]
+    environment:
+      <<: *env
+      XMSG_SEARCH_URL: ${XMSG_SEARCH_URL:-}
+  readstate:
+    <<: *service
+    command: ["xmsg-readstate"]
+    environment: { <<: *env }
+  persister:
+    <<: *service
+    command: ["xmsg-persister"]
+    environment: { <<: *env }
+  fanout:
+    <<: *service
+    command: ["xmsg-fanout"]
+    environment: { <<: *env }
+  outbox-relay:
+    <<: *service
+    command: ["xmsg-outbox-relay"]
+    environment: { <<: *env }
+  meta-relay:
+    <<: *service
+    command: ["xmsg-meta-relay"]
+    environment: { <<: *env }
+  reaction-batcher:
+    <<: *service
+    command: ["xmsg-reaction-batcher"]
+    environment: { <<: *env }
+  presence:
+    <<: *service
+    command: ["xmsg-presence"]
+    environment: { <<: *env }
+  push:
+    <<: *service
+    command: ["xmsg-push"]
+    environment:
+      <<: *env
+      XMSG_PUSH_VAPID_PRIVATE_KEY: "${XMSG_PUSH_VAPID_PRIVATE_KEY:?run install.sh first - XMSG_PUSH_VAPID_PRIVATE_KEY is not set}"
+  search-indexer:
+    <<: *service
+    profiles: [search]
+    command: ["xmsg-search-indexer"]
+    environment:
+      <<: *env
+      XMSG_OPENSEARCH_URL: http://opensearch:9200
+
+  sequencer:
+    <<: *restart
+    image: ${XMSG_REGISTRY:-xmsg}/sequencer:${XMSG_VERSION:-dev}
+    build: { context: ../.., dockerfile: deploy/docker/sequencer.Dockerfile }
+    mem_limit: 1g
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+    environment:
+      <<: *env
+      XMSG_INSTANCE_ID: sequencer-1
+      XMSG_ADVERTISED_HOST: sequencer
+      XMSG_SEQUENCER_HTTP_PORT: "8090"
+      XMSG_STATE_DIR: /state
+    # RocksDB state survives restarts (it rebuilds from the changelogs if lost).
+    volumes: [sequencer-state:/state]
+    # The membership endpoint, on this machine only (xmsgctl health, tests).
+    ports: ["127.0.0.1:8090:8090"]
+
+  gateway:
+    <<: *restart
+    image: ${XMSG_REGISTRY:-xmsg}/gateway:${XMSG_VERSION:-dev}
+    build: { context: ../.., dockerfile: deploy/docker/gateway.Dockerfile }
+    mem_limit: 512m
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      nats: { condition: service_healthy }
+      auth: { condition: service_started }
+    # On shutdown it closes connections spread over this long (XMSG_DRAIN_SECONDS).
+    stop_grace_period: 40s
+    environment:
+      XMSG_GATEWAY_ID: gateway-1
+      XMSG_GATEWAY_PORT: "4000"
+      XMSG_PARTITIONS: ${XMSG_PARTITIONS:-16}
+      XMSG_NATS_HOST: nats
+      XMSG_NATS_PORT: "4222"
+      XMSG_KAFKA_BOOTSTRAP: kafka:19092
+      XMSG_AUTH_JWKS_URL: http://auth:8081/.well-known/jwks.json
+      XMSG_CHANNELS_URL: http://channels:8082
+      XMSG_PROXY_HOPS: "2"
+      XMSG_DRAIN_SECONDS: "30"
+
+  web:
+    <<: *restart
+    image: ${XMSG_REGISTRY:-xmsg}/web:${XMSG_VERSION:-dev}
+    build: { context: ../.., dockerfile: deploy/docker/web.Dockerfile }
+    mem_limit: 128m
+    depends_on: [auth, users, channels, messages, readstate, push, gateway]
+    # Plain HTTP on this machine only, behind Caddy (xmsgctl health, tests).
+    ports: ["127.0.0.1:8080:8080"]
+
+  # The entry point: HTTPS on 443 (and 80 for ACME and redirects), to the web app's nginx.
+  caddy:
+    <<: *restart
+    image: caddy:2.10-alpine
+    mem_limit: 128m
+    depends_on: [web]
+    ports: ["${XMSG_HTTP_PORT:-80}:80", "${XMSG_HTTPS_PORT:-443}:443"]
+    environment:
+      XMSG_DOMAIN: ${XMSG_DOMAIN:-localhost}
+      # The `tls` directive's arguments (see caddy/Caddyfile): an email (Let's Encrypt),
+      # "/certs/cert.pem /certs/key.pem" (your own), or "internal" (tests, evaluation).
+      XMSG_TLS: ${XMSG_TLS:-internal}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy-data:/data
+
+volumes:
+  sequencer-state:
+  caddy-data:

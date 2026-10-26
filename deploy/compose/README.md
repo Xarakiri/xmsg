@@ -31,6 +31,30 @@ docker compose down                    # stop, keep data
 docker compose down -v                 # stop and delete all data
 ```
 
+## The whole application (Small tier)
+`docker-compose.yml` is the backends, also used for local development with the services run from source. `docker-compose.app.yml` adds the application on top: every xmsg service, the sequencer, the gateway, the web app, and **Caddy** in front for HTTPS (Let's Encrypt, your own certificate, or Caddy's internal CA for evaluation).
+
+```bash
+export COMPOSE_FILE=docker-compose.yml:docker-compose.app.yml
+docker compose build          # images from this checkout (or set XMSG_REGISTRY / XMSG_VERSION)
+docker compose up -d --wait
+```
+
+It reads its settings from `.env`:
+
+| Variable | Meaning |
+|---|---|
+| `XMSG_AUTH_KEY` | **Required.** 32 random bytes, base64: the signing key for access tokens |
+| `XMSG_PUSH_VAPID_PRIVATE_KEY` | **Required.** The Web Push key (see `services/push`) |
+| `XMSG_POSTGRES_PASSWORD` | Postgres password (default `xmsg-dev-only`: change it) |
+| `XMSG_KAFKA_CLUSTER_ID` | A base64 UUID, fixed per installation |
+| `XMSG_DOMAIN` | The name people use, e.g. `chat.example.com` (default `localhost`) |
+| `XMSG_TLS` | `tls` arguments for Caddy: an email for Let's Encrypt, `/certs/cert.pem /certs/key.pem` for your own (in `./certs`), or `internal` |
+| `XMSG_REGISTRY` / `XMSG_VERSION` | Where the images come from (default `xmsg` / `dev`, i.e. built locally) |
+| `XMSG_HTTP_PORT` / `XMSG_HTTPS_PORT` | Published ports (80 / 443) |
+
+The web app (nginx) is also on `127.0.0.1:8080` and the sequencer's membership endpoint on `127.0.0.1:8090`, for health checks on the machine itself. CI runs the end-to-end smoke test against this bundle.
+
 ## Notes
 - All ports bind to `127.0.0.1`. Passwords here are for local development only; a real Small install generates its own (the install script, Phase 4).
 - **The partition count is fixed once topics exist** ([ADR-0021](../../docs/adr/0021-partition-count-per-installation.md)). `kafka-init` refuses to continue if existing topics have a different count.
