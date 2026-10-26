@@ -209,11 +209,14 @@ jobs:
         run: |
           # With search, so the smoke test covers everything.
           ./install.sh --yes --domain localhost --tls internal --search --registry xmsg --version ci
-          docker compose ps
           # Running it again keeps the secrets and the running installation.
           cp .env first.env
           ./install.sh --yes --no-start
           diff <(grep -E 'KEY|PASSWORD|CLUSTER' first.env) <(grep -E 'KEY|PASSWORD|CLUSTER' .env)
+          # Test-only settings on top (the smoke test's plain-HTTP push endpoint).
+          sed -i 's/^COMPOSE_FILE=.*/&:docker-compose.ci.yml/' .env
+          docker compose up -d --wait --wait-timeout 300
+          docker compose ps
       - name: HTTPS through Caddy
         run: |
           curl -sfk https://localhost/ | grep -q '<div id="root">'
@@ -232,6 +235,8 @@ jobs:
           XMSG_GATEWAY_URL: ws://localhost:8080/ws
           XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_EXPECT_OUTBOX_RELAY: "true"
+          # The push service runs in a container: it reaches the stand-in endpoint this way.
+          XMSG_PUSH_MOCK_HOST: host.docker.internal
         run: ./target/release/xmsg-e2e-smoke
       - name: xmsgctl health, backup, wipe, restore
         working-directory: deploy/compose

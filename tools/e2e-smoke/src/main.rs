@@ -566,10 +566,22 @@ struct PushRequest {
 }
 
 /// A stand-in push service (what a browser vendor runs): records each POST and answers 201.
+/// How the push service reaches the stand-in push endpoint: `XMSG_PUSH_MOCK_HOST`, e.g.
+/// `host.docker.internal` when the push service runs in a container.
+fn push_mock_host() -> String {
+    std::env::var("XMSG_PUSH_MOCK_HOST").unwrap_or_else(|_| "127.0.0.1".into())
+}
+
 async fn mock_push_service()
 -> Result<(u16, std::sync::Arc<std::sync::Mutex<Vec<PushRequest>>>), String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    // Reachable from containers too when they reach this machine by another name.
+    let bind = if push_mock_host() == "127.0.0.1" {
+        "127.0.0.1:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -665,7 +677,7 @@ async fn check_push(
     }
     // The browser key and auth secret from RFC 8291's example (Appendix A).
     let subscription = serde_json::json!({
-        "endpoint": format!("http://127.0.0.1:{port}/push/bob-{run_id}"),
+        "endpoint": format!("http://{}:{port}/push/bob-{run_id}", push_mock_host()),
         "keys": {
             "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
             "auth": "BTBZMqHH6r4Tts7J_aSIgg"
