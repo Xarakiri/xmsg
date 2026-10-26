@@ -31,7 +31,24 @@ docker compose down                    # stop, keep data
 docker compose down -v                 # stop and delete all data
 ```
 
-## The whole application (Small tier)
+## Install (Small tier)
+On a Linux VM with Docker and the Compose plugin (8 GB of memory or more):
+
+```bash
+./install.sh
+```
+
+It asks for the domain and how to get the TLS certificate (Let's Encrypt, your own, or an internal one for evaluation), generates the secrets into `.env` (kept private, mode 600), builds or pulls the images, starts everything and waits until `https://<domain>/` answers. Run it again to change the domain or TLS settings: the secrets are kept, and the partition count can't change (ADR-0021). Non-interactive:
+
+```bash
+./install.sh --yes --domain chat.example.com --tls acme --email ops@example.com
+./install.sh --yes --domain chat.internal --tls cert --cert ./chat.pem --key ./chat-key.pem
+./install.sh --yes --registry registry.example.com/xmsg --version 0.4.0   # published images
+```
+
+Back up `.env` together with the data: without its signing key every session ends, and without its Postgres password the database doesn't open.
+
+## The whole application, by hand
 `docker-compose.yml` is the backends, also used for local development with the services run from source. `docker-compose.app.yml` adds the application on top: every xmsg service, the sequencer, the gateway, the web app, and **Caddy** in front for HTTPS (Let's Encrypt, your own certificate, or Caddy's internal CA for evaluation).
 
 ```bash
