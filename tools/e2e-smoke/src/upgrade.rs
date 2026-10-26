@@ -67,7 +67,7 @@ pub async fn seed(file: &str) -> Result<(), String> {
 
     // [alice, bob]
     let mut clients = [
-        connect(&urls.gateway, &alice.1).await?,
+        connect_when_up(&urls.gateway, &alice.1).await?,
         connect(&urls.gateway, &bob.1).await?,
     ];
     for (i, id) in [(0, "u-1"), (1, "u-2"), (0, "u-3")] {
@@ -104,7 +104,7 @@ pub async fn verify(file: &str) -> Result<(), String> {
     let channel: i64 = field("channel")?.parse().map_err(|_| "bad channel")?;
 
     // Tokens issued by N still verify: the signing key came along.
-    connect(&urls.gateway, field("alice_token")?)
+    connect_when_up(&urls.gateway, field("alice_token")?)
         .await
         .map_err(|e| format!("a token issued before the upgrade: {e}"))?;
     let alice = log_in(&urls.auth, field("alice")?).await?;
@@ -149,6 +149,19 @@ pub async fn verify(file: &str) -> Result<(), String> {
          membership (bob posts) and reaction counts (👍 2) survived"
     );
     Ok(())
+}
+
+/// Connects, retrying for up to 60 s: versions without a gateway healthcheck report
+/// "started" while it still boots, and the proxy answers 502 until it's up.
+async fn connect_when_up(url: &str, token: &str) -> Result<Client, String> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        match connect(url, token).await {
+            Ok(client) => return Ok(client),
+            Err(e) if Instant::now() > deadline => return Err(e),
+            Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
+        }
+    }
 }
 
 /// The msg_seq of each client_msg_id, as delivered to `client` (waits up to 20 s).

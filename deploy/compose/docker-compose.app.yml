@@ -133,6 +133,15 @@ services:
       kafka-init: { condition: service_completed_successfully }
       nats: { condition: service_healthy }
       auth: { condition: service_started }
+    # Ready once it serves /healthz (it boots for a few seconds): `up --wait`, install.sh
+    # and xmsgctl health wait for this, not just for the container to run.
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:4000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
     # On shutdown it closes connections spread over this long (XMSG_DRAIN_SECONDS).
     stop_grace_period: 40s
     environment:
