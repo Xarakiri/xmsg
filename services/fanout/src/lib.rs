@@ -111,6 +111,52 @@ pub fn plan(event: &SequencedEvent, members: &HashSet<i64>, dual: bool) -> Plan 
     }
 }
 
+/// Users subscribed to a pull-mode channel moments ago (ADR-0008). Their gateway may not
+/// be listening on `ch.{id}` yet, so for `FRESH_FOR` their events are also pushed (the same
+/// overlap as a mode switch; clients drop duplicates by `event_seq`). Without it, a message
+/// sent right after someone joins, or right after a channel is created, can miss them
+/// until their next sync.
+#[derive(Default)]
+pub struct Fresh {
+    by_channel: std::collections::HashMap<i64, Vec<(i64, std::time::Instant)>>,
+}
+
+pub const FRESH_FOR: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl Fresh {
+    pub fn note(&mut self, channel_id: i64, user_id: i64, now: std::time::Instant) {
+        // Channels that went quiet never get `users` called again: sweep them now and then.
+        if self.by_channel.len() > 10_000 {
+            self.by_channel.retain(|_, users| {
+                users.retain(|(_, at)| now.duration_since(*at) < FRESH_FOR);
+                !users.is_empty()
+            });
+        }
+        let users = self.by_channel.entry(channel_id).or_default();
+        users.retain(|(u, at)| *u != user_id && now.duration_since(*at) < FRESH_FOR);
+        users.push((user_id, now));
+    }
+
+    pub fn forget(&mut self, channel_id: i64, user_id: i64) {
+        if let Some(users) = self.by_channel.get_mut(&channel_id) {
+            users.retain(|(u, _)| *u != user_id);
+        }
+    }
+
+    /// Those still within `FRESH_FOR`; expired entries (and empty channels) are dropped.
+    pub fn users(&mut self, channel_id: i64, now: std::time::Instant) -> Vec<i64> {
+        let Some(users) = self.by_channel.get_mut(&channel_id) else {
+            return Vec::new();
+        };
+        users.retain(|(_, at)| now.duration_since(*at) < FRESH_FOR);
+        let out = users.iter().map(|(u, _)| *u).collect();
+        if users.is_empty() {
+            self.by_channel.remove(&channel_id);
+        }
+        out
+    }
+}
+
 /// Who sees `user` typing in a channel with these members: everyone else, and only if
 /// `user` is a member (best-effort, plan §5.9). `None`: drop the notice.
 pub fn typing_recipients(members: &HashSet<i64>, user: i64) -> Option<HashSet<i64>> {
@@ -319,5 +365,34 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn fresh_subscribers_last_ten_seconds() {
+        let t0 = std::time::Instant::now();
+        let mut fresh = Fresh::default();
+        fresh.note(7, 1, t0);
+        fresh.note(7, 2, t0 + std::time::Duration::from_secs(5));
+        assert_eq!(
+            fresh.users(7, t0 + std::time::Duration::from_secs(6)),
+            vec![1, 2]
+        );
+        // 1 expires first; noting again renews.
+        assert_eq!(
+            fresh.users(7, t0 + std::time::Duration::from_secs(11)),
+            vec![2]
+        );
+        fresh.note(7, 2, t0 + std::time::Duration::from_secs(12));
+        assert_eq!(
+            fresh.users(7, t0 + std::time::Duration::from_secs(20)),
+            vec![2]
+        );
+        fresh.forget(7, 2);
+        assert!(
+            fresh
+                .users(7, t0 + std::time::Duration::from_secs(20))
+                .is_empty()
+        );
+        assert!(fresh.users(8, t0).is_empty());
     }
 }
