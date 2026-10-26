@@ -42,8 +42,15 @@ defmodule XmsgGateway.Drain do
     registries = [XmsgGateway.Users, XmsgGateway.Admission.preauth_registry()]
 
     registries
-    |> Enum.flat_map(&Registry.select(&1, [{{:_, :"$1", :_}, [], [:"$1"]}]))
+    |> Enum.flat_map(&registered/1)
     |> Enum.uniq()
+  end
+
+  # A registry already gone (the application is stopping after a crash) holds no sockets.
+  defp registered(registry) do
+    Registry.select(registry, [{{:_, :"$1", :_}, [], [:"$1"]}])
+  rescue
+    ArgumentError -> []
   end
 
   defp wait_until_empty(deadline) do
