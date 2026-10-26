@@ -180,3 +180,30 @@ test("presence: watches and activity survive reconnects, updates reach onPresenc
   assert.deepEqual(seen, [[{ userId: "102", status: "online" }, { userId: "103", status: "away" }]]);
   conn.stop();
 });
+
+test("the open channel is sent on Welcome and when it changes; bumps reach onBump", async () => {
+  const bumps: [string, number, number][] = [];
+  const conn = new Connection({
+    url: "ws://gw/ws",
+    token: async () => "t",
+    WebSocket: FakeSocket as unknown as typeof WebSocket,
+    onStatus: () => {},
+    onAck: () => {},
+    onEvent: () => {},
+    onSendRejected: () => {},
+    onBump: (channelId, eventSeq, msgSeq) => bumps.push([channelId, eventSeq, msgSeq]),
+  });
+  conn.view("901"); // before connecting: sent on Welcome
+  conn.start();
+  await tick();
+  FakeSocket.last.push({ frame: { case: "welcome", value: { partitionCount: 16 } } });
+  const sent = () => FakeSocket.last.sent.slice(1).map((b) => fromBinary(ClientFrameSchema, b).frame);
+  const views = () => sent().filter((f) => f.case === "viewChannel").map((f) => (f.case === "viewChannel" ? f.value.channelId : -1n));
+  assert.deepEqual(views(), [901n]);
+  conn.view("901"); // unchanged: nothing sent
+  conn.view(null); // closed: 0
+  assert.deepEqual(views(), [901n, 0n]);
+  FakeSocket.last.push({ frame: { case: "bump", value: { channelId: 902n, eventSeq: 9n, msgSeq: 5n } } });
+  assert.deepEqual(bumps, [["902", 9, 5]]);
+  conn.stop();
+});

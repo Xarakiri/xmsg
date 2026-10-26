@@ -15,7 +15,7 @@ import { file_xmsg_v1_presence } from "./presence_pb.js";
  * Describes the file xmsg/v1/client.proto.
  */
 export const file_xmsg_v1_client = /*@__PURE__*/
-  fileDesc("ChR4bXNnL3YxL2NsaWVudC5wcm90bxIHeG1zZy52MSKwAgoLQ2xpZW50RnJhbWUSIwoHY29ubmVjdBgBIAEoCzIQLnhtc2cudjEuQ29ubmVjdEgAEjMKDHNlbmRfbWVzc2FnZRgCIAEoCzIbLnhtc2cudjEuU2VuZE1lc3NhZ2VSZXF1ZXN0SAASHQoEcGluZxgDIAEoCzINLnhtc2cudjEuUGluZ0gAEiEKBnR5cGluZxgEIAEoCzIPLnhtc2cudjEuVHlwaW5nSAASMAoOd2F0Y2hfcHJlc2VuY2UYBSABKAsyFi54bXNnLnYxLldhdGNoUHJlc2VuY2VIABIlCghhY3Rpdml0eRgGIAEoCzIRLnhtc2cudjEuQWN0aXZpdHlIABIjCgdyZWNlaXB0GAcgASgLMhAueG1zZy52MS5SZWNlaXB0SABCBwoFZnJhbWUiYwoHQ29ubmVjdBIUCgxhY2Nlc3NfdG9rZW4YASABKAkSGAoQcHJvdG9jb2xfdmVyc2lvbhgCIAEoDRISCgpzeW5jX3Rva2VuGAMgASgJEhQKDHJlc3VtZV90b2tlbhgEIAEoCSJ3ChJTZW5kTWVzc2FnZVJlcXVlc3QSEgoKY2hhbm5lbF9pZBgBIAEoAxIVCg1jbGllbnRfbXNnX2lkGAIgASgJEgwKBGJvZHkYAyABKAkSKAoLdGhyZWFkX3Jvb3QYBCABKAsyEy54bXNnLnYxLlRocmVhZFJvb3QiHAoGVHlwaW5nEhIKCmNoYW5uZWxfaWQYASABKAMiIQoNV2F0Y2hQcmVzZW5jZRIQCgh1c2VyX2lkcxgBIAMoAyIuCgdSZWNlaXB0EhIKCmNoYW5uZWxfaWQYASABKAMSDwoHbXNnX3NlcRgCIAEoAyIaCghBY3Rpdml0eRIOCgZhY3RpdmUYASABKAgiGgoEUGluZxISCgpzZW50X2F0X21zGAEgASgDIvsCCgtTZXJ2ZXJGcmFtZRIjCgd3ZWxjb21lGAEgASgLMhAueG1zZy52MS5XZWxjb21lSAASHwoDYWNrGAIgASgLMhAueG1zZy52MS5TZW5kQWNrSAASKAoFZXZlbnQYAyABKAsyFy54bXNnLnYxLlNlcXVlbmNlZEV2ZW50SAASIQoGcmVzeW5jGAQgASgLMg8ueG1zZy52MS5SZXN5bmNIABIdCgRwb25nGAUgASgLMg0ueG1zZy52MS5Qb25nSAASLgoNc2VuZF9yZWplY3RlZBgGIAEoCzIVLnhtc2cudjEuU2VuZFJlamVjdGVkSAASKgoGdHlwaW5nGAcgASgLMhgueG1zZy52MS5UeXBpbmdJbmRpY2F0b3JIABIsCghwcmVzZW5jZRgIIAEoCzIYLnhtc2cudjEuUHJlc2VuY2VVcGRhdGVzSAASJwoHcmVjZWlwdBgJIAEoCzIULnhtc2cudjEuUmVhZFJlY2VpcHRIAEIHCgVmcmFtZSI4CgdXZWxjb21lEhQKDHJlc3VtZV90b2tlbhgBIAEoCRIXCg9wYXJ0aXRpb25fY291bnQYAiABKA0iNgoPVHlwaW5nSW5kaWNhdG9yEhIKCmNoYW5uZWxfaWQYASABKAMSDwoHdXNlcl9pZBgCIAEoAyJDCgtSZWFkUmVjZWlwdBISCgpjaGFubmVsX2lkGAEgASgDEg8KB3VzZXJfaWQYAiABKAMSDwoHbXNnX3NlcRgDIAEoAyI7Cg9QcmVzZW5jZVVwZGF0ZXMSKAoHdXBkYXRlcxgBIAMoCzIXLnhtc2cudjEuUHJlc2VuY2VVcGRhdGUidAoMU2VuZFJlamVjdGVkEhUKDWNsaWVudF9tc2dfaWQYASABKAkSJQoGcmVhc29uGAIgASgOMhUueG1zZy52MS5SZWplY3RSZWFzb24SDgoGZGV0YWlsGAMgASgJEhYKDnJldHJ5X2FmdGVyX21zGAQgASgNIiAKB1NlbmRBY2sSFQoNY2xpZW50X21zZ19pZBgBIAEoCSIuCgZSZXN5bmMSFgoJcGFydGl0aW9uGAEgASgNSACIAQFCDAoKX3BhcnRpdGlvbiIaCgRQb25nEhIKCnNlbnRfYXRfbXMYASABKANCFQoRZGV2Lnhtc2cucHJvdG8udjFQAWIGcHJvdG8z", [file_xmsg_v1_enums, file_xmsg_v1_events, file_xmsg_v1_presence]);
+  fileDesc("ChR4bXNnL3YxL2NsaWVudC5wcm90bxIHeG1zZy52MSLeAgoLQ2xpZW50RnJhbWUSIwoHY29ubmVjdBgBIAEoCzIQLnhtc2cudjEuQ29ubmVjdEgAEjMKDHNlbmRfbWVzc2FnZRgCIAEoCzIbLnhtc2cudjEuU2VuZE1lc3NhZ2VSZXF1ZXN0SAASHQoEcGluZxgDIAEoCzINLnhtc2cudjEuUGluZ0gAEiEKBnR5cGluZxgEIAEoCzIPLnhtc2cudjEuVHlwaW5nSAASMAoOd2F0Y2hfcHJlc2VuY2UYBSABKAsyFi54bXNnLnYxLldhdGNoUHJlc2VuY2VIABIlCghhY3Rpdml0eRgGIAEoCzIRLnhtc2cudjEuQWN0aXZpdHlIABIjCgdyZWNlaXB0GAcgASgLMhAueG1zZy52MS5SZWNlaXB0SAASLAoMdmlld19jaGFubmVsGAggASgLMhQueG1zZy52MS5WaWV3Q2hhbm5lbEgAQgcKBWZyYW1lImMKB0Nvbm5lY3QSFAoMYWNjZXNzX3Rva2VuGAEgASgJEhgKEHByb3RvY29sX3ZlcnNpb24YAiABKA0SEgoKc3luY190b2tlbhgDIAEoCRIUCgxyZXN1bWVfdG9rZW4YBCABKAkidwoSU2VuZE1lc3NhZ2VSZXF1ZXN0EhIKCmNoYW5uZWxfaWQYASABKAMSFQoNY2xpZW50X21zZ19pZBgCIAEoCRIMCgRib2R5GAMgASgJEigKC3RocmVhZF9yb290GAQgASgLMhMueG1zZy52MS5UaHJlYWRSb290IhwKBlR5cGluZxISCgpjaGFubmVsX2lkGAEgASgDIiEKDVdhdGNoUHJlc2VuY2USEAoIdXNlcl9pZHMYASADKAMiLgoHUmVjZWlwdBISCgpjaGFubmVsX2lkGAEgASgDEg8KB21zZ19zZXEYAiABKAMiGgoIQWN0aXZpdHkSDgoGYWN0aXZlGAEgASgIIiEKC1ZpZXdDaGFubmVsEhIKCmNoYW5uZWxfaWQYASABKAMiGgoEUGluZxISCgpzZW50X2F0X21zGAEgASgDIqEDCgtTZXJ2ZXJGcmFtZRIjCgd3ZWxjb21lGAEgASgLMhAueG1zZy52MS5XZWxjb21lSAASHwoDYWNrGAIgASgLMhAueG1zZy52MS5TZW5kQWNrSAASKAoFZXZlbnQYAyABKAsyFy54bXNnLnYxLlNlcXVlbmNlZEV2ZW50SAASIQoGcmVzeW5jGAQgASgLMg8ueG1zZy52MS5SZXN5bmNIABIdCgRwb25nGAUgASgLMg0ueG1zZy52MS5Qb25nSAASLgoNc2VuZF9yZWplY3RlZBgGIAEoCzIVLnhtc2cudjEuU2VuZFJlamVjdGVkSAASKgoGdHlwaW5nGAcgASgLMhgueG1zZy52MS5UeXBpbmdJbmRpY2F0b3JIABIsCghwcmVzZW5jZRgIIAEoCzIYLnhtc2cudjEuUHJlc2VuY2VVcGRhdGVzSAASJwoHcmVjZWlwdBgJIAEoCzIULnhtc2cudjEuUmVhZFJlY2VpcHRIABIkCgRidW1wGAogASgLMhQueG1zZy52MS5DaGFubmVsQnVtcEgAQgcKBWZyYW1lIkUKC0NoYW5uZWxCdW1wEhIKCmNoYW5uZWxfaWQYASABKAMSEQoJZXZlbnRfc2VxGAIgASgDEg8KB21zZ19zZXEYAyABKAMiOAoHV2VsY29tZRIUCgxyZXN1bWVfdG9rZW4YASABKAkSFwoPcGFydGl0aW9uX2NvdW50GAIgASgNIjYKD1R5cGluZ0luZGljYXRvchISCgpjaGFubmVsX2lkGAEgASgDEg8KB3VzZXJfaWQYAiABKAMiQwoLUmVhZFJlY2VpcHQSEgoKY2hhbm5lbF9pZBgBIAEoAxIPCgd1c2VyX2lkGAIgASgDEg8KB21zZ19zZXEYAyABKAMiOwoPUHJlc2VuY2VVcGRhdGVzEigKB3VwZGF0ZXMYASADKAsyFy54bXNnLnYxLlByZXNlbmNlVXBkYXRlInQKDFNlbmRSZWplY3RlZBIVCg1jbGllbnRfbXNnX2lkGAEgASgJEiUKBnJlYXNvbhgCIAEoDjIVLnhtc2cudjEuUmVqZWN0UmVhc29uEg4KBmRldGFpbBgDIAEoCRIWCg5yZXRyeV9hZnRlcl9tcxgEIAEoDSIgCgdTZW5kQWNrEhUKDWNsaWVudF9tc2dfaWQYASABKAkiLgoGUmVzeW5jEhYKCXBhcnRpdGlvbhgBIAEoDUgAiAEBQgwKCl9wYXJ0aXRpb24iGgoEUG9uZxISCgpzZW50X2F0X21zGAEgASgDQhUKEWRldi54bXNnLnByb3RvLnYxUAFiBnByb3RvMw", [file_xmsg_v1_enums, file_xmsg_v1_events, file_xmsg_v1_presence]);
 
 /**
  * Describes the message xmsg.v1.ClientFrame.
@@ -67,72 +67,86 @@ export const ActivitySchema = /*@__PURE__*/
   messageDesc(file_xmsg_v1_client, 6);
 
 /**
+ * Describes the message xmsg.v1.ViewChannel.
+ * Use `create(ViewChannelSchema)` to create a new message.
+ */
+export const ViewChannelSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_client, 7);
+
+/**
  * Describes the message xmsg.v1.Ping.
  * Use `create(PingSchema)` to create a new message.
  */
 export const PingSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 7);
+  messageDesc(file_xmsg_v1_client, 8);
 
 /**
  * Describes the message xmsg.v1.ServerFrame.
  * Use `create(ServerFrameSchema)` to create a new message.
  */
 export const ServerFrameSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 8);
+  messageDesc(file_xmsg_v1_client, 9);
+
+/**
+ * Describes the message xmsg.v1.ChannelBump.
+ * Use `create(ChannelBumpSchema)` to create a new message.
+ */
+export const ChannelBumpSchema = /*@__PURE__*/
+  messageDesc(file_xmsg_v1_client, 10);
 
 /**
  * Describes the message xmsg.v1.Welcome.
  * Use `create(WelcomeSchema)` to create a new message.
  */
 export const WelcomeSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 9);
+  messageDesc(file_xmsg_v1_client, 11);
 
 /**
  * Describes the message xmsg.v1.TypingIndicator.
  * Use `create(TypingIndicatorSchema)` to create a new message.
  */
 export const TypingIndicatorSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 10);
+  messageDesc(file_xmsg_v1_client, 12);
 
 /**
  * Describes the message xmsg.v1.ReadReceipt.
  * Use `create(ReadReceiptSchema)` to create a new message.
  */
 export const ReadReceiptSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 11);
+  messageDesc(file_xmsg_v1_client, 13);
 
 /**
  * Describes the message xmsg.v1.PresenceUpdates.
  * Use `create(PresenceUpdatesSchema)` to create a new message.
  */
 export const PresenceUpdatesSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 12);
+  messageDesc(file_xmsg_v1_client, 14);
 
 /**
  * Describes the message xmsg.v1.SendRejected.
  * Use `create(SendRejectedSchema)` to create a new message.
  */
 export const SendRejectedSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 13);
+  messageDesc(file_xmsg_v1_client, 15);
 
 /**
  * Describes the message xmsg.v1.SendAck.
  * Use `create(SendAckSchema)` to create a new message.
  */
 export const SendAckSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 14);
+  messageDesc(file_xmsg_v1_client, 16);
 
 /**
  * Describes the message xmsg.v1.Resync.
  * Use `create(ResyncSchema)` to create a new message.
  */
 export const ResyncSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 15);
+  messageDesc(file_xmsg_v1_client, 17);
 
 /**
  * Describes the message xmsg.v1.Pong.
  * Use `create(PongSchema)` to create a new message.
  */
 export const PongSchema = /*@__PURE__*/
-  messageDesc(file_xmsg_v1_client, 16);
+  messageDesc(file_xmsg_v1_client, 18);
 

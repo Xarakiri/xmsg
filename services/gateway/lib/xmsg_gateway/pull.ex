@@ -20,6 +20,10 @@ defmodule XmsgGateway.Pull do
     registers, and drops subscriptions without members every `@sweep_ms`. After a NATS
     reconnect it subscribes everything again.
 
+  Sockets get full events only for the channel their client has open (`ViewChannel`), and
+  membership changes always; for the others, at most one `ChannelBump` per channel per
+  5 s (plan §6.7).
+
   Frames on `ch.{id}` carry no stream sequence: clients notice a gap by the channel's
   `event_seq` and resync (ADR-0011), and drop duplicates the same way (both paths are
   used for a while around a mode switch).
@@ -29,7 +33,15 @@ defmodule XmsgGateway.Pull do
   require Logger
 
   alias XmsgGateway.Config
-  alias Xmsg.V1.PullControl
+  alias Xmsg.V1.{PullControl, SequencedEvent, ServerFrame}
+
+  @membership [
+    :channel_created,
+    :member_joined,
+    :member_left,
+    :member_role_changed,
+    :channel_mode_changed
+  ]
 
   @sweep_ms 30_000
   @retry_ms 1_000
@@ -177,8 +189,10 @@ defmodule XmsgGateway.Pull do
         relay(PullControl.decode(body))
 
       "ch." <> id ->
+        message = pull_event(String.to_integer(id), body)
+
         Registry.dispatch(members_registry(), String.to_integer(id), fn entries ->
-          for {pid, _} <- entries, do: send(pid, {:deliver, body})
+          for {pid, _} <- entries, do: send(pid, message)
         end)
     end
 
@@ -186,6 +200,21 @@ defmodule XmsgGateway.Pull do
   end
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  # Decoded once per gateway: sockets need the positions for bumps, and whether the event
+  # changes membership (those reach every member in full: their client must apply them).
+  defp pull_event(channel_id, body) do
+    case ServerFrame.decode(body) do
+      %ServerFrame{frame: {:event, %SequencedEvent{} = e}} ->
+        always = match?({kind, _} when kind in @membership, e.payload)
+        {:pull_event, channel_id, body, e.event_seq, e.msg_seq, always}
+
+      _ ->
+        {:pull_event, channel_id, body, 0, 0, true}
+    end
+  rescue
+    _ -> {:pull_event, channel_id, body, 0, 0, true}
+  end
 
   defp subscribe(state, channel_id) do
     case Config.bus().subscribe_ref("ch.#{channel_id}") do

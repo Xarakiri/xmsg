@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { SequencedEventSchema, type SequencedEvent } from "../src/gen/xmsg/v1/events_pb.js";
 import { ChannelType, MemberRole, RejectReason } from "../src/gen/xmsg/v1/enums_pb.js";
-import { initialState, reduce, unsent, type ChatState } from "../src/state.ts";
+import { canPost, initialState, needsCatchUp, reduce, unread, unsent, type ChatState } from "../src/state.ts";
 
 const ME = "101";
 const BOB = "102";
@@ -57,6 +57,7 @@ test("channel.created brings a channel with its name and members", () => {
     notifyLevel: "all",
     left: false,
     mentions: [],
+    roles: { "101": "admin", "102": "member" },
   });
 });
 
@@ -355,4 +356,61 @@ test("read receipts only move forward and never come from me", () => {
     s = reduce(s, { type: "receipt", channelId: "7", userId, msgSeq });
   }
   assert.deepEqual(s.channels["7"]!.seenBy, { "102": 5 });
+});
+
+test("bumps move a large channel's badge and mark it for catching up when opened", () => {
+  let s = reduce(initialState(ME), { type: "event", event: created, at: 1 });
+  const before = s.channels["7"]!;
+  assert.equal(needsCatchUp(before), false);
+  s = reduce(s, { type: "bump", channelId: "7", eventSeq: 9, msgSeq: 5 });
+  const after = s.channels["7"]!;
+  assert.equal(unread(after), 5);
+  assert.equal(needsCatchUp(after), true);
+  // Fetched (history through the head): caught up.
+  s = reduce(s, { type: "history", channelId: "7", events: [], through: 9, at: 2 });
+  assert.equal(needsCatchUp(s.channels["7"]!), false);
+  // An unknown channel's bump is ignored (the next sync lists it).
+  assert.deepEqual(reduce(s, { type: "bump", channelId: "99", eventSeq: 1, msgSeq: 1 }), s);
+});
+
+test("roles follow membership events, and only posters and admins post in broadcast channels", () => {
+  const broadcast = (init: MessageInitShape<typeof SequencedEventSchema>) =>
+    ev({ channelType: ChannelType.BROADCAST, ...init });
+  let s = reduce(initialState(ME), {
+    type: "event",
+    at: 1,
+    event: broadcast({
+      eventSeq: 1n,
+      actorId: 102n,
+      payload: {
+        case: "channelCreated",
+        value: {
+          type: ChannelType.BROADCAST,
+          members: [
+            { userId: 102n, role: MemberRole.ADMIN },
+            { userId: 101n, role: MemberRole.MEMBER },
+          ],
+        },
+      },
+    }),
+  });
+  let channel = s.channels["7"]!;
+  assert.deepEqual(channel.roles, { "102": "admin", "101": "member" });
+  assert.equal(canPost(channel, ME), false);
+  assert.equal(canPost(channel, BOB), true);
+
+  s = reduce(s, {
+    type: "event",
+    at: 2,
+    event: broadcast({ eventSeq: 2n, actorId: 102n, payload: { case: "memberRoleChanged", value: { userId: 101n, role: MemberRole.POSTER } } }),
+  });
+  channel = s.channels["7"]!;
+  assert.equal(channel.roles?.[ME], "poster");
+  assert.equal(canPost(channel, ME), true);
+
+  s = reduce(s, { type: "event", at: 3, event: broadcast({ eventSeq: 3n, actorId: 102n, payload: { case: "memberLeft", value: { userId: 101n } } }) });
+  assert.equal(s.channels["7"]!.roles?.[ME], undefined);
+  // Elsewhere anyone posts; an unseen role doesn't hide the composer (the server decides).
+  assert.equal(canPost({ ...channel, kind: "public" }, ME), true);
+  assert.equal(canPost({ ...channel, roles: {} }, ME), true);
 });

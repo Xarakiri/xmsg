@@ -3,11 +3,20 @@
 // (IDs as decimal strings, sequence numbers as numbers), so it can be saved and restored.
 
 import type { SequencedEvent } from "./gen/xmsg/v1/events_pb.js";
-import { ChannelType, RejectReason } from "./gen/xmsg/v1/enums_pb.js";
+import { ChannelType, MemberRole, RejectReason } from "./gen/xmsg/v1/enums_pb.js";
 
 export type NotifyLevel = "all" | "mentions" | "nothing";
 
 export type ChannelKind = "public" | "private" | "dm" | "group_dm" | "broadcast" | "unknown";
+
+/** A member's role in a channel; `poster` may post in a broadcast channel (plan §6.7). */
+export type Role = "member" | "poster" | "admin";
+
+const ROLES: Record<number, Role> = {
+  [MemberRole.MEMBER]: "member",
+  [MemberRole.POSTER]: "poster",
+  [MemberRole.ADMIN]: "admin",
+};
 
 export interface Channel {
   id: string;
@@ -33,6 +42,13 @@ export interface Channel {
   mentions: number[];
   /** DMs: how far each other member has read (read receipts, ADR-0012). */
   seenBy?: Record<string, number>;
+  /**
+   * The server's head as last heard (channel list, bumps): when it's past `syncedSeq`, the
+   * channel has events this client hasn't fetched yet (a large channel that wasn't open).
+   */
+  headSeq?: number;
+  /** Members' roles, as far as this client has seen membership events. */
+  roles?: Record<string, Role>;
 }
 
 export type MessageStatus = "pending" | "sent" | "confirmed" | "rejected" | "failed";
@@ -125,6 +141,7 @@ export type Action =
   | { type: "lostAccess"; channelId: string }
   /** Another member read a DM up to `msgSeq` (a read receipt). */
   | { type: "receipt"; channelId: string; userId: string; msgSeq: number }
+  | { type: "bump"; channelId: string; eventSeq: number; msgSeq: number }
   /** I added or removed a reaction: shown at once, the server's count follows (~1 s). */
   | { type: "react"; channelId: string; msgSeq: number; emoji: string; add: boolean }
   /** Unread mentions from the server (sync); merged as a set, so repeats change nothing. */
@@ -244,6 +261,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
           kind: known && known.kind !== "unknown" ? known.kind : listed.kind,
           name: known?.name || listed.name,
           msgSeq: Math.max(known?.msgSeq ?? 0, listed.msgSeq),
+          headSeq: Math.max(known?.headSeq ?? 0, listed.eventSeq),
           left: false,
         });
       }
@@ -256,6 +274,16 @@ export function reduce(state: ChatState, action: Action): ChatState {
         next = withChannel(next, { ...channel, syncedSeq: action.through, eventSeq: Math.max(channel.eventSeq, action.through) });
       }
       return next;
+    }
+    case "bump": {
+      // A large channel that isn't open moved on: the badge now, the events when opened.
+      const channel = state.channels[action.channelId];
+      if (!channel) return state;
+      return withChannel(state, {
+        ...channel,
+        msgSeq: Math.max(channel.msgSeq, action.msgSeq),
+        headSeq: Math.max(channel.headSeq ?? 0, action.eventSeq),
+      });
     }
     case "receipt": {
       const channel = state.channels[action.channelId];
@@ -363,7 +391,11 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
   // A channel we hear about first through a later event (e.g. we were invited).
   let channel = state.channels[channelId] ?? emptyChannel(channelId, kind);
   if (channel.kind === "unknown") channel = { ...channel, kind };
-  const membershipChange = payload.case === "channelCreated" || payload.case === "memberJoined" || payload.case === "memberLeft";
+  const membershipChange =
+    payload.case === "channelCreated" ||
+    payload.case === "memberJoined" ||
+    payload.case === "memberLeft" ||
+    payload.case === "memberRoleChanged";
   if (membershipChange && eventSeq <= channel.membershipSeq) {
     // Older than the membership we already have (history arriving after live events).
     return withChannel(state, seen(channel, eventSeq));
@@ -374,10 +406,12 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
   switch (payload.case) {
     case "channelCreated": {
       const members = payload.value.members.map((m) => m.userId.toString());
+      const roles = Object.fromEntries(payload.value.members.map((m) => [m.userId.toString(), ROLES[m.role] ?? "member"]));
       return withChannel(state, {
         ...channel,
         name: channel.name || payload.value.name,
         members: members.length ? members : payload.value.initialMemberIds.map(String),
+        roles,
       });
     }
     case "memberJoined": {
@@ -385,15 +419,22 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
       // Joining: what came before isn't unread.
       if (user === state.me) channel = { ...channel, readSeq: Math.max(channel.readSeq, channel.msgSeq) };
       const members = channel.members.includes(user) ? channel.members : [...channel.members, user];
-      return withChannel(state, { ...channel, members, left: user === state.me ? false : channel.left });
+      const roles = { ...channel.roles, [user]: ROLES[payload.value.role] ?? "member" };
+      return withChannel(state, { ...channel, members, roles, left: user === state.me ? false : channel.left });
     }
     case "memberLeft": {
       const user = payload.value.userId.toString();
+      const { [user]: _gone, ...roles } = channel.roles ?? {};
       return withChannel(state, {
         ...channel,
         members: channel.members.filter((m) => m !== user),
+        roles,
         left: user === state.me ? true : channel.left,
       });
+    }
+    case "memberRoleChanged": {
+      const user = payload.value.userId.toString();
+      return withChannel(state, { ...channel, roles: { ...channel.roles, [user]: ROLES[payload.value.role] ?? "member" } });
     }
     case "messageCreated": {
       const msgSeq = Number(e.msgSeq);
@@ -545,6 +586,21 @@ export function behind(state: ChatState, listed: ListedChannel[]): { id: string;
 
 function isStale(m: Message, me: string, now: number): boolean {
   return m.authorId === me && m.msgSeq === 0 && (m.status === "pending" || m.status === "sent") && now - m.at > OUTBOX_RETRY_MS;
+}
+
+/** Whether the channel has events this client hasn't fetched (a bumped large channel). */
+export function needsCatchUp(channel: Channel): boolean {
+  return (channel.headSeq ?? 0) > channel.syncedSeq;
+}
+
+/**
+ * Whether `user` may post in the channel: in a broadcast channel only posters and admins
+ * (plan §6.7). A role this client hasn't seen counts as allowed; the server decides.
+ */
+export function canPost(channel: Channel, user: string): boolean {
+  if (channel.kind !== "broadcast") return true;
+  const role = channel.roles?.[user];
+  return role === undefined || role === "poster" || role === "admin";
 }
 
 /** Unread messages in a channel (ADR-0012: the head minus the read position). */

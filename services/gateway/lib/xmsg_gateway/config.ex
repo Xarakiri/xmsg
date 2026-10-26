@@ -56,6 +56,9 @@ defmodule XmsgGateway.Config do
   @doc "The channels service, for each user's pull-mode channels; nil = pull mode off here."
   def channels_url, do: Application.get_env(:xmsg_gateway, :channels_url)
 
+  @doc "At most one \"channel updated\" bump per pull-mode channel this often (plan §6.7)."
+  def bump_ms, do: Application.get_env(:xmsg_gateway, :bump_ms, 5_000)
+
   @doc "Where typing goes: the fan-out instance owning the channel's partition (plan §5.9)."
   def typing_subject(channel_id),
     do: "typing.#{XmsgGateway.Partition.partition(channel_id, partition_count())}"

@@ -96,6 +96,7 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .message .edit textarea { width: 100%; min-width: 40ch; font: inherit; }
 .message .edit .row { gap: 8px; margin-top: 4px; }
 .composer { display: flex; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--panel); }
+.composer-note { margin: 0; padding: 14px 20px; border-top: 1px solid var(--border); background: var(--panel); }
 .composer textarea { resize: none; }
 
 @media (max-width: 700px) {
