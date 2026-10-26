@@ -9,6 +9,7 @@ import {
   SyncScheduler,
   TypingTracker,
   inPartition,
+  needsCatchUp,
   reduce,
   sync,
   unsent,
@@ -30,6 +31,7 @@ export function useChat(me: string, initial: ChatState) {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [syncError, setSyncError] = useState(false);
   const conn = useRef<Connection | null>(null);
+  const syncs = useRef<SyncScheduler | null>(null);
   // Typing indicators live only in memory: never saved, never part of the chat state.
   const typing = useRef(new TypingTracker());
   const [typingTick, setTypingTick] = useState(0);
@@ -49,6 +51,7 @@ export function useChat(me: string, initial: ChatState) {
           throw e;
         }),
     );
+    syncs.current = scheduler;
     const connection = new Connection({
       url: gatewayUrl(),
       token: () => session.accessToken(),
@@ -61,6 +64,7 @@ export function useChat(me: string, initial: ChatState) {
         dispatch({ type: "event", event, at: Date.now() });
       },
       onReceipt: (channelId, userId, msgSeq) => dispatch({ type: "receipt", channelId, userId, msgSeq }),
+      onBump: (channelId, eventSeq, msgSeq) => dispatch({ type: "bump", channelId, eventSeq, msgSeq }),
       onPresence: (updates) =>
         setPresence((p) => {
           const next = { ...p };
@@ -134,6 +138,16 @@ export function useChat(me: string, initial: ChatState) {
   const watchPresence = (userIds: string[]) => conn.current?.watchPresence(userIds);
   const presenceOf = (userId: string): Presence => presence[userId] ?? "offline";
 
+  /**
+   * The channel on screen (null: none, or the tab is hidden). Large channels send full
+   * events only for it; opening one that moved on meanwhile fetches what it missed.
+   */
+  const view = (channelId: string | null) => {
+    conn.current?.view(channelId);
+    const channel = channelId ? latest.current.channels[channelId] : undefined;
+    if (channel && needsCatchUp(channel)) syncs.current?.request((id) => id === channelId);
+  };
+
   /** Who else is typing in the channel now. */
   const typingIn = (channelId: string) => typing.current.who(channelId);
   /** Call on every keystroke in the composer; the connection throttles. */
@@ -204,5 +218,5 @@ export function useChat(me: string, initial: ChatState) {
     conn.current?.send(message.channelId, newKey, message.body, message.threadRoot);
   };
 
-  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf };
+  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, view };
 }

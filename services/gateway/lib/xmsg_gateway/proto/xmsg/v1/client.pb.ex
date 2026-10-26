@@ -17,6 +17,7 @@ defmodule Xmsg.V1.ClientFrame do
   field :watch_presence, 5, type: Xmsg.V1.WatchPresence, json_name: "watchPresence", oneof: 0
   field :activity, 6, type: Xmsg.V1.Activity, oneof: 0
   field :receipt, 7, type: Xmsg.V1.Receipt, oneof: 0
+  field :view_channel, 8, type: Xmsg.V1.ViewChannel, json_name: "viewChannel", oneof: 0
 end
 
 defmodule Xmsg.V1.Connect do
@@ -83,6 +84,17 @@ defmodule Xmsg.V1.Activity do
   field :active, 1, type: :bool
 end
 
+defmodule Xmsg.V1.ViewChannel do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ViewChannel",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_id, 1, type: :int64, json_name: "channelId"
+end
+
 defmodule Xmsg.V1.Ping do
   @moduledoc false
 
@@ -110,6 +122,20 @@ defmodule Xmsg.V1.ServerFrame do
   field :typing, 7, type: Xmsg.V1.TypingIndicator, oneof: 0
   field :presence, 8, type: Xmsg.V1.PresenceUpdates, oneof: 0
   field :receipt, 9, type: Xmsg.V1.ReadReceipt, oneof: 0
+  field :bump, 10, type: Xmsg.V1.ChannelBump, oneof: 0
+end
+
+defmodule Xmsg.V1.ChannelBump do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.ChannelBump",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :channel_id, 1, type: :int64, json_name: "channelId"
+  field :event_seq, 2, type: :int64, json_name: "eventSeq"
+  field :msg_seq, 3, type: :int64, json_name: "msgSeq"
 end
 
 defmodule Xmsg.V1.Welcome do

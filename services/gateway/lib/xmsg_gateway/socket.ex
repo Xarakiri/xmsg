@@ -26,6 +26,8 @@ defmodule XmsgGateway.Socket do
     Typing,
     TypingIndicator,
     Activity,
+    ChannelBump,
+    ViewChannel,
     PresenceUpdates,
     ReadReceipt,
     Receipt,
@@ -61,6 +63,11 @@ defmodule XmsgGateway.Socket do
        # was removed from while connected.
        pull: %{},
        pull_denied: MapSet.new(),
+       # The channel the client has open, and per pull-mode channel the last bump's time
+       # and the positions still to send.
+       # :all until the client sends ViewChannel: older clients get every event in full.
+       viewing: :all,
+       bumps: %{},
        budget: {Config.frame_burst() * 1.0, System.monotonic_time(:millisecond)}
      }}
   end
@@ -75,6 +82,32 @@ defmodule XmsgGateway.Socket do
 
   def handle_in({_data, opcode: :text}, state) do
     {:stop, :normal, {@close_policy, "binary protobuf frames only"}, state}
+  end
+
+  # Sent now if the channel's last bump is old enough; otherwise kept (the latest
+  # positions win) and sent when the interval ends.
+  defp bump(state, channel_id, event_seq, msg_seq) do
+    now = System.monotonic_time(:millisecond)
+    interval = Config.bump_ms()
+
+    case Map.get(state.bumps, channel_id) do
+      {at, _} when now - at < interval ->
+        pending = state.bumps[channel_id] |> elem(1)
+
+        if pending == nil,
+          do: Process.send_after(self(), {:flush_bump, channel_id}, at + interval - now)
+
+        {:ok, put_in(state.bumps[channel_id], {at, {event_seq, msg_seq}})}
+
+      _ ->
+        state = put_in(state.bumps[channel_id], {now, nil})
+        {:push, {:binary, bump_frame(channel_id, event_seq, msg_seq)}, state}
+    end
+  end
+
+  defp bump_frame(channel_id, event_seq, msg_seq) do
+    bump = %ChannelBump{channel_id: channel_id, event_seq: event_seq, msg_seq: msg_seq}
+    encode(%ServerFrame{frame: {:bump, bump}})
   end
 
   defp pull_join(state, channel_id, workspace_id) do
@@ -107,6 +140,33 @@ defmodule XmsgGateway.Socket do
   @impl true
   def handle_info({:deliver, frame}, %{user_id: id} = state) when not is_nil(id) do
     {:push, {:binary, frame}, state}
+  end
+
+  # A pull-mode channel's event (XmsgGateway.Pull): in full for the open channel and for
+  # membership changes, otherwise a bump at most every Config.bump_ms() per channel.
+  def handle_info({:pull_event, channel_id, frame, event_seq, msg_seq, always}, state) do
+    cond do
+      state.user_id == nil ->
+        {:ok, state}
+
+      always or state.viewing in [:all, channel_id] ->
+        {:push, {:binary, frame}, state}
+
+      true ->
+        bump(state, channel_id, event_seq, msg_seq)
+    end
+  end
+
+  def handle_info({:flush_bump, channel_id}, state) do
+    case state.bumps do
+      %{^channel_id => {_at, {event_seq, msg_seq}}} ->
+        now = System.monotonic_time(:millisecond)
+        state = put_in(state.bumps[channel_id], {now, nil})
+        {:push, {:binary, bump_frame(channel_id, event_seq, msg_seq)}, state}
+
+      _ ->
+        {:ok, state}
+    end
   end
 
   # Pull-mode channels (XmsgGateway.Pull): the list at connect, then fan-out's changes.
@@ -297,6 +357,11 @@ defmodule XmsgGateway.Socket do
         publish_receipt(state.user_id, channel_id, seq)
         {:ok, put_in(state.receipts[channel_id], {now, seq, seq})}
     end
+  end
+
+  # The channel the client has open (0: none): pull-mode events for it arrive in full.
+  defp handle_frame({:view_channel, %ViewChannel{channel_id: channel_id}}, state) do
+    {:ok, %{state | viewing: if(channel_id > 0, do: channel_id)}}
   end
 
   defp handle_frame({:activity, %Activity{active: active}}, state) do

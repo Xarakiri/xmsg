@@ -66,6 +66,12 @@ export declare type ClientFrame = Message<"xmsg.v1.ClientFrame"> & {
      */
     value: Receipt;
     case: "receipt";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.ViewChannel view_channel = 8;
+     */
+    value: ViewChannel;
+    case: "viewChannel";
   } | { case: undefined; value?: undefined };
 };
 
@@ -223,6 +229,26 @@ export declare type Activity = Message<"xmsg.v1.Activity"> & {
 export declare const ActivitySchema: GenMessage<Activity>;
 
 /**
+ * The channel the user has open (0: none). In pull-mode channels (ADR-0008) the gateway
+ * sends full events only for this one, and a ChannelBump for the others. Sent again
+ * after every reconnect.
+ *
+ * @generated from message xmsg.v1.ViewChannel
+ */
+export declare type ViewChannel = Message<"xmsg.v1.ViewChannel"> & {
+  /**
+   * @generated from field: int64 channel_id = 1;
+   */
+  channelId: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.ViewChannel.
+ * Use `create(ViewChannelSchema)` to create a new message.
+ */
+export declare const ViewChannelSchema: GenMessage<ViewChannel>;
+
+/**
  * @generated from message xmsg.v1.Ping
  */
 export declare type Ping = Message<"xmsg.v1.Ping"> & {
@@ -299,6 +325,12 @@ export declare type ServerFrame = Message<"xmsg.v1.ServerFrame"> & {
      */
     value: ReadReceipt;
     case: "receipt";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.ChannelBump bump = 10;
+     */
+    value: ChannelBump;
+    case: "bump";
   } | { case: undefined; value?: undefined };
 };
 
@@ -307,6 +339,36 @@ export declare type ServerFrame = Message<"xmsg.v1.ServerFrame"> & {
  * Use `create(ServerFrameSchema)` to create a new message.
  */
 export declare const ServerFrameSchema: GenMessage<ServerFrame>;
+
+/**
+ * A pull-mode channel the user doesn't have open got new events (plan §6.7): at most one
+ * per channel per 5 s, with the latest positions. The client updates its unread count and
+ * fetches the events when the channel is opened.
+ *
+ * @generated from message xmsg.v1.ChannelBump
+ */
+export declare type ChannelBump = Message<"xmsg.v1.ChannelBump"> & {
+  /**
+   * @generated from field: int64 channel_id = 1;
+   */
+  channelId: bigint;
+
+  /**
+   * @generated from field: int64 event_seq = 2;
+   */
+  eventSeq: bigint;
+
+  /**
+   * @generated from field: int64 msg_seq = 3;
+   */
+  msgSeq: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.ChannelBump.
+ * Use `create(ChannelBumpSchema)` to create a new message.
+ */
+export declare const ChannelBumpSchema: GenMessage<ChannelBump>;
 
 /**
  * @generated from message xmsg.v1.Welcome

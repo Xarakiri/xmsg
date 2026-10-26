@@ -10,6 +10,7 @@ config :xmsg_gateway,
   bus: XmsgGateway.Bus.Local,
   sessions: XmsgGateway.Sessions.Local,
   # The test run ends without a long drain.
-  drain_seconds: 0
+  drain_seconds: 0,
+  bump_ms: 300
 
 config :logger, level: :warning

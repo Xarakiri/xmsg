@@ -68,6 +68,11 @@ export interface ConnectionHandlers {
   onReceipt?(channelId: string, userId: string, msgSeq: number): void;
   /** Statuses of watched users: the current ones after watchPresence, then changes. */
   onPresence?(updates: { userId: string; status: Presence }[]): void;
+  /**
+   * A pull-mode channel that isn't open got new events (plan §6.7; at most one per
+   * channel per 5 s): its positions now, the events themselves come when it's opened.
+   */
+  onBump?(channelId: string, eventSeq: number, msgSeq: number): void;
 }
 
 export type Presence = "online" | "away" | "offline";
@@ -193,6 +198,24 @@ export class Connection {
     this.sendActivity();
   }
 
+  /**
+   * The channel the user has open (null: none). In large channels the gateway sends full
+   * events only for this one, and bumps for the rest. Kept across reconnects. A client
+   * that never calls this gets every event in full.
+   */
+  view(channelId: string | null): void {
+    if (channelId === this.viewing) return;
+    this.viewing = channelId;
+    this.sendView();
+  }
+  private viewing: string | null | undefined = undefined;
+
+  private sendView(): void {
+    if (!this.online || !this.ws) return;
+    const frame = create(ClientFrameSchema, { frame: { case: "viewChannel", value: { channelId: BigInt(this.viewing ?? 0) } } });
+    this.ws.send(toBinary(ClientFrameSchema, frame) as Frame);
+  }
+
   private sendWatch(): void {
     if (!this.online || !this.ws) return;
     const frame = create(ClientFrameSchema, { frame: { case: "watchPresence", value: { userIds: this.watched.map(BigInt) } } });
@@ -254,9 +277,10 @@ export class Connection {
         this.online = true;
         this.attempt = 0;
         this.startPings();
-        // A new connection starts active and watching nobody: restore both.
+        // A new connection starts active, watching nobody, with nothing open: restore all three.
         if (!this.active) this.sendActivity();
         if (this.watched.length) this.sendWatch();
+        if (this.viewing !== undefined) this.sendView();
         this.opts.onStatus("online");
         break;
       case "event":
@@ -280,6 +304,13 @@ export class Connection {
         this.opts.onReceipt?.(
           frame.frame.value.channelId.toString(),
           frame.frame.value.userId.toString(),
+          Number(frame.frame.value.msgSeq),
+        );
+        break;
+      case "bump":
+        this.opts.onBump?.(
+          frame.frame.value.channelId.toString(),
+          Number(frame.frame.value.eventSeq),
           Number(frame.frame.value.msgSeq),
         );
         break;

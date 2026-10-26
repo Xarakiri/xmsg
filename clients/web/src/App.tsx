@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, fromSsoFragment, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit } from "@xmsg/client-core";
+import { ApiError, canPost, fromSsoFragment, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 import { disablePush, enablePush, pushState, type PushState } from "./push.ts";
 import { loadState } from "./storage.ts";
@@ -143,9 +143,16 @@ function channelTitle(c: Channel, me: string, names: Directory): string {
   return `Channel …${c.id.slice(-6)}`;
 }
 
-/** "Ada, Bob, You and 4 more" */
-function memberList(members: string[], me: string, names: Directory, shown = 5): string {
-  const labels = members.slice(0, shown).map((m) => (m === me ? "You" : names.label(m)));
+/** A member's name, with their role when it isn't plain member: "Ada (admin)". */
+function memberLabel(member: string, me: string, names: Directory, roles?: Channel["roles"]): string {
+  const name = member === me ? "You" : names.label(member);
+  const role = roles?.[member];
+  return role && role !== "member" ? `${name} (${role})` : name;
+}
+
+/** "Ada (admin), Bob, You and 4 more" */
+function memberList(members: string[], me: string, names: Directory, roles?: Channel["roles"], shown = 5): string {
+  const labels = members.slice(0, shown).map((m) => memberLabel(m, me, names, roles));
   const more = members.length - labels.length;
   return more > 0 ? `${labels.join(", ")} and ${more} more` : labels.join(", ");
 }
@@ -161,7 +168,7 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
 }
 
 function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf } = useChat(me, initial);
+  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, view } = useChat(me, initial);
   // Search (plan §5.12): results replace the conversation until one is picked or closed.
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
@@ -203,6 +210,15 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
     return [...ids].sort().slice(0, 200);
   }, [channels, current, me]);
   useEffect(() => watchPresence(watched), [watched.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The channel on screen (none while the tab is hidden): large channels send full events
+  // only for it, and a channel that moved on meanwhile catches up when opened (plan §6.7).
+  useEffect(() => {
+    const update = () => view(document.visibilityState === "visible" ? (current?.id ?? null) : null);
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, [current?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The open channel is read while the tab is visible (debounced, so a burst of
   // messages costs one update; also when the tab comes back).
@@ -571,8 +587,9 @@ function Conversation({
       <header className="conv-header">
         <div>
           <div className="strong">{channelTitle(channel, me, names)}</div>
-          <div className="muted small" title={channel.members.map((m) => (m === me ? "You" : names.label(m))).join(", ")}>
-            {channel.members.length} member{channel.members.length === 1 ? "" : "s"} · {channel.kind.replace("_", " ")} · {memberList(channel.members, me, names)}
+          <div className="muted small" title={channel.members.map((m) => memberLabel(m, me, names, channel.roles)).join(", ")}>
+            {channel.members.length} member{channel.members.length === 1 ? "" : "s"} · {channel.kind.replace("_", " ")} ·{" "}
+            {memberList(channel.members, me, names, channel.roles)}
           </div>
         </div>
         <div className="row">
@@ -669,24 +686,29 @@ function Conversation({
       <div className="typing muted small" aria-live="polite">
         {typing.length > 0 && typingText(typing.map((u) => names.label(u)))}
       </div>
-      <form className="composer" onSubmit={submit}>
-        <textarea
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            if (e.target.value.trim()) onTyping();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) submit(e);
-          }}
-          placeholder={`Message ${channelTitle(channel, me, names)}`}
-          rows={2}
-          aria-label="Message"
-        />
-        <button className="primary" disabled={!draft.trim()}>
-          Send
-        </button>
-      </form>
+      {!canPost(channel, me) ? (
+        // Broadcast channels (plan §6.7): only posters and admins post; the rest read.
+        <p className="composer-note muted small">Only posters and admins post in this broadcast channel.</p>
+      ) : (
+        <form className="composer" onSubmit={submit}>
+          <textarea
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              if (e.target.value.trim()) onTyping();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) submit(e);
+            }}
+            placeholder={`Message ${channelTitle(channel, me, names)}`}
+            rows={2}
+            aria-label="Message"
+          />
+          <button className="primary" disabled={!draft.trim()}>
+            Send
+          </button>
+        </form>
+      )}
     </section>
   );
 }

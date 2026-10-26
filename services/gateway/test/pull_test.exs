@@ -6,8 +6,13 @@ defmodule XmsgGateway.PullTest do
 
   alias Xmsg.V1.{
     AuthEvent,
+    ChannelBump,
     ClientFrame,
     Connect,
+    MemberJoined,
+    MessageCreated,
+    SequencedEvent,
+    ViewChannel,
     Pong,
     PullControl,
     ServerFrame,
@@ -152,6 +157,69 @@ defmodule XmsgGateway.PullTest do
     # Another workspace's channel is untouched.
     Bus.Local.publish("ch.9722", frame(7))
     assert {_c, 7} = next_pong(c)
+  end
+
+  defp event(channel_id, event_seq, payload) do
+    ServerFrame.encode(%ServerFrame{
+      frame:
+        {:event,
+         %SequencedEvent{
+           channel_id: channel_id,
+           event_seq: event_seq,
+           msg_seq: event_seq,
+           payload: payload
+         }}
+    })
+  end
+
+  defp message(channel_id, n),
+    do: event(channel_id, n, {:message_created, %MessageCreated{body: "m#{n}"}})
+
+  defp next_frame(c, timeout \\ 500) do
+    case WsClient.recv(c, timeout) do
+      {c, {:binary, bin}} -> {c, ServerFrame.decode(bin).frame}
+      {c, other} -> {c, other}
+    end
+  end
+
+  test "members not viewing a pull-mode channel get a bump at most every interval", %{port: port} do
+    c = connect_as(port, 731)
+    # Until a client says what it views it gets everything in full (older clients).
+    control(731, 9731, true)
+    assert eventually(fn -> Registry.lookup(Pull.members_registry(), 9731) != [] end)
+    Bus.Local.publish("ch.9731", message(9731, 0))
+    assert {c, {:event, %SequencedEvent{event_seq: 0}}} = next_frame(c)
+    c = WsClient.send_frame(c, %ClientFrame{frame: {:view_channel, %ViewChannel{channel_id: 0}}})
+    Process.sleep(50)
+    control(731, 9731, true)
+    assert eventually(fn -> Registry.lookup(Pull.members_registry(), 9731) != [] end)
+
+    # Not open: the first event is a bump with its positions; the next ones within the
+    # interval fold into one more bump carrying the latest.
+    Bus.Local.publish("ch.9731", message(9731, 1))
+    assert {c, {:bump, %ChannelBump{channel_id: 9731, event_seq: 1, msg_seq: 1}}} = next_frame(c)
+    Bus.Local.publish("ch.9731", message(9731, 2))
+    Bus.Local.publish("ch.9731", message(9731, 3))
+    assert {c, :timeout} = next_frame(c, 150)
+    assert {c, {:bump, %ChannelBump{event_seq: 3}}} = next_frame(c, 1_000)
+
+    # Membership changes always arrive in full.
+    Bus.Local.publish("ch.9731", event(9731, 4, {:member_joined, %MemberJoined{user_id: 9}}))
+    assert {c, {:event, %SequencedEvent{event_seq: 4}}} = next_frame(c)
+
+    # Open: full events.
+    c =
+      WsClient.send_frame(c, %ClientFrame{frame: {:view_channel, %ViewChannel{channel_id: 9731}}})
+
+    Process.sleep(50)
+    Bus.Local.publish("ch.9731", message(9731, 5))
+    assert {c, {:event, %SequencedEvent{event_seq: 5}}} = next_frame(c)
+
+    # Closed again (0): bumps again.
+    c = WsClient.send_frame(c, %ClientFrame{frame: {:view_channel, %ViewChannel{channel_id: 0}}})
+    Process.sleep(350)
+    Bus.Local.publish("ch.9731", message(9731, 6))
+    assert {_c, {:bump, %ChannelBump{event_seq: 6}}} = next_frame(c)
   end
 
   test "the channels service's answer is parsed" do

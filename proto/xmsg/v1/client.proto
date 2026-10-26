@@ -21,6 +21,7 @@ message ClientFrame {
     WatchPresence watch_presence = 5;
     Activity activity = 6;
     Receipt receipt = 7;
+    ViewChannel view_channel = 8;
   }
 }
 
@@ -66,6 +67,13 @@ message Activity {
   bool active = 1;
 }
 
+// The channel the user has open (0: none). In pull-mode channels (ADR-0008) the gateway
+// sends full events only for this one, and a ChannelBump for the others. Sent again
+// after every reconnect.
+message ViewChannel {
+  int64 channel_id = 1;
+}
+
 message Ping {
   int64 sent_at_ms = 1;
 }
@@ -81,7 +89,17 @@ message ServerFrame {
     TypingIndicator typing = 7;
     PresenceUpdates presence = 8;
     ReadReceipt receipt = 9;
+    ChannelBump bump = 10;
   }
+}
+
+// A pull-mode channel the user doesn't have open got new events (plan §6.7): at most one
+// per channel per 5 s, with the latest positions. The client updates its unread count and
+// fetches the events when the channel is opened.
+message ChannelBump {
+  int64 channel_id = 1;
+  int64 event_seq = 2;
+  int64 msg_seq = 3;
 }
 
 message Welcome {
