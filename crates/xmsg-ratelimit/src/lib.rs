@@ -288,7 +288,8 @@ mod tests {
             Limiter::valkey(&url, &prefix).await.unwrap(),
             Limiter::valkey(&url, &prefix).await.unwrap(),
         );
-        let rule = Rule::new(2, Duration::from_secs(60));
+        // A year-long window: a short one could end between the checks.
+        let rule = Rule::new(2, Duration::from_secs(365 * 24 * 3600));
         assert!(a.check("ann", rule).await.is_allowed());
         assert!(b.check("ann", rule).await.is_allowed());
         assert!(

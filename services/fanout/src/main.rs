@@ -207,6 +207,8 @@ async fn main() -> ExitCode {
     let mut streams = Streams::default();
     let mut heads_tick = tokio::time::interval(Duration::from_secs(1));
     let mut announced = false;
+    // Pull-mode subscribers too new to rely on ch.{id} yet (ADR-0008).
+    let mut fresh = xmsg_fanout::Fresh::default();
     // Channels that switched push/pull moments ago (ADR-0008).
     let mut switched: std::collections::HashMap<i64, std::time::Instant> =
         std::collections::HashMap::new();
@@ -298,6 +300,15 @@ async fn main() -> ExitCode {
             .get(&event.channel_id)
             .is_some_and(|at| now.duration_since(*at) < DUAL_PUBLISH);
         let mut route = plan(&event, &members, dual);
+        // Just subscribed: their gateway may not be listening on ch.{id} yet.
+        if route.publish_channel {
+            route.push.extend(
+                fresh
+                    .users(event.channel_id, now)
+                    .into_iter()
+                    .filter(|u| members.contains(u)),
+            );
+        }
         deny.filter(event.workspace_id, &mut route.push);
 
         // Encoded once, the same bytes for every recipient on every gateway.
@@ -307,6 +318,13 @@ async fn main() -> ExitCode {
         .encode_to_vec();
         // Subscriptions first, so a joiner's gateway is listening as soon as it can be.
         send_controls(&nats, &sessions, &deny, &event, &route.controls).await;
+        for &(user, subscribe) in &route.controls {
+            if subscribe {
+                fresh.note(event.channel_id, user, now);
+            } else {
+                fresh.forget(event.channel_id, user);
+            }
+        }
         if route.publish_channel
             && let Err(e) = nats
                 .publish(format!("ch.{}", event.channel_id), frame.clone().into())
