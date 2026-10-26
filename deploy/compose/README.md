@@ -44,6 +44,7 @@ It asks for the domain and how to get the TLS certificate (Let's Encrypt, your o
 ./install.sh --yes --domain chat.example.com --tls acme --email ops@example.com
 ./install.sh --yes --domain chat.internal --tls cert --cert ./chat.pem --key ./chat-key.pem
 ./install.sh --yes --registry registry.example.com/xmsg --version 0.4.0   # published images
+./install.sh --search                                                    # with search (+1.5 GB)
 ```
 
 Back up `.env` together with the data: without its signing key every session ends, and without its Postgres password the database doesn't open.
