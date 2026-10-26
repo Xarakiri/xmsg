@@ -269,6 +269,7 @@ jobs:
           XMSG_GATEWAY_URL: ws://localhost:8080/ws
           XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_EXPECT_OUTBOX_RELAY: "true"
+          XMSG_PUSH_MOCK_HOST: host.docker.internal
         run: ./target/release/xmsg-e2e-smoke
       - name: Show logs on failure
         if: failure()
