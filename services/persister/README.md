@@ -14,6 +14,7 @@ Phase 1a ([plan §5.7](../../docs/architecture-plan.md)). Reads `messages.persis
 | `message.deleted` | `messages` body cleared, `deleted = true`; the event (it has no body); head |
 | `channel.created` | `members_by_channel` + `channels_by_user` for each initial member (roles from the sequencer); event; head |
 | `member.joined` / `member.left` | membership rows added / removed; event; head |
+| `member.role_changed` | `members_by_channel.role` (nothing else of the row); event; head |
 | `channel.mode_changed` | `channels_by_user.fanout_mode` for every member; event; head |
 | rejections (`event_seq` 0) | nothing |
 

@@ -29,6 +29,7 @@ message InboundEvent {
     ReactionBatch reaction_batch = 16;
     EditMessage edit_message = 14;
     DeleteMessage delete_message = 15;
+    MemberRoleChangeRequested member_role_change_requested = 17;
   }
 }
 
@@ -94,6 +95,14 @@ message MemberKickRequested {
   int64 user_id = 1;
 }
 
+// A channel admin sets `user_id`'s role: member, poster (who may post in a broadcast
+// channel) or admin. Nobody changes their own role (a channel never loses its last admin
+// that way).
+message MemberRoleChangeRequested {
+  int64 user_id = 1;
+  MemberRole role = 2;
+}
+
 // Output of the sequencer. Topic `messages.persisted`, same key and partition.
 message SequencedEvent {
   int64 channel_id = 1;
@@ -122,6 +131,7 @@ message SequencedEvent {
     ThreadReply thread_reply = 20;
     MessageEdited message_edited = 17;
     MessageDeleted message_deleted = 18;
+    MemberRoleChanged member_role_changed = 21;
   }
 }
 
@@ -152,6 +162,11 @@ message MessageCreated {
 }
 
 message MemberJoined {
+  int64 user_id = 1;
+  MemberRole role = 2;
+}
+
+message MemberRoleChanged {
   int64 user_id = 1;
   MemberRole role = 2;
 }

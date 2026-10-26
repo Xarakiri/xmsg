@@ -99,6 +99,12 @@ export declare type InboundEvent = Message<"xmsg.v1.InboundEvent"> & {
      */
     value: DeleteMessage;
     case: "deleteMessage";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.MemberRoleChangeRequested member_role_change_requested = 17;
+     */
+    value: MemberRoleChangeRequested;
+    case: "memberRoleChangeRequested";
   } | { case: undefined; value?: undefined };
 };
 
@@ -344,6 +350,31 @@ export declare type MemberKickRequested = Message<"xmsg.v1.MemberKickRequested">
 export declare const MemberKickRequestedSchema: GenMessage<MemberKickRequested>;
 
 /**
+ * A channel admin sets `user_id`'s role: member, poster (who may post in a broadcast
+ * channel) or admin. Nobody changes their own role (a channel never loses its last admin
+ * that way).
+ *
+ * @generated from message xmsg.v1.MemberRoleChangeRequested
+ */
+export declare type MemberRoleChangeRequested = Message<"xmsg.v1.MemberRoleChangeRequested"> & {
+  /**
+   * @generated from field: int64 user_id = 1;
+   */
+  userId: bigint;
+
+  /**
+   * @generated from field: xmsg.v1.MemberRole role = 2;
+   */
+  role: MemberRole;
+};
+
+/**
+ * Describes the message xmsg.v1.MemberRoleChangeRequested.
+ * Use `create(MemberRoleChangeRequestedSchema)` to create a new message.
+ */
+export declare const MemberRoleChangeRequestedSchema: GenMessage<MemberRoleChangeRequested>;
+
+/**
  * Output of the sequencer. Topic `messages.persisted`, same key and partition.
  *
  * @generated from message xmsg.v1.SequencedEvent
@@ -469,6 +500,12 @@ export declare type SequencedEvent = Message<"xmsg.v1.SequencedEvent"> & {
      */
     value: MessageDeleted;
     case: "messageDeleted";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.MemberRoleChanged member_role_changed = 21;
+     */
+    value: MemberRoleChanged;
+    case: "memberRoleChanged";
   } | { case: undefined; value?: undefined };
 };
 
@@ -593,6 +630,27 @@ export declare type MemberJoined = Message<"xmsg.v1.MemberJoined"> & {
  * Use `create(MemberJoinedSchema)` to create a new message.
  */
 export declare const MemberJoinedSchema: GenMessage<MemberJoined>;
+
+/**
+ * @generated from message xmsg.v1.MemberRoleChanged
+ */
+export declare type MemberRoleChanged = Message<"xmsg.v1.MemberRoleChanged"> & {
+  /**
+   * @generated from field: int64 user_id = 1;
+   */
+  userId: bigint;
+
+  /**
+   * @generated from field: xmsg.v1.MemberRole role = 2;
+   */
+  role: MemberRole;
+};
+
+/**
+ * Describes the message xmsg.v1.MemberRoleChanged.
+ * Use `create(MemberRoleChangedSchema)` to create a new message.
+ */
+export declare const MemberRoleChangedSchema: GenMessage<MemberRoleChanged>;
 
 /**
  * @generated from message xmsg.v1.MemberLeft

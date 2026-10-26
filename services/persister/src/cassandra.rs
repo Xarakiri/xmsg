@@ -26,6 +26,7 @@ pub struct Store {
     update_message_body: PreparedStatement,
     delete_message: PreparedStatement,
     insert_member_by_channel: PreparedStatement,
+    update_member_role: PreparedStatement,
     insert_channel_by_user: PreparedStatement,
     delete_member_by_channel: PreparedStatement,
     delete_channel_by_user: PreparedStatement,
@@ -111,6 +112,10 @@ impl Store {
             .await?,
             insert_member_by_channel: prepare(format!(
                 "INSERT INTO {k}.members_by_channel (channel_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)"
+            ))
+            .await?,
+            update_member_role: prepare(format!(
+                "UPDATE {k}.members_by_channel SET role = ? WHERE channel_id = ? AND user_id = ?"
             ))
             .await?,
             insert_channel_by_user: prepare(format!(
@@ -354,6 +359,14 @@ impl Store {
                     ),
                 )
                 .await?;
+            }
+            Write::MemberRole {
+                channel_id,
+                user_id,
+                role,
+            } => {
+                s.execute_unpaged(&self.update_member_role, (role, channel_id, user_id))
+                    .await?;
             }
             Write::MemberRemoved {
                 channel_id,

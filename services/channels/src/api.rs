@@ -14,8 +14,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use xmsg_authn::{Error as AuthError, Verifier};
 use xmsg_proto::v1::{
-    ChannelType, InboundEvent, MemberJoinRequested, MemberKickRequested, RejectReason,
-    inbound_event,
+    ChannelType, InboundEvent, MemberJoinRequested, MemberKickRequested, MemberRole,
+    MemberRoleChangeRequested, RejectReason, inbound_event,
 };
 
 use crate::commands::Pending;
@@ -53,7 +53,7 @@ pub fn router<S: Store, L: EventLog, M: Memberships>(app: Arc<App<S, L, M>>) -> 
         .route("/v1/channels/{channel_id}/members", post(join::<S, L, M>))
         .route(
             "/v1/channels/{channel_id}/members/{user_id}",
-            delete(kick::<S, L, M>),
+            delete(kick::<S, L, M>).patch(set_role::<S, L, M>),
         )
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
@@ -507,6 +507,39 @@ async fn kick<S: Store, L: EventLog, M: Memberships>(
     .await
 }
 
+#[derive(Deserialize)]
+pub struct SetRole {
+    role: String,
+}
+
+/// A channel admin sets a member's role: `member`, `poster` (posts in a broadcast channel,
+/// plan §6.7) or `admin`. The sequencer checks who may and emits `member.role_changed`.
+async fn set_role<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
+    headers: HeaderMap,
+    Path((channel_id, user_id)): Path<(String, String)>,
+    Json(req): Json<SetRole>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let actor = caller(&app, &headers).await?;
+    let (channel_id, user_id) = (parse_id(&channel_id)?, parse_id(&user_id)?);
+    let role = match req.role.as_str() {
+        "member" => MemberRole::Member,
+        "poster" => MemberRole::Poster,
+        "admin" => MemberRole::Admin,
+        _ => return Err(ApiError::BadRequest("role must be member, poster or admin")),
+    };
+    command(
+        &app,
+        channel_id,
+        actor,
+        inbound_event::Payload::MemberRoleChangeRequested(MemberRoleChangeRequested {
+            user_id,
+            role: role as i32,
+        }),
+    )
+    .await
+}
+
 /// Sends a membership command and waits for the sequencer's verdict (ADR-0006).
 async fn command<S, L: EventLog, M>(
     app: &App<S, L, M>,
@@ -548,6 +581,7 @@ async fn command<S, L: EventLog, M>(
             RejectReason::UnknownChannel => ApiError::NotFound("unknown channel"),
             RejectReason::NotAMember => ApiError::NotFound("not a member"),
             RejectReason::Forbidden => ApiError::Forbidden("forbidden"),
+            RejectReason::Invalid => ApiError::BadRequest("invalid for this channel"),
             _ => ApiError::BadRequest("rejected"),
         },
     )

@@ -545,6 +545,63 @@ async fn membership_commands_return_the_sequencers_verdict() {
 }
 
 #[tokio::test]
+async fn role_changes_go_to_the_sequencer_as_commands() {
+    let h = harness().await;
+    h.seed_channel(555, 1);
+    h.answer(CommandResult {
+        accepted: true,
+        event_seq: 9,
+        ..Default::default()
+    });
+    let (status, reply) = h
+        .call(
+            "PATCH",
+            &format!("/v1/channels/555/members/{CAROL}"),
+            Some(ALICE),
+            Some(serde_json::json!({"role": "poster"})),
+        )
+        .await;
+    assert_eq!(
+        (status, reply["event_seq"].as_str()),
+        (StatusCode::OK, Some("9"))
+    );
+    let sent = h.sent().pop().unwrap();
+    assert_eq!(sent.actor_id, ALICE);
+    assert!(matches!(
+        sent.payload,
+        Some(Payload::MemberRoleChangeRequested(ref r)) if r.user_id == CAROL && r.role == xmsg_proto::v1::MemberRole::Poster as i32
+    ));
+
+    // The sequencer refuses posters outside broadcast channels.
+    h.answer(CommandResult {
+        accepted: false,
+        reason: RejectReason::Invalid as i32,
+        ..Default::default()
+    });
+    let (status, _) = h
+        .call(
+            "PATCH",
+            &format!("/v1/channels/555/members/{CAROL}"),
+            Some(ALICE),
+            Some(serde_json::json!({"role": "poster"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Unknown roles never reach it.
+    let before = h.sent().len();
+    let (status, _) = h
+        .call(
+            "PATCH",
+            &format!("/v1/channels/555/members/{CAROL}"),
+            Some(ALICE),
+            Some(serde_json::json!({"role": "owner"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(h.sent().len(), before);
+}
+
+#[tokio::test]
 async fn an_undecided_command_answers_pending_and_cleans_up() {
     let h = harness().await;
     h.seed_channel(555, 1);
