@@ -12,6 +12,10 @@ defmodule XmsgGateway.Pull do
   - **Changes after that** come from fan-out on `gw.{gateway_id}.control` as
     `PullControl` (joined, left, or the channel switched modes), passed on to the user's
     sockets here.
+  - **Workspace removals:** a registration remembers its channel's workspace. When the
+    user is removed from it (`workspace.member_removed` on `auth.revocations`), their
+    sockets drop that workspace's channels at once and refuse them from then on, before
+    the removal job has taken them out of each channel (plan §6.5).
   - **Subscriptions:** this process subscribes to `ch.{id}` when the first local member
     registers, and drops subscriptions without members every `@sweep_ms`. After a NATS
     reconnect it subscribes everything again.
@@ -39,13 +43,13 @@ defmodule XmsgGateway.Pull do
   def subscribed, do: GenServer.call(__MODULE__, :subscribed)
 
   @doc """
-  Called by a socket: deliver `channel_id`'s pull-mode events to it (idempotent per
-  socket).
+  Called by a socket: deliver `channel_id` (of `workspace_id`) pull-mode events to it
+  (idempotent per socket).
   """
-  def join(channel_id) do
+  def join(channel_id, workspace_id) do
     if Registry.lookup(members_registry(), channel_id)
        |> Enum.all?(fn {pid, _} -> pid != self() end) do
-      {:ok, _} = Registry.register(members_registry(), channel_id, nil)
+      {:ok, _} = Registry.register(members_registry(), channel_id, workspace_id)
     end
 
     GenServer.cast(__MODULE__, {:ensure, channel_id})
@@ -56,7 +60,7 @@ defmodule XmsgGateway.Pull do
 
   @doc """
   Fetches the user's pull-mode channels for `socket` (now, and again after a few
-  seconds); the socket gets `{:pull_channels, ids}`. Does nothing without
+  seconds); the socket gets `{:pull_channels, [{channel_id, workspace_id}]}`. Does nothing without
   `XMSG_CHANNELS_URL`.
   """
   def fetch_for(socket, token) do
@@ -77,7 +81,7 @@ defmodule XmsgGateway.Pull do
 
   defp send_channels(socket, url, token) do
     case pull_channels(url, token) do
-      {:ok, ids} -> send(socket, {:pull_channels, ids})
+      {:ok, channels} -> send(socket, {:pull_channels, channels})
       {:error, reason} -> Logger.warning("pull-mode channels unavailable: #{inspect(reason)}")
     end
   end
@@ -92,8 +96,13 @@ defmodule XmsgGateway.Pull do
            :httpc.request(:get, request, [timeout: 3_000, connect_timeout: 2_000],
              body_format: :binary
            ),
-         {:ok, %{"channel_ids" => ids}} when is_list(ids) <- JSON.decode(body) do
-      {:ok, Enum.map(ids, &String.to_integer/1)}
+         {:ok, %{"channels" => list}} when is_list(list) <- JSON.decode(body) do
+      channels =
+        Enum.map(list, fn %{"channel_id" => c, "workspace_id" => w} ->
+          {String.to_integer(c), String.to_integer(w)}
+        end)
+
+      {:ok, channels}
     else
       {:ok, {{_, status, _}, _headers, _body}} -> {:error, {:status, status}}
       other -> {:error, other}
@@ -191,9 +200,9 @@ defmodule XmsgGateway.Pull do
   end
 
   # Fan-out says a connected user joined or left a pull-mode channel (or it switched modes).
-  defp relay(%PullControl{user_id: user_id, channel_id: channel_id, subscribe: subscribe}) do
-    for {pid, _} <- Registry.lookup(XmsgGateway.Users, user_id) do
-      send(pid, {:pull, channel_id, subscribe})
+  defp relay(%PullControl{} = c) do
+    for {pid, _} <- Registry.lookup(XmsgGateway.Users, c.user_id) do
+      send(pid, {:pull, c.channel_id, c.workspace_id, c.subscribe})
     end
   end
 end

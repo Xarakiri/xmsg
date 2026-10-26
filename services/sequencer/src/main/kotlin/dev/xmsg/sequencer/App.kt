@@ -37,6 +37,15 @@ fun httpPort(env: Map<String, String>): Int = env["XMSG_SEQUENCER_HTTP_PORT"]?.t
 
 fun advertisedHost(env: Map<String, String>): String = env["XMSG_ADVERTISED_HOST"] ?: InetAddress.getLocalHost().hostName
 
+/** Push/pull thresholds (ADR-0008): `XMSG_FANOUT_PULL_AT` (1,000) and `XMSG_FANOUT_PUSH_BELOW` (800). */
+fun fanoutThresholds(env: Map<String, String>): FanoutThresholds {
+    val defaults = FanoutThresholds()
+    return FanoutThresholds(
+        pullAt = env["XMSG_FANOUT_PULL_AT"]?.toLongOrNull() ?: defaults.pullAt,
+        pushBelow = env["XMSG_FANOUT_PUSH_BELOW"]?.toLongOrNull() ?: defaults.pushBelow,
+    )
+}
+
 fun main() {
     val env = System.getenv()
     val partitions = env["XMSG_PARTITIONS"]?.toIntOrNull()
@@ -48,7 +57,12 @@ fun main() {
         if (problems.isNotEmpty()) fail(problems.joinToString("\n") { "  - $it" }.let { "startup check failed:\n$it" })
     }
 
-    val streams = KafkaStreams(SequencerTopology.build(), config)
+    val thresholds = try {
+        fanoutThresholds(env)
+    } catch (e: IllegalArgumentException) {
+        fail("fan-out thresholds: ${e.message}")
+    }
+    val streams = KafkaStreams(SequencerTopology.build(thresholds), config)
     val membership = MembershipServer(streams, HostInfo(advertisedHost(env), httpPort(env)), httpPort(env))
     val stopped = CountDownLatch(1)
     Runtime.getRuntime().addShutdownHook(

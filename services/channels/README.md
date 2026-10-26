@@ -13,7 +13,7 @@ Every request needs `Authorization: Bearer <access token>` from the auth service
 | PUT | `/v1/channels/{id}/settings` | `{notify_level: all\|mentions\|nothing, muted}` | 202 (stored a moment later); 404 not a member |
 | GET | `/v1/me/settings` | | `{settings: [{channel_id, notify_level, muted}]}` for channels you're in |
 | GET | `/v1/me/channels` | | `{channels: [{channel_id, workspace_id, type, name, event_seq, msg_seq, fanout_mode}]}`: my channels with their heads (sync's cheap step); `fanout_mode` is `push` or `pull` (ADR-0008) |
-| GET | `/v1/me/channels?mode=pull` | | `{channel_ids: [...]}`: only my pull-mode channels (what a gateway subscribes to for me) |
+| GET | `/v1/me/channels?mode=pull` | | `{channels: [{channel_id, workspace_id}]}`: only my pull-mode channels (what a gateway subscribes to for me) |
 | POST | `/v1/dms` | `{user_ids, workspace_id?}` | one other user: the pair's DM, 201 the first time, then 200 `status: "exists"`; 2–8 others: a new group DM |
 | POST | `/v1/channels/{id}/members` | `{user_id?}` | join yourself (public channels), or invite `user_id` (any member, not in DMs) |
 | DELETE | `/v1/channels/{id}/members/{user_id}` | | leave (yourself) or remove someone (admins) |

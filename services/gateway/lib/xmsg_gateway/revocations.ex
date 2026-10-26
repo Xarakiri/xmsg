@@ -106,6 +106,12 @@ defmodule XmsgGateway.Revocations do
       {:ok, %AuthEvent{event: {:session_revoked, revoked}}} ->
         apply(revoked)
 
+      # Pull-mode channels of that workspace stop at once (XmsgGateway.Pull).
+      {:ok, %AuthEvent{event: {:workspace_member_removed, removed}}} ->
+        for {pid, _} <- Registry.lookup(XmsgGateway.Users, removed.user_id) do
+          send(pid, {:workspace_removed, removed.workspace_id})
+        end
+
       {:ok, _other} ->
         :ok
 

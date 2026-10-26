@@ -61,4 +61,5 @@ defmodule Xmsg.V1.PullControl do
   field :user_id, 1, type: :int64, json_name: "userId"
   field :channel_id, 2, type: :int64, json_name: "channelId"
   field :subscribe, 3, type: :bool
+  field :workspace_id, 4, type: :int64, json_name: "workspaceId"
 end
