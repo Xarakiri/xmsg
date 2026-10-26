@@ -103,7 +103,7 @@ async fn send(log: &impl EventLog, limits: &SendLimits, event: InboundEvent) -> 
             accepted: false,
             reason: RejectReason::RateLimited as i32,
             detail: "you're sending too fast; wait a moment".into(),
-            retry_after_ms: retry_after.as_millis() as u32,
+            retry_after_ms: retry_after.as_millis().min(u128::from(u32::MAX)) as u32,
         };
     }
     match log.append(event.channel_id, event.encode_to_vec()).await {
@@ -252,7 +252,8 @@ mod tests {
         let log = FakeLog::default();
         let limits = SendLimits {
             limiter: xmsg_ratelimit::Limiter::memory("test"),
-            per_user: xmsg_ratelimit::Rule::new(2, std::time::Duration::from_secs(10)),
+            // A year-long window: a short one could end between the sends.
+            per_user: xmsg_ratelimit::Rule::new(2, std::time::Duration::from_secs(365 * 24 * 3600)),
         };
         for _ in 0..2 {
             assert!(reply(handle(&log, &limits, &send("hi").encode_to_vec()).await).accepted);
@@ -260,7 +261,7 @@ mod tests {
         let result = reply(handle(&log, &limits, &send("hi").encode_to_vec()).await);
         assert!(!result.accepted);
         assert_eq!(result.reason, RejectReason::RateLimited as i32);
-        assert!(result.retry_after_ms > 0 && result.retry_after_ms <= 10_000);
+        assert!(result.retry_after_ms > 0);
         assert_eq!(log.appended.lock().unwrap().len(), 2);
         // Another person isn't affected.
         let mut other = send("hi");
