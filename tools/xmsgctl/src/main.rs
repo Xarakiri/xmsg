@@ -65,18 +65,13 @@ type Result<T> = std::result::Result<T, String>;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let outcome = installation_dir(cli.dir).and_then(|dir| match cli.command {
-        Cmd::Health {
-            web,
-            sequencer,
-            wait,
-        } => health_within(&dir, &web, &sequencer, Duration::from_secs(wait)),
-        Cmd::Backup { out } => backup(&dir, out),
-        Cmd::Restore {
-            file,
-            yes,
-            with_env,
-        } => restore(&dir, &file, yes, with_env),
+    let outcome = installation_dir(cli.dir).and_then(|dir| {
+        // Paths given on the command line are relative to where xmsgctl was started...
+        let command = absolute_paths(cli.command)?;
+        // ...and Compose resolves .env's COMPOSE_FILE against the working directory, so
+        // work from the installation's (with --dir, another one's files would load).
+        std::env::set_current_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        run_command(&dir, command)
     });
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -84,6 +79,42 @@ fn main() -> ExitCode {
             eprintln!("xmsgctl: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn absolute_paths(command: Cmd) -> Result<Cmd> {
+    let absolute =
+        |p: PathBuf| std::path::absolute(&p).map_err(|e| format!("{}: {e}", p.display()));
+    Ok(match command {
+        Cmd::Backup { out } => Cmd::Backup {
+            out: out.map(absolute).transpose()?,
+        },
+        Cmd::Restore {
+            file,
+            yes,
+            with_env,
+        } => Cmd::Restore {
+            file: absolute(file)?,
+            yes,
+            with_env,
+        },
+        other => other,
+    })
+}
+
+fn run_command(dir: &Path, command: Cmd) -> Result<()> {
+    match command {
+        Cmd::Health {
+            web,
+            sequencer,
+            wait,
+        } => health_within(dir, &web, &sequencer, Duration::from_secs(wait)),
+        Cmd::Backup { out } => backup(dir, out),
+        Cmd::Restore {
+            file,
+            yes,
+            with_env,
+        } => restore(dir, &file, yes, with_env),
     }
 }
 

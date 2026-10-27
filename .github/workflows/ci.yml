@@ -671,7 +671,10 @@ jobs:
           XMSG_IT_S3_SECRET: 00000000000000000000000000000000000000000000000000000000000000c1
         run: |
           ./target/release/xmsg-media garage-init
-          ./target/release/xmsg-media garage-init 2>&1 | grep -q 'changes=0'
+          # Again: nothing left to do (no step logged; the summary's fields are coloured).
+          again=$(./target/release/xmsg-media garage-init 2>&1)
+          echo "$again"
+          ! grep -qE 'assigned|imported|created bucket|gave key' <<<"$again"
           cargo test -p xmsg-media --test api -- --include-ignored
       - name: Start auth, users, channels, sequencer, messages, persister, fan-out and gateway
         run: |
