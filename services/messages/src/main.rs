@@ -52,8 +52,20 @@ async fn main() -> ExitCode {
         Ok(s) => s,
         Err(e) => return fail(&format!("subscribing to {SEND_SUBJECT}: {e}")),
     };
+    // Files in messages (ADR-0024) are checked against Cassandra, which needs the same
+    // configuration as history reads; without it, sends with files are refused.
+    let mut files = xmsg_messages::attachments::Lookup::Off;
     // History reads over HTTP (plan §5.5), when the auth service's JWKS is configured.
     if let Some(jwks_url) = config.jwks_url.clone() {
+        files = match xmsg_messages::attachments::CassandraFiles::connect(
+            &config.cql_nodes,
+            &config.keyspace,
+        )
+        .await
+        {
+            Ok(f) => xmsg_messages::attachments::Lookup::Cassandra(Box::new(f)),
+            Err(e) => return fail(&e),
+        };
         let store = match Cassandra::connect(&config.cql_nodes, &config.keyspace).await {
             Ok(s) => s,
             Err(e) => return fail(&e),
@@ -113,6 +125,7 @@ async fn main() -> ExitCode {
             Err(e) => return fail(&e),
         },
     });
+    let files = Arc::new(files);
     tracing::info!(
         subject = SEND_SUBJECT,
         queue = QUEUE_GROUP,
@@ -127,9 +140,10 @@ async fn main() -> ExitCode {
             msg = requests.next() => {
                 let Some(msg) = msg else { break };
                 let Some(reply_to) = msg.reply.clone() else { continue };
-                let (log, client, limits) = (log.clone(), client.clone(), limits.clone());
+                let (log, client, limits, files) =
+                    (log.clone(), client.clone(), limits.clone(), files.clone());
                 tokio::spawn(async move {
-                    let reply = handle(log.as_ref(), &limits, &msg.payload).await;
+                    let reply = handle(log.as_ref(), &limits, files.as_ref(), &msg.payload).await;
                     if let Err(e) = client.publish(reply_to, reply.into()).await {
                         tracing::warn!(error = %e, "reply failed");
                     }

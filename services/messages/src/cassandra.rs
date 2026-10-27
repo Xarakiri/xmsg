@@ -56,7 +56,7 @@ impl Cassandra {
             ))
             .await?,
             messages: prepare(format!(
-                "SELECT msg_seq, message_id, event_seq, author_id, client_msg_id, body, edited_at, deleted FROM {k}.messages \
+                "SELECT msg_seq, message_id, event_seq, author_id, client_msg_id, body, edited_at, deleted, attachments FROM {k}.messages \
                  WHERE channel_id = ? AND bucket = ? AND msg_seq >= ? AND msg_seq <= ?"
             ))
             .await?,
@@ -195,6 +195,7 @@ impl Store for Cassandra {
                 Option<String>,
                 Option<scylla::value::CqlTimestamp>,
                 Option<bool>,
+                Option<Vec<u8>>,
             )>()
             .map_err(err)?
             .map(|r| {
@@ -208,6 +209,7 @@ impl Store for Cassandra {
                         body,
                         edited_at,
                         deleted,
+                        attachments,
                     )| {
                         MessageRow {
                             msg_seq,
@@ -218,6 +220,7 @@ impl Store for Cassandra {
                             body: body.unwrap_or_default(),
                             edited_at_ms: edited_at.map_or(0, |t| t.0),
                             deleted: deleted.unwrap_or(false),
+                            attachments: attachments.unwrap_or_default(),
                         }
                     },
                 )

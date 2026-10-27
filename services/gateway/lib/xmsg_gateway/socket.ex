@@ -275,7 +275,9 @@ defmodule XmsgGateway.Socket do
       channel_id: req.channel_id,
       actor_id: state.user_id,
       dedupe_id: req.client_msg_id,
-      payload: {:send_message, %SendMessage{body: req.body, thread_root: req.thread_root}}
+      payload:
+        {:send_message,
+         %SendMessage{body: req.body, thread_root: req.thread_root, file_ids: req.file_ids}}
     }
 
     bus = Config.bus()

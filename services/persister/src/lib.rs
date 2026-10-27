@@ -10,6 +10,7 @@
 pub mod cassandra;
 pub mod config;
 
+use xmsg_proto::Message as _;
 use xmsg_proto::v1::{
     ChannelType, FanoutMode, MemberRole, SequencedEvent, sequenced_event::Payload,
 };
@@ -30,6 +31,8 @@ pub enum Write {
         /// The sender's client_msg_id (the event's dedupe_id).
         client_msg_id: String,
         body: String,
+        /// `Attachments`, encoded (ADR-0024); empty without files, never null (no tombstone).
+        attachments: Vec<u8>,
     },
     /// A thread reply (ADR-0005): its `thread_messages` row, then the root's absolute
     /// `reply_count` and `last_reply_at`, only if the root row exists (read first: the
@@ -186,6 +189,14 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
                 author_id: event.actor_id,
                 client_msg_id: event.dedupe_id.clone(),
                 body: created.body.clone(),
+                attachments: if created.attachments.is_empty() {
+                    Vec::new()
+                } else {
+                    xmsg_proto::v1::Attachments {
+                        items: created.attachments.clone(),
+                    }
+                    .encode_to_vec()
+                },
             });
             out.push(Write::ChannelEvent {
                 channel_id: event.channel_id,
@@ -546,6 +557,39 @@ mod tests {
     }
 
     #[test]
+    fn attachments_are_stored_encoded_and_absent_ones_as_empty() {
+        use xmsg_proto::v1::{Attachment, Attachments};
+        let file = Attachment {
+            file_id: 42,
+            name: "cat.png".into(),
+            content_type: "image/png".into(),
+            size: 10,
+            ..Default::default()
+        };
+        for (attached, expected) in [
+            (
+                vec![file.clone()],
+                Attachments { items: vec![file] }.encode_to_vec(),
+            ),
+            (vec![], Vec::new()),
+        ] {
+            let mut e = event(
+                12,
+                Payload::MessageCreated(MessageCreated {
+                    message_id: 9,
+                    attachments: attached,
+                    ..Default::default()
+                }),
+            );
+            e.msg_seq = 1;
+            match &writes(&e, 0)[0] {
+                Write::Message { attachments, .. } => assert_eq!(attachments, &expected),
+                other => panic!("expected a message write, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn a_channel_mention_is_one_row_however_big_the_channel() {
         let mut e = event(
             12,
@@ -554,6 +598,7 @@ mod tests {
                 body: "<!channel> hi".into(),
                 mentioned_user_ids: vec![2, 3],
                 mentions_channel: true,
+                ..Default::default()
             }),
         );
         e.msg_seq = 11;

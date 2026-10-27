@@ -63,6 +63,8 @@ pub struct MessageRow {
     /// 0 if never edited.
     pub edited_at_ms: i64,
     pub deleted: bool,
+    /// `Attachments`, encoded (ADR-0024); empty without files.
+    pub attachments: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -211,6 +213,14 @@ fn rebuild(
             payload: Some(Payload::MessageCreated(MessageCreated {
                 message_id: m.message_id,
                 body: m.body.clone(),
+                // A deleted message's files go with its body.
+                attachments: if m.deleted || m.attachments.is_empty() {
+                    Vec::new()
+                } else {
+                    xmsg_proto::v1::Attachments::decode(m.attachments.as_slice())
+                        .map(|a| a.items)
+                        .unwrap_or_default()
+                },
                 ..Default::default()
             })),
             ..base
@@ -400,6 +410,7 @@ mod tests {
                 body: format!("body {msg_seq}"),
                 edited_at_ms: 0,
                 deleted: false,
+                attachments: Vec::new(),
             },
         )
     }
@@ -474,6 +485,32 @@ mod tests {
             !current.truncated && current.events.is_empty(),
             "caught up is not a gap"
         );
+    }
+
+    #[tokio::test]
+    async fn attachments_come_back_and_go_with_a_deleted_message() {
+        let file = xmsg_proto::v1::Attachment {
+            file_id: 42,
+            name: "cat.png".into(),
+            content_type: "image/png".into(),
+            size: 10,
+            ..Default::default()
+        };
+        let stored = xmsg_proto::v1::Attachments {
+            items: vec![file.clone()],
+        }
+        .encode_to_vec();
+        let mut fake = channel(2);
+        fake.messages[0].attachments = stored.clone();
+        fake.messages[1].attachments = stored;
+        fake.messages[1].deleted = true;
+        let events = page(&fake, 7, 0, 10).await.unwrap().events;
+        let attachments = |i: usize| match &events[i].payload {
+            Some(Payload::MessageCreated(m)) => m.attachments.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(attachments(1), vec![file]);
+        assert!(attachments(2).is_empty(), "deleted");
     }
 
     #[tokio::test]

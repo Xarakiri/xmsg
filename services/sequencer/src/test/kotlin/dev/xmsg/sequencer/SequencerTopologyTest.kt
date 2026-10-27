@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 package dev.xmsg.sequencer
 
+import dev.xmsg.proto.v1.Attachment
 import dev.xmsg.proto.v1.ChannelCreated
 import dev.xmsg.proto.v1.ChannelType
 import dev.xmsg.proto.v1.DeleteMessage
@@ -201,6 +202,19 @@ class SequencerTopologyTest {
         assertEquals(listOf(alice), second.mentionedUserIdsList)
         assertTrue(!second.mentionsChannel, "bob isn't an admin")
         assertEquals(listOf(5L, 6L), Mentions.users("<@5> <@x> <@6> <@5>"))
+    }
+
+    @Test
+    fun `attachments filled in by the messages service reach MessageCreated`() {
+        create(100, alice, ChannelType.CHANNEL_TYPE_PRIVATE, bob)
+        val file = Attachment.newBuilder().setFileId(42).setName("cat.png").setContentType("image/png")
+            .setSize(1234).setWidth(640).setHeight(480).setHasThumbnail(true).build()
+        send(
+            base(100, alice, dedupe = "with-file")
+                .setSendMessage(SendMessage.newBuilder().setBody("").addFileIds(42).addAttachments(file)).build(),
+        )
+        val created = drain().single { it.hasMessageCreated() }.messageCreated
+        assertEquals(listOf(file), created.attachmentsList)
     }
 
     @Test
