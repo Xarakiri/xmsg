@@ -98,6 +98,32 @@ services:
     environment:
       <<: *env
       XMSG_PUSH_VAPID_PRIVATE_KEY: "${XMSG_PUSH_VAPID_PRIVATE_KEY:?run install.sh first - XMSG_PUSH_VAPID_PRIVATE_KEY is not set}"
+  # Files (ADR-0024). garage-init sets up the bundled Garage (layout, key, bucket) at every
+  # start, changing nothing once done; media waits for it.
+  garage-init:
+    image: ${XMSG_REGISTRY:-xmsg}/services:${XMSG_VERSION:-dev}
+    depends_on:
+      garage: { condition: service_healthy }
+    command: ["xmsg-media", "garage-init"]
+    environment:
+      <<: &media-env
+        XMSG_MEDIA_S3_ENDPOINT: http://garage:3900
+        XMSG_MEDIA_S3_KEY_ID: "${XMSG_MEDIA_S3_KEY_ID:?run install.sh first - XMSG_MEDIA_S3_KEY_ID is not set}"
+        XMSG_MEDIA_S3_SECRET: "${XMSG_MEDIA_S3_SECRET:?run install.sh first - XMSG_MEDIA_S3_SECRET is not set}"
+      XMSG_GARAGE_ADMIN_URL: http://garage:3903
+      XMSG_GARAGE_ADMIN_TOKEN: "${XMSG_GARAGE_ADMIN_TOKEN:?run install.sh first - XMSG_GARAGE_ADMIN_TOKEN is not set}"
+    restart: "no"
+  media:
+    <<: *service
+    # Uploads are held in memory while checked and stored (4 at a time, 25 MB each).
+    mem_limit: 512m
+    depends_on:
+      cassandra-init: { condition: service_completed_successfully }
+      garage-init: { condition: service_completed_successfully }
+    command: ["xmsg-media"]
+    environment:
+      <<: [*env, *media-env]
+
   search-indexer:
     <<: *service
     profiles: [search]
@@ -161,7 +187,7 @@ services:
     image: ${XMSG_REGISTRY:-xmsg}/web:${XMSG_VERSION:-dev}
     build: { context: ../.., dockerfile: deploy/docker/web.Dockerfile }
     mem_limit: 128m
-    depends_on: [auth, users, channels, messages, readstate, push, gateway]
+    depends_on: [auth, users, channels, messages, readstate, push, media, gateway]
     # Plain HTTP on this machine only, behind Caddy (xmsgctl health, tests).
     ports: ["127.0.0.1:8080:8080"]
 

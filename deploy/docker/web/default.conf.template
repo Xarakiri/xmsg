@@ -19,6 +19,13 @@ server {
   location /users/     { proxy_pass http://${XMSG_USERS_UPSTREAM}/; }
   location /readstate/ { proxy_pass http://${XMSG_READSTATE_UPSTREAM}/; }
   location /push/      { proxy_pass http://${XMSG_PUSH_UPSTREAM}/; }
+  # Files (ADR-0024): streamed both ways, up to the media service's own limit (25 MB).
+  location /media/ {
+    proxy_pass http://${XMSG_MEDIA_UPSTREAM}/;
+    client_max_body_size 26m;
+    proxy_request_buffering off;
+    proxy_buffering off;
+  }
 
   location /ws {
     proxy_pass http://${XMSG_GATEWAY_UPSTREAM};

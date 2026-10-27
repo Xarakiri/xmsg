@@ -10,7 +10,8 @@ pub const PROJECT: &str = "xmsg";
 
 /// Data volumes, in archive order. All are optional except the first three (search and
 /// TLS state exist only when used); the sequencer's state is rebuilt from Kafka if lost,
-/// but restoring it saves the rebuild.
+/// but restoring it saves the rebuild. Garage's (files, ADR-0024) came later: older
+/// installations and backups don't have them.
 pub const VOLUMES: &[&str] = &[
     "postgres-data",
     "kafka-data",
@@ -18,6 +19,8 @@ pub const VOLUMES: &[&str] = &[
     "sequencer-state",
     "opensearch-data",
     "caddy-data",
+    "garage-meta",
+    "garage-data",
 ];
 
 /// Which image runs `tar`: one every installation already has, so nothing is pulled
@@ -136,11 +139,18 @@ pub fn partitions(env: &str) -> Option<u32> {
 /// The HTTP checks of `health`, through the web app's nginx on this machine (each
 /// service's `/healthz`) and the sequencer's own port.
 pub fn health_urls(web: &str, sequencer: &str) -> Vec<(&'static str, String)> {
-    let mut urls: Vec<(&'static str, String)> =
-        ["auth", "users", "channels", "messages", "readstate", "push"]
-            .iter()
-            .map(|s| (*s, format!("{web}/{s}/healthz")))
-            .collect();
+    let mut urls: Vec<(&'static str, String)> = [
+        "auth",
+        "users",
+        "channels",
+        "messages",
+        "readstate",
+        "push",
+        "media",
+    ]
+    .iter()
+    .map(|s| (*s, format!("{web}/{s}/healthz")))
+    .collect();
     urls.push(("sequencer", format!("{sequencer}/healthz")));
     urls.push(("web", format!("{web}/")));
     urls
@@ -226,6 +236,7 @@ mod tests {
         let urls = health_urls("http://127.0.0.1:8080", "http://127.0.0.1:8090");
         assert!(urls.contains(&("auth", "http://127.0.0.1:8080/auth/healthz".to_string())));
         assert!(urls.contains(&("sequencer", "http://127.0.0.1:8090/healthz".to_string())));
-        assert_eq!(urls.len(), 8);
+        assert!(urls.contains(&("media", "http://127.0.0.1:8080/media/healthz".to_string())));
+        assert_eq!(urls.len(), 9);
     }
 }

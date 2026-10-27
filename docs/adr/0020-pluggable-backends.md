@@ -17,7 +17,7 @@ Each dependency has a **contract** (the features we rely on) and a list of **tes
 | Cache / presence | Redis protocol: hashes, TTLs, Lua, cluster or single node | **Valkey 8+ (BSD, bundled)**; Redis 8+ (AGPL option) or earlier source-available versions (customer's licence); Dragonfly (BSL); ElastiCache, Memorystore (managed) |
 | Realtime messaging | NATS core (pub/sub, request/reply, queue groups, leaf nodes) | NATS 2.10+ (bundled; it's a single small binary), Synadia Cloud |
 | Search (optional) | OpenSearch/Elasticsearch REST APIs we use (bulk, routing, `update_by_query`) | OpenSearch 2.x, Elasticsearch 8.x, or **search disabled** |
-| Object storage (later) | S3 API with presigned URLs | MinIO, Ceph RGW, Amazon S3, GCS (S3 mode), Azure via gateway |
+| Object storage | S3 API (SigV4, path-style; presigned URLs for the Large tier) | Garage (bundled, [ADR-0024](0024-media-and-object-storage.md)), Ceph RGW, Amazon S3, GCS (S3 mode), SeaweedFS; MinIO no longer released (archived 2026) |
 
 Rules:
 - **Code talks to contracts, not products:** one Kafka client, one CQL driver, one Postgres driver; no product-specific features outside the contract unless guarded by a capability check (e.g. Scylla's shard-aware driver is used when available).

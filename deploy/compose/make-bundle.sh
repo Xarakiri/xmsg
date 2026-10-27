@@ -44,6 +44,7 @@ compose() {
     COMPOSE_PROFILES="$([[ $search -eq 1 ]] && echo search)" \
     XMSG_REGISTRY="$registry" XMSG_VERSION="$version" \
     XMSG_AUTH_KEY=- XMSG_POSTGRES_PASSWORD=- XMSG_PUSH_VAPID_PRIVATE_KEY=- \
+    XMSG_GARAGE_ADMIN_TOKEN=- XMSG_MEDIA_S3_KEY_ID=- XMSG_MEDIA_S3_SECRET=- \
     docker compose --env-file /dev/null "$@"
 }
 

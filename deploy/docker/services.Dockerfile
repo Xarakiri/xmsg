@@ -9,7 +9,7 @@ COPY . .
 RUN cargo build --release --locked --bins \
       -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout \
       -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-push \
-      -p xmsg-search-indexer \
+      -p xmsg-search-indexer -p xmsg-media \
     && mkdir /out && find target/release -maxdepth 1 -type f -name 'xmsg-*' -perm -u+x -exec cp {} /out/ \;
 
 FROM debian:bookworm-slim
