@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
 # Small-tier stack (Docker Compose)
 
-The Small self-hosting tier ([ADR-0019](../../docs/adr/0019-self-hosting-and-deployment-tiers.md)) and the local development environment. It bundles only open-source backends ([ADR-0023](../../docs/adr/0023-osi-bundled-backends-and-wide-column-choice.md)).
+The Small self-hosting tier ([ADR-0019](../../docs/adr/0019-self-hosting-and-deployment-tiers.md)) and the local development environment. It bundles only open-source backends ([ADR-0023](../../docs/adr/0023-osi-bundled-backends-and-wide-column-choice.md)). Running it in production (sizing, monitoring, troubleshooting): [docs/operations/small-tier.md](../../docs/operations/small-tier.md).
 
 | Service | Image | Host port | Memory limit |
 |---|---|---|---|
@@ -65,7 +65,7 @@ tar -xf xmsg-small-0.5.0-linux-amd64.tar && cd xmsg-small-0.5.0-linux-amd64
 ./xmsgctl health --wait 300
 ```
 
-`install.sh` checks the bundle against `SHA256SUMS` before loading it. To upgrade, unpack the newer bundle, copy `.env` into it, and run `./install.sh` there: the bundle's version replaces the installed one, and the rest of [Upgrade](#upgrade) applies. CI's `air-gapped` job builds a bundle, deletes every image, makes registries unreachable, installs from the bundle and runs the end-to-end smoke test.
+`install.sh` checks the bundle against `SHA256SUMS` before loading it. To upgrade, unpack the newer bundle, copy `.env` (and `certs/` and `docker-compose.local.yml` if you have them) into it, and run `./install.sh` there: the bundle's version replaces the installed one, and the rest of [Upgrade](#upgrade) applies. CI's `air-gapped` job builds a bundle, deletes every image, makes registries unreachable, installs from the bundle and runs the end-to-end smoke test.
 
 ## Upgrade
 Data and secrets live in Docker volumes and `.env`, not in this directory, so an upgrade swaps the release and keeps both:
@@ -73,7 +73,7 @@ Data and secrets live in Docker volumes and `.env`, not in this directory, so an
 ```bash
 xmsgctl backup --out before-upgrade.tar          # the way back (stops the stack for a few minutes)
 # get the new release's deploy/compose (git checkout v0.5.0, or unpack it); if it's a new
-# directory, copy .env into it
+# directory, copy .env (and certs/, docker-compose.local.yml) into it
 ./install.sh --yes --version 0.5.0               # keeps the secrets and settings, pulls, restarts
 xmsgctl health --wait 300
 ```

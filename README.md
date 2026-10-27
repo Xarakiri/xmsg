@@ -45,7 +45,7 @@ make up          # start the Small-tier stack (Kafka, Cassandra 5, Postgres, Val
 make down        # stop it and keep data
 ```
 
-See [deploy/compose/README.md](deploy/compose/README.md) for the stack.
+See [deploy/compose/README.md](deploy/compose/README.md) for the stack. Operating a Small-tier installation: [docs/operations/small-tier.md](docs/operations/small-tier.md).
 
 ## Contributing
 
