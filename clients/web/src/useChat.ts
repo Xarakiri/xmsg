@@ -14,8 +14,10 @@ import {
   sync,
   unsent,
   type Action,
+  type Attachment,
   type ChatState,
   type ConnectionStatus,
+  type Message,
   type Presence,
   type ThreadRootRef,
 } from "@xmsg/client-core";
@@ -82,7 +84,7 @@ export function useChat(me: string, initial: ChatState) {
         if (s !== "online") return;
         // Back online: resend the outbox (the sequencer drops repeats), then catch up on
         // what happened meanwhile. Live events keep flowing during the sync.
-        for (const m of unsent(latest.current)) connection.send(m.channelId, m.key, m.body, m.threadRoot);
+        for (const m of unsent(latest.current)) connection.send(m.channelId, m.key, m.body, m.threadRoot, fileIds(m));
         scheduler.request();
       },
       onResync: (partition) =>
@@ -153,12 +155,17 @@ export function useChat(me: string, initial: ChatState) {
   /** Call on every keystroke in the composer; the connection throttles. */
   const notifyTyping = (channelId: string) => conn.current?.typing(channelId);
 
-  /** A message, or a thread reply when `threadRoot` is given (ADR-0005). */
-  const send = (channelId: string, body: string, threadRoot?: ThreadRootRef) => {
+  /** A message, or a thread reply when `threadRoot` is given (ADR-0005), with files already uploaded. */
+  const send = (channelId: string, body: string, threadRoot?: ThreadRootRef, attachments: Attachment[] = []) => {
     const clientMsgId = crypto.randomUUID();
-    dispatch({ type: "send", channelId, clientMsgId, body, at: Date.now(), threadRoot });
-    conn.current?.send(channelId, clientMsgId, body, threadRoot); // if offline it goes out on reconnect
+    dispatch({ type: "send", channelId, clientMsgId, body, at: Date.now(), threadRoot, attachments });
+    // If offline it goes out on reconnect.
+    conn.current?.send(channelId, clientMsgId, body, threadRoot, attachments.map((a) => a.fileId));
   };
+
+  /** Uploads a file to the channel; attach the result to the next send (ADR-0024). */
+  const upload = (channelId: string, file: File) =>
+    session.accessToken().then((token) => api.uploadFile(token, channelId, file, file.name));
 
   /** Loads a thread's replies (live ones keep arriving as events). */
   const openThread = (channelId: string, root: ThreadRootRef) =>
@@ -215,8 +222,10 @@ export function useChat(me: string, initial: ChatState) {
     if (!message) return;
     const newKey = crypto.randomUUID();
     dispatch({ type: "retry", oldKey, newKey, at: Date.now() });
-    conn.current?.send(message.channelId, newKey, message.body, message.threadRoot);
+    conn.current?.send(message.channelId, newKey, message.body, message.threadRoot, fileIds(message));
   };
 
-  return { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, view };
+  return { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, view };
 }
+
+const fileIds = (m: Message) => (m.attachments ?? []).map((a) => a.fileId);

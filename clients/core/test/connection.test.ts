@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { ClientFrameSchema, ServerFrameSchema } from "../src/gen/xmsg/v1/client_pb.js";
-import { Connection, type ConnectionStatus } from "../src/connection.ts";
+import { Connection, encodeSend, type ConnectionStatus } from "../src/connection.ts";
 
 /** Minimal stand-in for the browser WebSocket: records frames, lets the test push frames back. */
 class FakeSocket {
@@ -206,4 +206,10 @@ test("the open channel is sent on Welcome and when it changes; bumps reach onBum
   FakeSocket.last.push({ frame: { case: "bump", value: { channelId: 902n, eventSeq: 9n, msgSeq: 5n } } });
   assert.deepEqual(bumps, [["902", 9, 5]]);
   conn.stop();
+});
+
+test("sends carry the attached files' IDs", () => {
+  const frame = fromBinary(ClientFrameSchema, encodeSend("7", "c-1", "", undefined, ["42", "43"]));
+  assert.equal(frame.frame.case, "sendMessage");
+  if (frame.frame.case === "sendMessage") assert.deepEqual(frame.frame.value.fileIds, [42n, 43n]);
 });

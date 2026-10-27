@@ -1,6 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, canPost, fromSsoFragment, mentionCount, threadKey, unread, type Channel, type ChatState, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit } from "@xmsg/client-core";
+import {
+  ApiError,
+  MAX_FILE_BYTES,
+  canPost,
+  fromSsoFragment,
+  mentionCount,
+  threadKey,
+  unread,
+  type Attachment,
+  type Channel,
+  type ChatState,
+  type ConnectionStatus,
+  type Directory,
+  type Message,
+  type Presence,
+  type SearchHit,
+} from "@xmsg/client-core";
+import { Attachments, PendingFiles, formatSize, type PendingFile } from "./files.tsx";
 import { api, session } from "./session.ts";
 import { disablePush, enablePush, pushState, type PushState } from "./push.ts";
 import { loadState } from "./storage.ts";
@@ -168,7 +185,7 @@ function Chat({ me, onSignOut }: { me: string; onSignOut: () => void }) {
 }
 
 function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; onSignOut: () => void }) {
-  const { state, status, syncError, send, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, view } = useChat(me, initial);
+  const { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, view } = useChat(me, initial);
   // Search (plan §5.12): results replace the conversation until one is picked or closed.
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
@@ -327,7 +344,8 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
             me={me}
             names={names}
             messages={state.messages[current.id] ?? []}
-            onSend={(b) => send(current.id, b)}
+            onSend={(b, files) => send(current.id, b, undefined, files)}
+            onUpload={(file) => upload(current.id, file)}
             onToggleMute={() => setMuted(current.id, !current.muted)}
             onRetry={retry}
             typing={typingIn(current.id)}
@@ -491,6 +509,7 @@ function Conversation({
   names,
   messages,
   onSend,
+  onUpload,
   onToggleMute,
   onRetry,
   typing,
@@ -503,7 +522,8 @@ function Conversation({
   me: string;
   names: Directory;
   messages: Message[];
-  onSend: (body: string) => void;
+  onSend: (body: string, files: Attachment[]) => void;
+  onUpload: (file: File) => Promise<Attachment>;
   onToggleMute: () => void;
   onRetry: (key: string) => void;
   typing: string[];
@@ -514,6 +534,9 @@ function Conversation({
 }) {
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
+  // Files picked for the next message (ADR-0024): uploaded at once, sent with it.
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const picker = useRef<HTMLInputElement>(null);
   // The message being edited: its key, the new text, and the edit_id reused on retries.
   const [editing, setEditing] = useState<{ key: string; text: string; editId: string } | null>(null);
   // Read receipts (DMs): "Seen" under my latest message the others have read.
@@ -531,7 +554,24 @@ function Conversation({
   useEffect(() => {
     setNote("");
     setEditing(null);
+    setFiles([]);
   }, [channel.id]);
+
+  const addFiles = (picked: FileList | null) => {
+    for (const file of Array.from(picked ?? [])) {
+      const id = crypto.randomUUID();
+      if (file.size > MAX_FILE_BYTES) {
+        setFiles((fs) => [...fs, { id, name: file.name, size: file.size, error: `over ${formatSize(MAX_FILE_BYTES)}` }]);
+        continue;
+      }
+      setFiles((fs) => [...fs, { id, name: file.name, size: file.size }]);
+      onUpload(file)
+        .then((attachment) => setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, attachment } : f))))
+        .catch((err) => setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, error: errorText(err) } : f))));
+    }
+  };
+  const ready = files.flatMap((f) => (f.attachment ? [f.attachment] : []));
+  const uploading = files.some((f) => !f.attachment && !f.error);
 
   // Edits and deletes are sequenced like messages; the result arrives as an event.
   const saveEdit = async (m: Message) => {
@@ -558,9 +598,10 @@ function Conversation({
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     const body = draft.trim();
-    if (!body) return;
-    onSend(toTokens(body, channel.members, me, names));
+    if ((!body && ready.length === 0) || uploading) return;
+    onSend(toTokens(body, channel.members, me, names), ready);
     setDraft("");
+    setFiles([]);
   };
 
   const membership = async (action: "invite" | "leave") => {
@@ -657,7 +698,10 @@ function Conversation({
                 </div>
               </form>
             ) : (
-              <div className="body">{renderBody(m.body, me, names)}</div>
+              <>
+                {m.body && <div className="body">{renderBody(m.body, me, names)}</div>}
+                {m.attachments && <Attachments files={m.attachments} />}
+              </>
             )}
             {m.msgSeq > 0 && !m.deleted && messageIdOf(m) && (
               <button className="link small thread-link" onClick={() => onOpenThread(m)}>
@@ -690,7 +734,29 @@ function Conversation({
         // Broadcast channels (plan §6.7): only posters and admins post; the rest read.
         <p className="composer-note muted small">Only posters and admins post in this broadcast channel.</p>
       ) : (
-        <form className="composer" onSubmit={submit}>
+        <form
+          className="composer"
+          onSubmit={submit}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            addFiles(e.dataTransfer.files);
+          }}
+        >
+          <PendingFiles files={files} onRemove={(id) => setFiles((fs) => fs.filter((f) => f.id !== id))} />
+          <input
+            ref={picker}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              addFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <button type="button" onClick={() => picker.current?.click()} aria-label="Attach files" title="Attach files">
+            📎
+          </button>
           <textarea
             value={draft}
             onChange={(e) => {
@@ -704,8 +770,8 @@ function Conversation({
             rows={2}
             aria-label="Message"
           />
-          <button className="primary" disabled={!draft.trim()}>
-            Send
+          <button className="primary" disabled={(!draft.trim() && ready.length === 0) || uploading}>
+            {uploading ? "Uploading…" : "Send"}
           </button>
         </form>
       )}

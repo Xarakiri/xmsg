@@ -414,3 +414,40 @@ test("roles follow membership events, and only posters and admins post in broadc
   assert.equal(canPost({ ...channel, kind: "public" }, ME), true);
   assert.equal(canPost({ ...channel, roles: {} }, ME), true);
 });
+
+test("attachments: shown at once when sent, kept from the server's event, gone when deleted", () => {
+  const file = { fileId: "42", name: "cat.png", contentType: "image/png", size: 10, width: 4, height: 3, hasThumbnail: true };
+  let s = apply(initialState(ME), created);
+  s = reduce(s, { type: "send", channelId: "7", clientMsgId: "c-1", body: "", at: 1, attachments: [file] });
+  assert.deepEqual(s.messages["7"]![0]!.attachments, [file]);
+  assert.deepEqual(unsent(s)[0]!.attachments, [file], "the outbox resends them");
+
+  s = apply(
+    s,
+    ev({
+      eventSeq: 2n,
+      msgSeq: 1n,
+      actorId: 101n,
+      dedupeId: "c-1",
+      payload: {
+        case: "messageCreated",
+        value: {
+          messageId: 1001n,
+          body: "",
+          attachments: [{ fileId: 42n, name: "cat.png", contentType: "image/png", size: 10n, width: 4, height: 3, hasThumbnail: true }],
+        },
+      },
+    }),
+  );
+  const confirmed = s.messages["7"]![0]!;
+  assert.equal(confirmed.status, "confirmed");
+  assert.deepEqual(confirmed.attachments, [file]);
+
+  s = apply(s, ev({ eventSeq: 3n, actorId: 101n, payload: { case: "messageDeleted", value: { msgSeq: 1n, messageId: 1001n } } }));
+  assert.equal(s.messages["7"]![0]!.attachments, undefined);
+});
+
+test("a message without files has no attachments field", () => {
+  const s = apply(initialState(ME), created, message(1, 102n, "", "hi"));
+  assert.equal("attachments" in s.messages["7"]![0]!, false);
+});
