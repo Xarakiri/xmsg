@@ -13,8 +13,9 @@ node_modules/
 .vscode/
 *.iml
 
-# Local env and crash dumps
+# Local env, operator overrides and crash dumps
 .env
+docker-compose.local.yml
 erl_crash.dump
 
 # Stray nested repository created outside this layout (see README)

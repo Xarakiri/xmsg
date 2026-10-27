@@ -143,11 +143,15 @@ vapid_key() {
 }
 vapid=$(secret XMSG_PUSH_VAPID_PRIVATE_KEY vapid_key)
 
+# Your own settings on top (resource limits, service tuning) survive re-runs and upgrades.
+compose_local=""
+[[ -f docker-compose.local.yml ]] && compose_local=":docker-compose.local.yml"
+
 umask 077
 cat > .env.new <<EOF
 # Written by install.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ). Keep this file private: it holds the
 # installation's secrets. Re-running install.sh keeps them.
-COMPOSE_FILE=docker-compose.yml:docker-compose.app.yml
+COMPOSE_FILE=docker-compose.yml:docker-compose.app.yml$compose_local
 XMSG_DOMAIN=$domain
 XMSG_TLS=$tls_args
 XMSG_PARTITIONS=$partitions
