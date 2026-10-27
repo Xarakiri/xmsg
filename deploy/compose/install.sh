@@ -18,6 +18,9 @@
 #   --search             also run search (OpenSearch and the indexer; +1.5 GB of memory)
 #   --no-start           write the configuration only
 #   --yes                no questions; defaults for anything not given
+#
+# From an air-gapped bundle (make-bundle.sh), the images come from images/ next to this
+# script: nothing is pulled, and the bundle's version is installed.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -56,6 +59,16 @@ ask() {
 
 command -v openssl >/dev/null || fail "openssl is required"
 
+# ---- air-gapped bundle -----------------------------------------------------------------
+bundle=0
+if [[ -f images/images.tar.gz && -f bundle.env ]]; then
+  bundle=1
+  # The bundle's images win over the existing configuration: unpacking a newer bundle
+  # and running this is the upgrade.
+  : "${registry:=$(sed -n 's/^XMSG_REGISTRY=//p' bundle.env)}"
+  : "${version:=$(sed -n 's/^XMSG_VERSION=//p' bundle.env)}"
+fi
+
 # ---- existing configuration ----------------------------------------------------------
 # Re-runs keep the secrets: new ones would lock everyone out (signing key) or no longer
 # open the database (its password is set once, when the volume is created).
@@ -69,6 +82,9 @@ existing() { [[ -f .env ]] && sed -n "s/^$1=//p" .env | tail -n 1 || true; }
 : "${partitions:=$(existing XMSG_PARTITIONS)}"
 # Search stays on once installed with it.
 [[ -n "$(existing COMPOSE_PROFILES)" ]] && : "${search:=1}"
+if [[ $bundle -eq 1 && -n "$search" && "$(sed -n 's/^XMSG_BUNDLE_SEARCH=//p' bundle.env)" != 1 ]]; then
+  fail "search is on, but this bundle was made without it (make-bundle.sh --no-search)"
+fi
 : "${registry:=$(existing XMSG_REGISTRY)}"
 : "${version:=$(existing XMSG_VERSION)}"
 ask domain "Domain people will use (e.g. chat.example.com)" "localhost"
@@ -154,7 +170,20 @@ say "Configuration written to $(pwd)/.env"
 command -v docker >/dev/null || fail "Docker is required (https://docs.docker.com/engine/install/)"
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required (the 'docker compose' plugin)"
 command -v curl >/dev/null || fail "curl is required"
-if [[ -n "$registry" ]]; then
+if [[ $bundle -eq 1 ]]; then
+  missing=0
+  while read -r image; do
+    docker image inspect "$image" >/dev/null 2>&1 || missing=1
+  done < images/images.txt
+  if [[ $missing -eq 1 ]]; then
+    if command -v sha256sum >/dev/null; then
+      say "Checking the bundle"
+      sha256sum --quiet -c SHA256SUMS || fail "the bundle is damaged (SHA256SUMS doesn't match)"
+    fi
+    say "Loading images from the bundle (version $version)"
+    gunzip -c images/images.tar.gz | docker load --quiet >/dev/null
+  fi
+elif [[ -n "$registry" ]]; then
   say "Pulling images from $registry (version ${version:-dev})"
   if ! docker compose pull --quiet --ignore-buildable; then
     # Images loaded by hand (an offline bundle, CI) are fine as they are.
