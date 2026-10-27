@@ -49,6 +49,24 @@ It asks for the domain and how to get the TLS certificate (Let's Encrypt, your o
 
 Back up with [`xmsgctl backup`](../../tools/xmsgctl/README.md), which archives `.env` together with the data: without its signing key every session ends, and without its Postgres password the database doesn't open. `xmsgctl health` checks a running installation.
 
+## Air-gapped install
+For a machine without access to container registries, build a bundle where there is access: every image the installation runs (xmsg's and the backends'), the compose files, `install.sh` and optionally `xmsgctl`, in one archive.
+
+```bash
+./make-bundle.sh --registry registry.example.com/xmsg --version 0.5.0 --xmsgctl ./xmsgctl
+# or from this checkout: ./make-bundle.sh --version dev --build
+```
+
+The images must match the target machine's CPU (`linux-amd64` or `linux-arm64` in the name). The bundle includes search unless built with `--no-search`, since it can't be added later without registry access. Copy `xmsg-small-<version>-linux-<arch>.tar` across, then:
+
+```bash
+tar -xf xmsg-small-0.5.0-linux-amd64.tar && cd xmsg-small-0.5.0-linux-amd64
+./install.sh                                   # loads the images from images/, pulls nothing
+./xmsgctl health --wait 300
+```
+
+`install.sh` checks the bundle against `SHA256SUMS` before loading it. To upgrade, unpack the newer bundle, copy `.env` into it, and run `./install.sh` there: the bundle's version replaces the installed one, and the rest of [Upgrade](#upgrade) applies. CI's `air-gapped` job builds a bundle, deletes every image, makes registries unreachable, installs from the bundle and runs the end-to-end smoke test.
+
 ## Upgrade
 Data and secrets live in Docker volumes and `.env`, not in this directory, so an upgrade swaps the release and keeps both:
 
