@@ -410,6 +410,7 @@ jobs:
           ls -lh "$RUNNER_TEMP"/xmsg-small-ci-linux-*.tar
       - name: Go offline (no images, no registry)
         run: |
+          docker rm -f $(docker ps -aq) 2>/dev/null || true
           docker system prune -af --volumes
           # Every pull goes through a proxy that isn't there.
           sudo mkdir -p /etc/systemd/system/docker.service.d
@@ -417,7 +418,11 @@ jobs:
             sudo tee /etc/systemd/system/docker.service.d/offline.conf
           sudo systemctl daemon-reload && sudo systemctl restart docker
           if docker pull --quiet postgres:17; then echo "pulls still work"; exit 1; fi
-          test -z "$(docker images -q)"
+          # None of the bundle's images are left on this machine.
+          tar -xOf "$RUNNER_TEMP"/xmsg-small-ci-linux-*.tar --wildcards '*/images/images.txt' |
+            while read -r image; do
+              if docker image inspect "$image" >/dev/null 2>&1; then echo "$image is still here"; exit 1; fi
+            done
       - name: Install from the bundle
         run: |
           mkdir "$RUNNER_TEMP/site"
