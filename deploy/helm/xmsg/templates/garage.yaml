@@ -1,0 +1,104 @@
+{{/* SPDX-License-Identifier: AGPL-3.0-only */}}
+{{- if include "xmsg.garageBundled" . }}
+{{- $full := include "xmsg.fullname" . -}}
+# Garage (ADR-0024), the bundled S3 store for files: one pod, one copy, on a PVC. Its RPC
+# secret and admin token come from the chart's Secret; the setup job below creates the
+# layout, the media service's key and the bucket (and changes nothing once done).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $full }}-garage
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+data:
+  garage.toml: |
+{{ .Files.Get "files/garage.toml" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $full }}-garage
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+spec:
+  replicas: 1
+  serviceName: {{ $full }}-garage
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: garage }
+  template:
+    metadata:
+      labels: {{- include "xmsg.labels" . | nindent 8 }}
+        app.kubernetes.io/component: garage
+      annotations:
+        checksum/config: {{ .Files.Get "files/garage.toml" | sha256sum }}
+    spec:
+      containers:
+        - name: garage
+          image: {{ .Values.garage.image }}
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom: { secretKeyRef: { name: {{ include "xmsg.secretName" . }}, key: XMSG_GARAGE_RPC_SECRET } }
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ include "xmsg.secretName" . }}, key: XMSG_GARAGE_ADMIN_TOKEN } }
+          ports:
+            - { name: s3, containerPort: 3900 }
+            - { name: admin, containerPort: 3903 }
+          readinessProbe:
+            tcpSocket: { port: s3 }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: [/garage, status] }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources: {{- toYaml .Values.garage.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/garage.toml, subPath: garage.toml }
+            - { name: data, mountPath: /var/lib/garage }
+      volumes:
+        - { name: config, configMap: { name: {{ $full }}-garage } }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.garage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.garage.storage }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $full }}-garage
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: garage }
+  ports:
+    - { name: s3, port: 3900, targetPort: s3 }
+    - { name: admin, port: 3903, targetPort: admin }
+---
+# After the release's pods are created (Garage must be running), on install and upgrade.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $full }}-garage-setup
+  labels: {{- include "xmsg.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext: { runAsNonRoot: true, runAsUser: 10001 }
+      containers:
+        - name: setup
+          image: {{ include "xmsg.image" (list . "services") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [xmsg-media, garage-init]
+          envFrom:
+            - configMapRef: { name: {{ $full }}-env }
+            - secretRef: { name: {{ include "xmsg.secretName" . }} }
+          env:
+            - { name: XMSG_GARAGE_ADMIN_URL, value: "http://{{ $full }}-garage:3903" }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+{{- end }}

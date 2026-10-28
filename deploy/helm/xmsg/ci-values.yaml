@@ -6,3 +6,6 @@ postgres: { url: "postgres://xmsg:secret@postgres:5432/xmsg" }
 opensearch: { url: "http://opensearch:9200" }
 secrets: { authKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", vapidPrivateKey: "test-key" }
 ingress: { enabled: true, className: nginx, host: chat.example.com }
+media:
+  s3: { keyId: "GK000000000000000000000000", secret: "0000000000000000000000000000000000000000000000000000000000000000" }
+garage: { rpcSecret: "0000000000000000000000000000000000000000000000000000000000000000", adminToken: "ci-admin-token" }

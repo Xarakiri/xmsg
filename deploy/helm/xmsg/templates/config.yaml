@@ -48,6 +48,13 @@ data:
   XMSG_SEARCH_URL: {{ . | quote }}
   XMSG_OPENSEARCH_URL: {{ . | quote }}
   {{- end }}
+  {{- if .Values.media.enabled }}
+  XMSG_MEDIA_S3_ENDPOINT: {{ default (printf "http://%s-garage:3900" $full) .Values.media.s3.endpoint | quote }}
+  XMSG_MEDIA_S3_REGION: {{ default (ternary "garage" "us-east-1" (empty .Values.media.s3.endpoint)) .Values.media.s3.region | quote }}
+  XMSG_MEDIA_BUCKET: {{ .Values.media.s3.bucket | quote }}
+  XMSG_MEDIA_MAX_BYTES: {{ .Values.media.maxBytes | quote }}
+  XMSG_MEDIA_CONCURRENT_UPLOADS: {{ .Values.media.concurrentUploads | quote }}
+  {{- end }}
 {{- if not .Values.secrets.existingSecret }}
 ---
 apiVersion: v1
@@ -68,6 +75,20 @@ stringData:
   {{- end }}
   {{- if .Values.push.enabled }}
   XMSG_PUSH_VAPID_PRIVATE_KEY: {{ required "secrets.vapidPrivateKey is required when push is enabled" .Values.secrets.vapidPrivateKey | quote }}
+  {{- end }}
+  {{- if .Values.media.enabled }}
+  XMSG_MEDIA_S3_KEY_ID: {{ required "media.s3.keyId is required with media (or secrets.existingSecret)" .Values.media.s3.keyId | quote }}
+  XMSG_MEDIA_S3_SECRET: {{ required "media.s3.secret is required with media (or secrets.existingSecret)" .Values.media.s3.secret | quote }}
+  {{- end }}
+  {{- if include "xmsg.garageBundled" . }}
+  {{- if not (regexMatch "^[0-9a-f]{64}$" .Values.garage.rpcSecret) }}
+  {{- fail "garage.rpcSecret must be 64 hex digits (openssl rand -hex 32)" }}
+  {{- end }}
+  {{- if not (regexMatch "^GK[0-9a-f]{24}$" .Values.media.s3.keyId) }}
+  {{- fail "with the bundled Garage, media.s3.keyId must be GK and 24 hex digits (GK$(openssl rand -hex 12))" }}
+  {{- end }}
+  XMSG_GARAGE_RPC_SECRET: {{ .Values.garage.rpcSecret | quote }}
+  XMSG_GARAGE_ADMIN_TOKEN: {{ required "garage.adminToken is required with the bundled Garage" .Values.garage.adminToken | quote }}
   {{- end }}
 {{- end }}
 {{- if and .Values.enterprise.enabled (not .Values.enterprise.existingSecret) }}
