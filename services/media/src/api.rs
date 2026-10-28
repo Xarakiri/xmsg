@@ -138,6 +138,7 @@ async fn upload<S: Store, B: Blobs>(
         width: None,
         height: None,
         thumbnail_type: None,
+        deleted: false,
     };
     let mut thumb = None;
     if let Some(image) = image {
@@ -183,8 +184,9 @@ async fn visible<S: Store, B: Blobs>(
 ) -> Result<FileMeta, Response> {
     let user = caller(&app.verifier, headers).await?;
     let file = match app.store.get(file_id).await {
-        Ok(Some(f)) => f,
-        Ok(None) => return Err(not_found()),
+        // A deleted message's files are gone at once (the bytes follow, ADR-0024).
+        Ok(Some(f)) if !f.deleted => f,
+        Ok(_) => return Err(not_found()),
         Err(e) => return Err(unavailable("file read", &e)),
     };
     match app.store.is_member(file.channel_id, user).await {

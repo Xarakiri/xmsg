@@ -31,13 +31,18 @@ Presigned URLs and a CDN are for the Large tier, where serving bytes through our
 
 ### Not in this version
 - **Virus scanning:** ClamAV needs 1.5–3 GB of memory and signature updates (a mirror for air-gapped installs). It's an optional profile for later, with files held as pending until scanned.
-- **Deleting files** with their message, retention, and per-workspace quotas.
+- **Retention, and per-workspace quotas.**
 - **Resumable or multipart uploads** beyond 25 MB.
 
 ### Files in messages
 - **The client sends only file IDs** (at most 10). The messages service looks them up and writes each file's name, type, size and image size into the event, replacing anything the client put there.
 - **Only your own uploads, in the same channel.** A file the sender didn't upload, or one from another channel, is refused like an unknown one.
-- **Storage:** the sequencer copies the details into `MessageCreated` (or `ThreadReply`), the persister stores them in the `attachments` blob of `messages` (or `thread_messages`), and history and the thread API return them. A deleted message's attachments disappear with its body (the objects stay for now; see "Deleting files" above).
+- **Storage:** the sequencer copies the details into `MessageCreated` (or `ThreadReply`), the persister stores them in the `attachments` blob of `messages` (or `thread_messages`), and history and the thread API return them. A deleted message's attachments disappear with its body.
+
+### Deleting files
+- **A file belongs to one message.** The media service follows `messages.persisted` and records the message each file was sent with (`files.message_id`). The messages service then refuses to attach it again. This is best effort: two sends in the same instant can both pass.
+- **Deleting the message deletes its files.** On `MessageDeleted`, the media service reads the message's attachments from its row, marks those files deleted (every download answers 404 at once), and queues them in `file_purges` by day.
+- **The bytes go after a grace period**, 24 hours by default (`XMSG_MEDIA_PURGE_AFTER_SECS`). A sweeper in each media instance removes the object and its thumbnail; the `files` row stays, marked deleted. The grace period leaves room for undo and for legal hold (EE), which will be checked before purging.
 
 ## Consequences
 - The Small tier gains a backend: Garage (~50–100 MB of memory; capped at 256 MB) and two volumes (`garage-meta`, `garage-data`), which `xmsgctl backup` includes.

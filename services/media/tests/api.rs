@@ -50,6 +50,10 @@ impl Blobs for Shared {
         self.0.blobs.lock().unwrap().insert(key.into(), bytes);
         Ok(())
     }
+    async fn delete(&self, key: &str) -> Result<(), String> {
+        self.0.blobs.lock().unwrap().remove(key);
+        Ok(())
+    }
     async fn get(&self, key: &str) -> Result<Option<Body>, String> {
         Ok(self
             .0
@@ -352,6 +356,14 @@ async fn s3_round_trip() {
     let body = s3.get(&key).await.unwrap().expect("the object");
     assert_eq!(body.collect().await.unwrap().to_bytes(), data);
     assert!(s3.get("it/no-such-object").await.unwrap().is_none());
+    // Deleting removes it; deleting what isn't there is fine too.
+    s3.delete(&key).await.unwrap();
+    assert!(s3.get(&key).await.unwrap().is_none());
+    s3.delete(&key).await.unwrap();
+    // Put it back for the wrong-secret check below.
+    s3.put(&key, data.clone(), "application/octet-stream")
+        .await
+        .unwrap();
 
     // A wrong secret is refused, not ignored.
     let wrong = xmsg_media::s3::S3::new(
