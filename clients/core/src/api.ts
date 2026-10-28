@@ -3,7 +3,7 @@
 
 import { fromBinary } from "@bufbuild/protobuf";
 import { EventPageSchema, type EventPage } from "./gen/xmsg/v1/sync_pb.js";
-import type { ChannelKind, ListedChannel, LoadedReply, NotifyLevel } from "./state.ts";
+import type { Attachment, ChannelKind, ListedChannel, LoadedReply, NotifyLevel } from "./state.ts";
 
 export interface Tokens {
   access_token: string;
@@ -24,7 +24,12 @@ export interface Endpoints {
   users: string;
   /** Web Push subscriptions (optional: push may be off). */
   push?: string;
+  /** Files (ADR-0024); "/media" behind the proxy by default. */
+  media?: string;
 }
+
+/** Largest upload the media service takes (its default). */
+export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 /** What anyone sharing a workspace with the user sees. */
 export interface UserProfile {
@@ -288,6 +293,37 @@ export class Api {
 
   async unsubscribePush(token: string, endpoint: string): Promise<void> {
     await call(`${this.endpoints.push ?? "/push"}/v1/push/subscriptions`, { method: "DELETE", token, body: json({ endpoint }) });
+  }
+
+  /** Uploads a file to a channel (members only); send its `fileId` with a message to attach it. */
+  async uploadFile(token: string, channelId: string, file: Blob, name: string): Promise<Attachment> {
+    const url = `${this.endpoints.media ?? "/media"}/v1/channels/${channelId}/files?name=${encodeURIComponent(name)}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    const reply = await response.json().catch(() => ({}));
+    if (!response.ok) throw new ApiError(response.status, reply.error ?? response.statusText);
+    return {
+      fileId: reply.file_id,
+      name: reply.name,
+      contentType: reply.content_type,
+      size: reply.size,
+      ...(reply.width != null && { width: reply.width, height: reply.height }),
+      hasThumbnail: reply.thumbnail_type != null,
+    };
+  }
+
+  /**
+   * A file's bytes (or its thumbnail) for showing or saving. Fetched with the token, since
+   * an <img src> can't carry one: show it through URL.createObjectURL.
+   */
+  async fileBlob(token: string, fileId: string, thumbnail = false): Promise<Blob> {
+    const url = `${this.endpoints.media ?? "/media"}/v1/files/${fileId}${thumbnail ? "/thumbnail" : ""}`;
+    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new ApiError(response.status, response.statusText);
+    return response.blob();
   }
 
   /** A thread's replies, oldest first (ADR-0005). */

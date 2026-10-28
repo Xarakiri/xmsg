@@ -94,12 +94,16 @@ export function encodeSend(
   clientMsgId: string,
   body: string,
   threadRoot?: { msgSeq: number; messageId: string },
+  fileIds: string[] = [],
 ): Frame {
   const root = threadRoot && { msgSeq: BigInt(threadRoot.msgSeq), messageId: BigInt(threadRoot.messageId) };
   return toBinary(
     ClientFrameSchema,
     create(ClientFrameSchema, {
-      frame: { case: "sendMessage", value: { channelId: BigInt(channelId), clientMsgId, body, ...(root && { threadRoot: root }) } },
+      frame: {
+        case: "sendMessage",
+        value: { channelId: BigInt(channelId), clientMsgId, body, ...(root && { threadRoot: root }), fileIds: fileIds.map(BigInt) },
+      },
     }),
   ) as Frame;
 }
@@ -229,9 +233,15 @@ export class Connection {
   }
 
   /** Sends if online; returns false otherwise (the message stays in the caller's outbox). */
-  send(channelId: string, clientMsgId: string, body: string, threadRoot?: { msgSeq: number; messageId: string }): boolean {
+  send(
+    channelId: string,
+    clientMsgId: string,
+    body: string,
+    threadRoot?: { msgSeq: number; messageId: string },
+    fileIds: string[] = [],
+  ): boolean {
     if (!this.online || !this.ws) return false;
-    this.ws.send(encodeSend(channelId, clientMsgId, body, threadRoot));
+    this.ws.send(encodeSend(channelId, clientMsgId, body, threadRoot, fileIds));
     return true;
   }
 

@@ -88,6 +88,21 @@ export interface Message {
    * under `threadKey(channelId, root.msgSeq)`, and its `msgSeq` holds its reply_seq.
    */
   threadRoot?: ThreadRootRef;
+  /** Files in it (ADR-0024); absent without any. */
+  attachments?: Attachment[];
+}
+
+/** A file in a message (ADR-0024). Its bytes come from the media service, for members. */
+export interface Attachment {
+  fileId: string;
+  name: string;
+  /** Sniffed for images; otherwise what the uploader's browser said (display only). */
+  contentType: string;
+  size: number;
+  /** Images only. */
+  width?: number;
+  height?: number;
+  hasThumbnail: boolean;
 }
 
 export interface ThreadRootRef {
@@ -117,7 +132,16 @@ export interface ChatState {
 
 export type Action =
   | { type: "event"; event: SequencedEvent; at: number }
-  | { type: "send"; channelId: string; clientMsgId: string; body: string; at: number; threadRoot?: ThreadRootRef }
+  | {
+      type: "send";
+      channelId: string;
+      clientMsgId: string;
+      body: string;
+      at: number;
+      threadRoot?: ThreadRootRef;
+      /** Uploaded already; shown at once, sent as their IDs. */
+      attachments?: Attachment[];
+    }
   /** A thread's replies from the server (opening the thread). */
   | { type: "threadLoaded"; channelId: string; root: ThreadRootRef; replies: LoadedReply[] }
   | { type: "ack"; clientMsgId: string }
@@ -213,6 +237,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
         status: "pending",
         at: action.at,
         ...(action.threadRoot && { threadRoot: action.threadRoot }),
+        ...(action.attachments?.length && { attachments: action.attachments }),
       };
       const listKey = action.threadRoot ? threadKey(action.channelId, action.threadRoot.msgSeq) : action.channelId;
       return withMessages(state, listKey, (list) => [...list, message]);
@@ -448,6 +473,16 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
         messageId: payload.value.messageId.toString(),
         status: "confirmed",
         at,
+        ...(payload.value.attachments.length > 0 && {
+          attachments: payload.value.attachments.map((a) => ({
+            fileId: a.fileId.toString(),
+            name: a.name,
+            contentType: a.contentType,
+            size: Number(a.size),
+            ...(a.width > 0 && { width: a.width, height: a.height }),
+            hasThumbnail: a.hasThumbnail,
+          })),
+        }),
       };
       // Own messages count as read (the server's feeder does the same, ADR-0012).
       let updated: Channel = {
@@ -466,6 +501,7 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
         if (known?.deleted || known?.editSeq) {
           const { editedAt, editSeq, deleted, body } = known;
           merged = { ...merged, body, ...(editedAt && { editedAt }), ...(editSeq && { editSeq }), ...(deleted && { deleted }) };
+          if (deleted) delete merged.attachments;
         }
         return sortMessages([...rest, merged]);
       });
@@ -530,7 +566,8 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
       const target = Number(payload.value.msgSeq);
       const next = withChannel(state, channel);
       return withMessages(next, channelId, (list) =>
-        list.map((m) => (m.msgSeq === target ? { ...m, body: "", deleted: true } : m)),
+        // Its files go with its body.
+        list.map((m) => (m.msgSeq === target ? { ...m, body: "", deleted: true, attachments: undefined } : m)),
       );
     }
     default:
