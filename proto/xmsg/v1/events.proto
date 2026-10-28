@@ -30,6 +30,8 @@ message InboundEvent {
     EditMessage edit_message = 14;
     DeleteMessage delete_message = 15;
     MemberRoleChangeRequested member_role_change_requested = 17;
+    // From the calls service only (ADR-0025): what LiveKit reported about a call.
+    CallEvent call_event = 18;
   }
 }
 
@@ -156,6 +158,7 @@ message SequencedEvent {
     MessageEdited message_edited = 17;
     MessageDeleted message_deleted = 18;
     MemberRoleChanged member_role_changed = 21;
+    CallEvent call_event = 22;
   }
 }
 
@@ -258,4 +261,20 @@ message SendResult {
   string detail = 3;
   // With REJECT_REASON_RATE_LIMITED: when the client may send again.
   uint32 retry_after_ms = 4;
+}
+
+// A voice/video call in a channel (ADR-0025): a call in a DM or group DM (the others are
+// rung), or a channel's huddle (drop-in, no ringing). The calls service reports it from
+// LiveKit's webhooks; the sequencer orders it like any channel event (no msg_seq), so
+// every member learns of it and sync replays it.
+message CallEvent {
+  // The LiveKit room: new for each DM call; one per channel for a huddle.
+  string call_id = 1;
+  CallChange change = 2;
+  bool huddle = 3;
+  // Who's in the call after this change (absolute, so a lost update heals).
+  repeated int64 participant_ids = 4;
+  int64 started_at_ms = 5;
+  // Set when it ends.
+  int64 duration_ms = 6;
 }

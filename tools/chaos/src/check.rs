@@ -293,6 +293,9 @@ pub fn summary(e: &SequencedEvent) -> String {
         Some(Payload::ReactionsChanged(r)) => {
             format!("reactions msg_seq={} {}={}", r.msg_seq, r.emoji, r.count)
         }
+        Some(Payload::CallEvent(c)) => {
+            format!("call {} {:?} {:?}", c.call_id, c.change, c.participant_ids)
+        }
         None => "empty".into(),
     }
 }

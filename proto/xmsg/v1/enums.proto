@@ -47,3 +47,14 @@ enum PresenceStatus {
   PRESENCE_STATUS_AWAY = 2;
   PRESENCE_STATUS_ONLINE = 3;
 }
+
+// What happened to a call (ADR-0025).
+enum CallChange {
+  CALL_CHANGE_UNSPECIFIED = 0;
+  // The first person joined: the call exists now.
+  CALL_CHANGE_STARTED = 1;
+  // Someone joined or left; `participant_ids` is who's in it now.
+  CALL_CHANGE_PARTICIPANTS = 2;
+  // Everyone left (or it timed out): it's over.
+  CALL_CHANGE_ENDED = 3;
+}

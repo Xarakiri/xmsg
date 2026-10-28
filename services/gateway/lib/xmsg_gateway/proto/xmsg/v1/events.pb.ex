@@ -36,6 +36,8 @@ defmodule Xmsg.V1.InboundEvent do
     type: Xmsg.V1.MemberRoleChangeRequested,
     json_name: "memberRoleChangeRequested",
     oneof: 0
+
+  field :call_event, 18, type: Xmsg.V1.CallEvent, json_name: "callEvent", oneof: 0
 end
 
 defmodule Xmsg.V1.EditMessage do
@@ -237,6 +239,8 @@ defmodule Xmsg.V1.SequencedEvent do
     type: Xmsg.V1.MemberRoleChanged,
     json_name: "memberRoleChanged",
     oneof: 0
+
+  field :call_event, 22, type: Xmsg.V1.CallEvent, json_name: "callEvent", oneof: 0
 end
 
 defmodule Xmsg.V1.MessageEdited do
@@ -399,4 +403,20 @@ defmodule Xmsg.V1.SendResult do
   field :reason, 2, type: Xmsg.V1.RejectReason, enum: true
   field :detail, 3, type: :string
   field :retry_after_ms, 4, type: :uint32, json_name: "retryAfterMs"
+end
+
+defmodule Xmsg.V1.CallEvent do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.CallEvent",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :call_id, 1, type: :string, json_name: "callId"
+  field :change, 2, type: Xmsg.V1.CallChange, enum: true
+  field :huddle, 3, type: :bool
+  field :participant_ids, 4, repeated: true, type: :int64, json_name: "participantIds"
+  field :started_at_ms, 5, type: :int64, json_name: "startedAtMs"
+  field :duration_ms, 6, type: :int64, json_name: "durationMs"
 end

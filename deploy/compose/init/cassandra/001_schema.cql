@@ -125,3 +125,9 @@ ALTER TABLE file_purges ADD IF NOT EXISTS size bigint;
 CREATE TABLE IF NOT EXISTS workspace_storage (
   workspace_id bigint PRIMARY KEY, bytes counter
 );
+
+-- Writer: calls (ADR-0025). A channel's call while it lasts: one row, removed when it ends.
+CREATE TABLE IF NOT EXISTS active_calls (
+  channel_id bigint PRIMARY KEY, call_id text, huddle boolean, started_at timestamp,
+  participants set<bigint>, announced boolean
+);

@@ -4990,6 +4990,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmsg-calls"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "hex",
+ "hmac",
+ "http-body-util",
+ "rand 0.9.5",
+ "rdkafka",
+ "scylla",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "xmsg-auth",
+ "xmsg-authn",
+ "xmsg-partition",
+ "xmsg-proto",
+]
+
+[[package]]
 name = "xmsg-channels"
 version = "0.0.0"
 dependencies = [

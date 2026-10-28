@@ -78,3 +78,18 @@ defmodule Xmsg.V1.PresenceStatus do
   field :PRESENCE_STATUS_AWAY, 2
   field :PRESENCE_STATUS_ONLINE, 3
 end
+
+defmodule Xmsg.V1.CallChange do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "xmsg.v1.CallChange",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :CALL_CHANGE_UNSPECIFIED, 0
+  field :CALL_CHANGE_STARTED, 1
+  field :CALL_CHANGE_PARTICIPANTS, 2
+  field :CALL_CHANGE_ENDED, 3
+end
