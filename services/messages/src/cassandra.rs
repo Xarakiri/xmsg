@@ -62,7 +62,7 @@ impl Cassandra {
             .await?,
             my_channels: prepare(format!("SELECT channel_id FROM {k}.channels_by_user WHERE user_id = ? LIMIT 1000")).await?,
             thread: prepare(format!(
-                "SELECT reply_seq, message_id, author_id, body FROM {k}.thread_messages \
+                "SELECT reply_seq, message_id, author_id, body, attachments FROM {k}.thread_messages \
                  WHERE channel_id = ? AND thread_root = ? AND reply_seq > ? ORDER BY reply_seq ASC LIMIT ?"
             ))
             .await?,
@@ -105,15 +105,18 @@ impl Store for Cassandra {
             .map_err(err)?
             .into_rows_result()
             .map_err(err)?
-            .rows::<(i64, i64, Option<i64>, Option<String>)>()
+            .rows::<(i64, i64, Option<i64>, Option<String>, Option<Vec<u8>>)>()
             .map_err(err)?
             .map(|r| {
-                r.map(|(reply_seq, message_id, author_id, body)| ReplyRow {
-                    reply_seq,
-                    message_id,
-                    author_id: author_id.unwrap_or_default(),
-                    body: body.unwrap_or_default(),
-                })
+                r.map(
+                    |(reply_seq, message_id, author_id, body, attachments)| ReplyRow {
+                        reply_seq,
+                        message_id,
+                        author_id: author_id.unwrap_or_default(),
+                        body: body.unwrap_or_default(),
+                        attachments: attachments.unwrap_or_default(),
+                    },
+                )
                 .map_err(err)
             })
             .collect()

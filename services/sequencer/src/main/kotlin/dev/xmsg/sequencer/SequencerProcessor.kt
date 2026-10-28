@@ -213,7 +213,9 @@ class SequencerProcessor(
                     .setRootMessageId(root.messageId)
                     .setReplySeq(replySeq)
                     .setReplyCount(replySeq)
-                    .addAllMentionedUserIds(mentioned),
+                    .addAllMentionedUserIds(mentioned)
+                    // Checked and filled in by the messages service (ADR-0024).
+                    .addAllAttachments(event.sendMessage.attachmentsList),
             )
         }
     }

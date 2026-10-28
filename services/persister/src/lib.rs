@@ -47,6 +47,8 @@ pub enum Write {
         body: String,
         reply_count: i64,
         at_ms: i64,
+        /// As for `Message`.
+        attachments: Vec<u8>,
     },
     /// A reaction batch's result (ADR-0015): the absolute count, and who added or removed.
     Reactions {
@@ -189,14 +191,7 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
                 author_id: event.actor_id,
                 client_msg_id: event.dedupe_id.clone(),
                 body: created.body.clone(),
-                attachments: if created.attachments.is_empty() {
-                    Vec::new()
-                } else {
-                    xmsg_proto::v1::Attachments {
-                        items: created.attachments.clone(),
-                    }
-                    .encode_to_vec()
-                },
+                attachments: encode_attachments(&created.attachments),
             });
             out.push(Write::ChannelEvent {
                 channel_id: event.channel_id,
@@ -247,6 +242,7 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
                 body: r.body.clone(),
                 reply_count: r.reply_count,
                 at_ms: event_time_ms,
+                attachments: encode_attachments(&r.attachments),
             });
             // The whole reply, so sync rebuilds it as delivered (replies can't be edited
             // or deleted yet; when they can, this becomes a pointer like messages).
@@ -317,6 +313,19 @@ fn channel_event(event: &SequencedEvent, kind: &'static str, payload: Vec<u8>) -
         event_seq: event.event_seq,
         kind,
         payload,
+    }
+}
+
+/// `Attachments`, encoded for a `messages` or `thread_messages` row: empty without files
+/// (never null, so no tombstone).
+fn encode_attachments(items: &[xmsg_proto::v1::Attachment]) -> Vec<u8> {
+    if items.is_empty() {
+        Vec::new()
+    } else {
+        xmsg_proto::v1::Attachments {
+            items: items.to_vec(),
+        }
+        .encode_to_vec()
     }
 }
 
@@ -641,6 +650,7 @@ mod tests {
                 reply_seq: 2,
                 reply_count: 2,
                 mentioned_user_ids: vec![],
+                ..Default::default()
             }),
         );
         let w = writes(&e, 7);
@@ -656,6 +666,7 @@ mod tests {
                 body: "agreed".into(),
                 reply_count: 2,
                 at_ms: 7,
+                attachments: Vec::new(),
             }
         );
         assert!(matches!(

@@ -64,9 +64,6 @@ pub async fn resolve(
     if send.file_ids.is_empty() {
         return Ok(());
     }
-    if send.thread_root.is_some() {
-        return invalid("files in thread replies aren't supported yet".into());
-    }
     if send.file_ids.len() > MAX_ATTACHMENTS {
         return invalid(format!("at most {MAX_ATTACHMENTS} files per message"));
     }
@@ -270,6 +267,10 @@ mod tests {
         assert!(resolve(&fake(), &mut e).await.is_err());
         let mut e = send(vec![1, 1]);
         assert!(resolve(&fake(), &mut e).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn thread_replies_carry_files_too() {
         let mut e = send(vec![1]);
         if let Some(Payload::SendMessage(s)) = &mut e.payload {
             s.thread_root = Some(ThreadRoot {
@@ -277,7 +278,8 @@ mod tests {
                 message_id: 1,
             });
         }
-        assert!(resolve(&fake(), &mut e).await.is_err());
+        resolve(&fake(), &mut e).await.unwrap();
+        assert_eq!(attachments(&e).len(), 1);
     }
 
     #[tokio::test]

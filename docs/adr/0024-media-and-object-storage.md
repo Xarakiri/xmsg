@@ -33,12 +33,11 @@ Presigned URLs and a CDN are for the Large tier, where serving bytes through our
 - **Virus scanning:** ClamAV needs 1.5–3 GB of memory and signature updates (a mirror for air-gapped installs). It's an optional profile for later, with files held as pending until scanned.
 - **Deleting files** with their message, retention, and per-workspace quotas.
 - **Resumable or multipart uploads** beyond 25 MB.
-- **Files in thread replies** (top-level messages only for now; replies would need an `attachments` column on `thread_messages`).
 
 ### Files in messages
 - **The client sends only file IDs** (at most 10). The messages service looks them up and writes each file's name, type, size and image size into the event, replacing anything the client put there.
 - **Only your own uploads, in the same channel.** A file the sender didn't upload, or one from another channel, is refused like an unknown one.
-- **Storage:** the sequencer copies the details into `MessageCreated`, the persister stores them in the `messages.attachments` blob, and history rebuilds them. A deleted message's attachments disappear with its body (the objects stay for now; see "Deleting files" above).
+- **Storage:** the sequencer copies the details into `MessageCreated` (or `ThreadReply`), the persister stores them in the `attachments` blob of `messages` (or `thread_messages`), and history and the thread API return them. A deleted message's attachments disappear with its body (the objects stay for now; see "Deleting files" above).
 
 ## Consequences
 - The Small tier gains a backend: Garage (~50–100 MB of memory; capped at 256 MB) and two volumes (`garage-meta`, `garage-data`), which `xmsgctl backup` includes.

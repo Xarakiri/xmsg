@@ -2,7 +2,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ApiError,
-  MAX_FILE_BYTES,
   canPost,
   fromSsoFragment,
   mentionCount,
@@ -17,7 +16,7 @@ import {
   type Presence,
   type SearchHit,
 } from "@xmsg/client-core";
-import { Attachments, PendingFiles, formatSize, type PendingFile } from "./files.tsx";
+import { AttachButton, Attachments, PendingFiles, useFileDrafts } from "./files.tsx";
 import { api, session } from "./session.ts";
 import { disablePush, enablePush, pushState, type PushState } from "./push.ts";
 import { loadState } from "./storage.ts";
@@ -370,7 +369,8 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
               replies={state.messages[threadKey(current.id, root.msgSeq)] ?? []}
               me={me}
               names={names}
-              onSend={(b) => send(current.id, b, ref)}
+              onSend={(b, files) => send(current.id, b, ref, files)}
+              onUpload={(file) => upload(current.id, file)}
               onRetry={retry}
               onClose={() => setThreadOf(null)}
             />
@@ -535,8 +535,7 @@ function Conversation({
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState("");
   // Files picked for the next message (ADR-0024): uploaded at once, sent with it.
-  const [files, setFiles] = useState<PendingFile[]>([]);
-  const picker = useRef<HTMLInputElement>(null);
+  const drafts = useFileDrafts(onUpload, errorText);
   // The message being edited: its key, the new text, and the edit_id reused on retries.
   const [editing, setEditing] = useState<{ key: string; text: string; editId: string } | null>(null);
   // Read receipts (DMs): "Seen" under my latest message the others have read.
@@ -554,24 +553,9 @@ function Conversation({
   useEffect(() => {
     setNote("");
     setEditing(null);
-    setFiles([]);
+    drafts.reset();
   }, [channel.id]);
-
-  const addFiles = (picked: FileList | null) => {
-    for (const file of Array.from(picked ?? [])) {
-      const id = crypto.randomUUID();
-      if (file.size > MAX_FILE_BYTES) {
-        setFiles((fs) => [...fs, { id, name: file.name, size: file.size, error: `over ${formatSize(MAX_FILE_BYTES)}` }]);
-        continue;
-      }
-      setFiles((fs) => [...fs, { id, name: file.name, size: file.size }]);
-      onUpload(file)
-        .then((attachment) => setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, attachment } : f))))
-        .catch((err) => setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, error: errorText(err) } : f))));
-    }
-  };
-  const ready = files.flatMap((f) => (f.attachment ? [f.attachment] : []));
-  const uploading = files.some((f) => !f.attachment && !f.error);
+  const { ready, uploading } = drafts;
 
   // Edits and deletes are sequenced like messages; the result arrives as an event.
   const saveEdit = async (m: Message) => {
@@ -601,7 +585,7 @@ function Conversation({
     if ((!body && ready.length === 0) || uploading) return;
     onSend(toTokens(body, channel.members, me, names), ready);
     setDraft("");
-    setFiles([]);
+    drafts.reset();
   };
 
   const membership = async (action: "invite" | "leave") => {
@@ -740,23 +724,11 @@ function Conversation({
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            addFiles(e.dataTransfer.files);
+            drafts.add(e.dataTransfer.files);
           }}
         >
-          <PendingFiles files={files} onRemove={(id) => setFiles((fs) => fs.filter((f) => f.id !== id))} />
-          <input
-            ref={picker}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => {
-              addFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-          <button type="button" onClick={() => picker.current?.click()} aria-label="Attach files" title="Attach files">
-            📎
-          </button>
+          <PendingFiles files={drafts.files} onRemove={drafts.remove} />
+          <AttachButton onPick={drafts.add} />
           <textarea
             value={draft}
             onChange={(e) => {
@@ -885,6 +857,7 @@ function ThreadPanel({
   me,
   names,
   onSend,
+  onUpload,
   onRetry,
   onClose,
 }: {
@@ -892,17 +865,20 @@ function ThreadPanel({
   replies: Message[];
   me: string;
   names: Directory;
-  onSend: (body: string) => void;
+  onSend: (body: string, files: Attachment[]) => void;
+  onUpload: (file: File) => Promise<Attachment>;
   onRetry: (key: string) => void;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  const drafts = useFileDrafts(onUpload, errorText);
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     const body = draft.trim();
-    if (!body) return;
-    onSend(body);
+    if ((!body && drafts.ready.length === 0) || drafts.uploading) return;
+    onSend(body, drafts.ready);
     setDraft("");
+    drafts.reset();
   };
   const who = (id: string) => (id === me ? "You" : names.label(id));
   return (
@@ -918,7 +894,14 @@ function ThreadPanel({
           <div className="meta">
             <span className="strong">{who(root.authorId)}</span>
           </div>
-          <div className="body">{root.deleted ? "This message was deleted." : renderBody(root.body, me, names)}</div>
+          {root.deleted ? (
+            <div className="body muted">This message was deleted.</div>
+          ) : (
+            <>
+              {root.body && <div className="body">{renderBody(root.body, me, names)}</div>}
+              {root.attachments && <Attachments files={root.attachments} />}
+            </>
+          )}
         </li>
         {replies.map((r) => (
           <li key={r.key} className={`message ${r.authorId === me ? "own" : ""} ${r.status}`}>
@@ -926,7 +909,8 @@ function ThreadPanel({
               <span className="strong">{who(r.authorId)}</span>
               {r.status === "pending" && <span className="muted small">sending…</span>}
             </div>
-            <div className="body">{renderBody(r.body, me, names)}</div>
+            {r.body && <div className="body">{renderBody(r.body, me, names)}</div>}
+            {r.attachments && <Attachments files={r.attachments} />}
             {r.error && (
               <div className="error small">
                 {r.error}
@@ -943,7 +927,17 @@ function ThreadPanel({
           </li>
         ))}
       </ol>
-      <form className="composer" onSubmit={submit}>
+      <form
+        className="composer"
+        onSubmit={submit}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          drafts.add(e.dataTransfer.files);
+        }}
+      >
+        <PendingFiles files={drafts.files} onRemove={drafts.remove} />
+        <AttachButton onPick={drafts.add} />
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -953,7 +947,9 @@ function ThreadPanel({
           placeholder="Reply…"
           rows={2}
         />
-        <button type="submit">Send</button>
+        <button type="submit" disabled={(!draft.trim() && drafts.ready.length === 0) || drafts.uploading}>
+          {drafts.uploading ? "Uploading…" : "Send"}
+        </button>
       </form>
     </aside>
   );
