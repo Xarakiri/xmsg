@@ -9,6 +9,7 @@
 pub mod api;
 pub mod cassandra;
 pub mod garage;
+pub mod lifecycle;
 pub mod s3;
 pub mod thumbnail;
 
@@ -36,6 +37,9 @@ pub struct FileMeta {
     pub height: Option<i32>,
     /// `image/jpeg` or `image/png` when there's a thumbnail.
     pub thumbnail_type: Option<String>,
+    /// Its message was deleted: gone for everyone now, the bytes after the grace period.
+    #[serde(skip)]
+    pub deleted: bool,
 }
 
 /// IDs are JSON strings, as everywhere in the API (JavaScript numbers lose precision).
@@ -121,6 +125,8 @@ pub trait Blobs: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), String>> + Send;
     /// The object as a streamed body, or None if it doesn't exist.
     fn get(&self, key: &str) -> impl Future<Output = Result<Option<Body>, String>> + Send;
+    /// Removes the object; a missing one is fine.
+    fn delete(&self, key: &str) -> impl Future<Output = Result<(), String>> + Send;
 }
 
 #[cfg(test)]

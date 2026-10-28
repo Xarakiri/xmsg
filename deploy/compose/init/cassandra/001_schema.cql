@@ -101,5 +101,17 @@ CREATE TABLE IF NOT EXISTS push_subscribers (
 -- Writer: media (ADR-0024). One row per upload, never changed; the bytes are in object storage.
 CREATE TABLE IF NOT EXISTS files (
   file_id bigint PRIMARY KEY, channel_id bigint, uploader_id bigint, name text, content_type text,
-  size bigint, sha256 text, created_at timestamp, width int, height int, thumbnail_type text
+  size bigint, sha256 text, created_at timestamp, width int, height int, thumbnail_type text,
+  message_id bigint, deleted_at timestamp
+);
+-- Added with file deletion (ADR-0024); existing installations get them here. message_id:
+-- the message the file was sent with (a file belongs to one); deleted_at: its message was
+-- deleted, so it's gone, and its bytes are removed after the grace period.
+ALTER TABLE files ADD IF NOT EXISTS message_id bigint;
+ALTER TABLE files ADD IF NOT EXISTS deleted_at timestamp;
+
+-- Writer: media. Files whose bytes are due for removal, by the day they were deleted.
+CREATE TABLE IF NOT EXISTS file_purges (
+  day int, file_id bigint, channel_id bigint, deleted_at timestamp,
+  PRIMARY KEY (day, file_id)
 );

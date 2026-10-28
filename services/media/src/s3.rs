@@ -100,6 +100,22 @@ impl Blobs for S3 {
             )),
         }
     }
+
+    async fn delete(&self, key: &str) -> Result<(), String> {
+        let response = self
+            .request(reqwest::Method::DELETE, key, EMPTY_SHA256)
+            .send()
+            .await
+            .map_err(|e| format!("S3 DELETE {key}: {e}"))?;
+        // S3 answers 204 whether or not the object existed; some stores answer 404.
+        match response.status().as_u16() {
+            200 | 204 | 404 => Ok(()),
+            status => Err(format!(
+                "S3 DELETE {key}: {status} {}",
+                response.text().await.unwrap_or_default()
+            )),
+        }
+    }
 }
 
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";

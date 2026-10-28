@@ -25,6 +25,8 @@ pub struct FileRecord {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub has_thumbnail: bool,
+    /// Already sent with a message (a file belongs to one), or that message was deleted.
+    pub used: bool,
 }
 
 /// Where file records are read.
@@ -86,6 +88,11 @@ pub async fn resolve(
         else {
             return invalid(format!("unknown file {id}"));
         };
+        // Best effort: two sends in the same moment can both pass, before the media service
+        // records the first (ADR-0024).
+        if f.used {
+            return invalid(format!("file {id} was already sent; upload it again"));
+        }
         send.attachments.push(Attachment {
             file_id: f.file_id,
             name: f.name.clone(),
@@ -112,7 +119,7 @@ impl CassandraFiles {
             .await
             .map_err(|e| format!("connecting to {nodes:?}: {e}"))?;
         let cql = format!(
-            "SELECT file_id, channel_id, uploader_id, name, content_type, size, width, height, thumbnail_type FROM {keyspace}.files WHERE file_id = ?"
+            "SELECT file_id, channel_id, uploader_id, name, content_type, size, width, height, thumbnail_type, message_id, deleted_at FROM {keyspace}.files WHERE file_id = ?"
         );
         let mut get = session
             .prepare(cql.clone())
@@ -133,6 +140,8 @@ impl CassandraFiles {
             Option<i32>,
             Option<i32>,
             Option<String>,
+            Option<i64>,
+            Option<scylla::value::CqlTimestamp>,
         );
         let mut out = Vec::new();
         for id in ids {
@@ -154,6 +163,7 @@ impl CassandraFiles {
                     width: r.6,
                     height: r.7,
                     has_thumbnail: r.8.is_some(),
+                    used: r.9.is_some() || r.10.is_some(),
                 });
             }
         }
@@ -189,6 +199,7 @@ mod tests {
             width: Some(4),
             height: Some(3),
             has_thumbnail: true,
+            used: false,
         }
     }
 
@@ -267,6 +278,16 @@ mod tests {
         assert!(resolve(&fake(), &mut e).await.is_err());
         let mut e = send(vec![1, 1]);
         assert!(resolve(&fake(), &mut e).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_file_already_sent_is_refused() {
+        let mut sent = file(1, 7, 1);
+        sent.used = true;
+        let mut e = send(vec![1]);
+        let (reason, detail) = resolve(&Fake(vec![sent]), &mut e).await.unwrap_err();
+        assert_eq!(reason, RejectReason::Invalid);
+        assert!(detail.contains("already sent"), "{detail}");
     }
 
     #[tokio::test]

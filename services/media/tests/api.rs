@@ -50,6 +50,10 @@ impl Blobs for Shared {
         self.0.blobs.lock().unwrap().insert(key.into(), bytes);
         Ok(())
     }
+    async fn delete(&self, key: &str) -> Result<(), String> {
+        self.0.blobs.lock().unwrap().remove(key);
+        Ok(())
+    }
     async fn get(&self, key: &str) -> Result<Option<Body>, String> {
         Ok(self
             .0
