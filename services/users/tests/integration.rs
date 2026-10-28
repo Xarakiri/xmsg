@@ -275,3 +275,26 @@ async fn provisioning_creates_once_and_reactivates() {
     let page = store.provisioned_members(ws, 0, 100).await.unwrap();
     assert!(page.iter().any(|m| m.user_id == id) && page.iter().any(|m| m.user_id == owner));
 }
+
+#[tokio::test]
+#[ignore]
+async fn storage_quotas_default_set_and_clear() {
+    let (pool, store) = setup().await;
+    let owner = user(&pool, "Owner").await;
+    let ws = workspace(&store, owner).await;
+    assert_eq!(
+        store.storage_quota(ws).await.unwrap(),
+        Some(None),
+        "the default"
+    );
+    assert!(store.set_storage_quota(ws, Some(5_000_000)).await.unwrap());
+    assert_eq!(
+        store.storage_quota(ws).await.unwrap(),
+        Some(Some(5_000_000))
+    );
+    assert!(store.set_storage_quota(ws, None).await.unwrap());
+    assert_eq!(store.storage_quota(ws).await.unwrap(), Some(None));
+    // No such workspace.
+    assert_eq!(store.storage_quota(new_id()).await.unwrap(), None);
+    assert!(!store.set_storage_quota(new_id(), Some(1)).await.unwrap());
+}

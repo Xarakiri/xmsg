@@ -15,12 +15,14 @@
 //! | GET | `/internal/v1/workspaces/{ws}/users/{id}` | one user |
 //! | PATCH | `/internal/v1/workspaces/{ws}/users/{id}` `{name}` | rename (members only) |
 //! | DELETE | `/internal/v1/workspaces/{ws}/users/{id}` | deactivate: removed from the workspace |
+//! | GET | `/internal/v1/workspaces/{ws}/storage-quota` | `{bytes}`: the override, `null` for the default |
+//! | PUT | `/internal/v1/workspaces/{ws}/storage-quota` `{bytes}` | set it (bytes, 0 = unlimited) or `null` to use the default (ADR-0024) |
 
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -39,6 +41,52 @@ pub fn routes<S: Store>() -> Router<Arc<App<S>>> {
             "/internal/v1/workspaces/{ws}/users/{id}",
             get(one::<S>).patch(rename::<S>).delete(deactivate::<S>),
         )
+        .route(
+            "/internal/v1/workspaces/{ws}/storage-quota",
+            put(set_quota::<S>).get(quota::<S>),
+        )
+}
+
+#[derive(Deserialize)]
+pub struct Quota {
+    bytes: Option<i64>,
+}
+
+/// The instance operator's override of a workspace's storage quota (ADR-0024).
+async fn quota<S: Store>(
+    State(app): State<Arc<App<S>>>,
+    headers: HeaderMap,
+    Path(ws): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    authorize(&app, &headers)?;
+    match app.store.storage_quota(parse_id(&ws)?).await? {
+        Some(bytes) => Ok(Json(json!({ "bytes": bytes }))),
+        None => Err(ApiError::NotFound("unknown workspace")),
+    }
+}
+
+async fn set_quota<S: Store>(
+    State(app): State<Arc<App<S>>>,
+    headers: HeaderMap,
+    Path(ws): Path<String>,
+    Json(body): Json<Quota>,
+) -> Result<Json<Value>, ApiError> {
+    authorize(&app, &headers)?;
+    let workspace_id = parse_id(&ws)?;
+    if body.bytes.is_some_and(|b| b < 0) {
+        return Err(ApiError::BadRequest(
+            "bytes must be 0 (unlimited) or more, or null",
+        ));
+    }
+    if !app
+        .store
+        .set_storage_quota(workspace_id, body.bytes)
+        .await?
+    {
+        return Err(ApiError::NotFound("unknown workspace"));
+    }
+    tracing::info!(workspace_id, bytes = ?body.bytes, "storage quota set");
+    Ok(Json(json!({ "bytes": body.bytes })))
 }
 
 /// Equal without leaking where they differ through timing.

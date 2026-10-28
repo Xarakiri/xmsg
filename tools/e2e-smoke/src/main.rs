@@ -1520,16 +1520,22 @@ async fn check_media(
         _ => None,
     });
     let (root_seq, root_id) = root.ok_or("media: no root for the reply")?;
+    // A file belongs to one message: the reply gets an upload of its own.
+    let second = upload("pixel-2.png", "image/png", PIXEL_PNG).await?;
+    let reply_image_id: i64 = second["file_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("media: bad file_id")?;
     let reply = ClientFrame {
         frame: Some(client_frame::Frame::SendMessage(SendMessageRequest {
             channel_id,
             client_msg_id: "files-reply".into(),
-            body: "the same, in a thread".into(),
+            body: "another, in a thread".into(),
             thread_root: Some(ThreadRoot {
                 msg_seq: root_seq,
                 message_id: root_id,
             }),
-            file_ids: vec![image_id],
+            file_ids: vec![reply_image_id],
         })),
     };
     clients[0]
@@ -1551,7 +1557,7 @@ async fn check_media(
     wait_events(&mut clients[1], |e| in_reply(e).is_some()).await?;
     let files =
         in_reply(&clients[1].events).ok_or("media: bob didn't get the reply with a file")?;
-    if files.len() != 1 || files[0].file_id != image_id {
+    if files.len() != 1 || files[0].file_id != reply_image_id {
         return Err(format!("media: unexpected reply attachments {files:?}"));
     }
     if let Some(messages_url) = messages_url {
@@ -1567,7 +1573,7 @@ async fn check_media(
             .await?;
             let file = &page["replies"][0]["attachments"][0];
             if status == 200
-                && file["file_id"].as_str() == Some(image_id.to_string().as_str())
+                && file["file_id"].as_str() == Some(reply_image_id.to_string().as_str())
                 && file["has_thumbnail"] == true
             {
                 break;
@@ -1579,9 +1585,66 @@ async fn check_media(
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
+
+        // Sent once, it can't be sent again (the media service records it a moment after
+        // the message is sequenced, so early tries may still pass).
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let id = format!("files-again-{attempt}");
+            clients[0]
+                .ws
+                .send(Ws::Binary(with_files(&id).encode_to_vec().into()))
+                .await
+                .map_err(|e| e.to_string())?;
+            let refused = loop {
+                match next_frame(&mut clients[0]).await? {
+                    server_frame::Frame::SendRejected(r) if r.client_msg_id == id => break true,
+                    server_frame::Frame::Ack(a) if a.client_msg_id == id => break false,
+                    _ => {}
+                }
+            };
+            if refused {
+                break;
+            }
+            if Instant::now() > deadline {
+                return Err("media: a file already sent could still be sent again".into());
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        // Deleting the message takes its file with it at once; the reply's file stays.
+        let (status, reply) = call(
+            "DELETE",
+            &format!("{messages_url}/v1/channels/{channel_id}/messages/{root_seq}"),
+            &users[0].1,
+            None,
+        )
+        .await?;
+        if status != 202 {
+            return Err(format!("media: deleting the message: {status} {reply}"));
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let (gone, _, _) = get(bob, &format!("/v1/files/{image_id}")).await?;
+            if gone == 404 {
+                break;
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "media: a deleted message's file still answers {gone}"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        let (status, _, _) = get(bob, &format!("/v1/files/{reply_image_id}")).await?;
+        if status != 200 {
+            return Err(format!("media: the reply's file must stay, got {status}"));
+        }
     }
     println!(
-        "media: an image round-trips with a thumbnail, a page posing as an image is only a download, a non-member gets 404; a message and a thread reply carry the file's details, and nobody can attach someone else's upload"
+        "media: an image round-trips with a thumbnail, a page posing as an image is only a download, a non-member gets 404; a message and a thread reply carry the file's details, nobody can attach someone else's upload or send a file twice, and deleting a message takes its file"
     );
     Ok(())
 }
