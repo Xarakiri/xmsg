@@ -9,6 +9,7 @@
 pub mod api;
 pub mod cassandra;
 pub mod garage;
+pub mod lifecycle;
 pub mod s3;
 pub mod thumbnail;
 
@@ -36,6 +37,12 @@ pub struct FileMeta {
     pub height: Option<i32>,
     /// `image/jpeg` or `image/png` when there's a thumbnail.
     pub thumbnail_type: Option<String>,
+    /// Its message was deleted: gone for everyone now, the bytes after the grace period.
+    #[serde(skip)]
+    pub deleted: bool,
+    /// Whose storage quota it counts against (None: no workspace found).
+    #[serde(skip)]
+    pub workspace_id: Option<i64>,
 }
 
 /// IDs are JSON strings, as everywhere in the API (JavaScript numbers lose precision).
@@ -109,6 +116,44 @@ pub trait Store: Send + Sync + 'static {
     ) -> impl Future<Output = Result<bool, String>> + Send;
     fn insert(&self, file: &FileMeta) -> impl Future<Output = Result<(), String>> + Send;
     fn get(&self, file_id: i64) -> impl Future<Output = Result<Option<FileMeta>, String>> + Send;
+
+    // Storage quotas (ADR-0024). The defaults: no workspaces, nothing counted.
+
+    /// The workspace a member's channel belongs to.
+    fn workspace_of(
+        &self,
+        _user_id: i64,
+        _channel_id: i64,
+    ) -> impl Future<Output = Result<Option<i64>, String>> + Send {
+        async { Ok(None) }
+    }
+    /// Bytes the workspace stores now.
+    fn used(&self, _workspace_id: i64) -> impl Future<Output = Result<i64, String>> + Send {
+        async { Ok(0) }
+    }
+    /// Adds (or with a negative delta, releases) stored bytes.
+    fn add_usage(
+        &self,
+        _workspace_id: i64,
+        _delta: i64,
+    ) -> impl Future<Output = Result<(), String>> + Send {
+        async { Ok(()) }
+    }
+    /// The operator's override: `None` uses the installation's default; `Some(0)` is unlimited.
+    fn quota_override(
+        &self,
+        _workspace_id: i64,
+    ) -> impl Future<Output = Result<Option<i64>, String>> + Send {
+        async { Ok(None) }
+    }
+    /// The user's role in the workspace (`owner`, `admin`, `member`), if they're in it.
+    fn workspace_role(
+        &self,
+        _workspace_id: i64,
+        _user_id: i64,
+    ) -> impl Future<Output = Result<Option<String>, String>> + Send {
+        async { Ok(None) }
+    }
 }
 
 /// Where the bytes go (an S3-compatible store in production).
@@ -121,6 +166,8 @@ pub trait Blobs: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), String>> + Send;
     /// The object as a streamed body, or None if it doesn't exist.
     fn get(&self, key: &str) -> impl Future<Output = Result<Option<Body>, String>> + Send;
+    /// Removes the object; a missing one is fine.
+    fn delete(&self, key: &str) -> impl Future<Output = Result<(), String>> + Send;
 }
 
 #[cfg(test)]

@@ -106,6 +106,30 @@ services:
       timeout: 5s
       retries: 20
 
+  # Postgres runs init/ only when its volume is new. The later files (002 on) are
+  # idempotent and applied at every start, so upgrades get them too. Over TCP, once the
+  # base schema exists: during first-time setup Postgres answers only on its socket.
+  postgres-init:
+    image: postgres:17
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PGHOST: postgres
+      PGUSER: xmsg
+      PGDATABASE: xmsg
+      PGPASSWORD: ${XMSG_POSTGRES_PASSWORD:-xmsg-dev-only}
+    volumes: [./init/postgres:/init:ro]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        for i in $$(seq 1 60); do
+          [ "$$(psql -tAc "select to_regclass('public.users') is not null" 2>/dev/null)" = t ] && break
+          sleep 2
+        done
+        for f in /init/00[2-9]*.sql; do psql -q -v ON_ERROR_STOP=1 -f "$$f" || exit 1; done
+    restart: "no"
+
   valkey:
     <<: *restart
     image: valkey/valkey:8.0

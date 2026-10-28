@@ -5113,17 +5113,20 @@ dependencies = [
  "http-body-util",
  "image",
  "rand 0.9.5",
+ "rdkafka",
  "reqwest",
  "scylla",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sqlx",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
  "xmsg-auth",
  "xmsg-authn",
+ "xmsg-proto",
 ]
 
 [[package]]

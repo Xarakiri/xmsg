@@ -174,6 +174,32 @@ pub trait Store: Send + Sync + 'static {
         }
     }
 
+    /// A workspace's storage quota override (ADR-0024): `None` if there's no such
+    /// workspace, `Some(None)` when it uses the installation's default.
+    fn storage_quota(
+        &self,
+        _workspace_id: i64,
+    ) -> impl Future<Output = Result<Option<Option<i64>>, StoreError>> + Send {
+        async {
+            Err(StoreError::Db(
+                "quotas aren't supported by this store".into(),
+            ))
+        }
+    }
+
+    /// Sets (or with `None` clears) the override. `false` if there's no such workspace.
+    fn set_storage_quota(
+        &self,
+        _workspace_id: i64,
+        _bytes: Option<i64>,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        async {
+            Err(StoreError::Db(
+                "quotas aren't supported by this store".into(),
+            ))
+        }
+    }
+
     /// Provisioning: a user by email, and whether they're in the workspace.
     fn provisioned_by_email(
         &self,
@@ -453,6 +479,28 @@ impl Store for Postgres {
         .bind(role)
         .execute(&self.pool)
         .await?;
+        Ok(changed.rows_affected() == 1)
+    }
+
+    async fn storage_quota(&self, workspace_id: i64) -> Result<Option<Option<i64>>, StoreError> {
+        Ok(
+            sqlx::query_scalar("SELECT storage_quota_bytes FROM workspaces WHERE id = $1")
+                .bind(workspace_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    async fn set_storage_quota(
+        &self,
+        workspace_id: i64,
+        bytes: Option<i64>,
+    ) -> Result<bool, StoreError> {
+        let changed = sqlx::query("UPDATE workspaces SET storage_quota_bytes = $2 WHERE id = $1")
+            .bind(workspace_id)
+            .bind(bytes)
+            .execute(&self.pool)
+            .await?;
         Ok(changed.rows_affected() == 1)
     }
 

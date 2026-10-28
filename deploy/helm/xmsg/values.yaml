@@ -57,6 +57,9 @@ media:
   enabled: true
   maxBytes: 26214400            # largest upload (25 MB); the web pods' nginx allows 26 MB
   concurrentUploads: 4          # per pod, held in memory while checked and stored
+  # Storage per workspace unless the operator sets another through the users service's
+  # provisioning API (PUT /internal/v1/workspaces/{id}/storage-quota); 0 = unlimited.
+  workspaceQuotaBytes: 10737418240
   s3:
     # Your own S3-compatible store (Ceph RGW, Amazon S3, GCS in S3 mode, SeaweedFS…), with
     # the bucket and an access key already created. Empty: the bundled Garage below.

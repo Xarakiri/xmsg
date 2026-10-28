@@ -101,7 +101,29 @@ CREATE TABLE IF NOT EXISTS push_subscribers (
 -- Writer: media (ADR-0024). One row per upload, never changed; the bytes are in object storage.
 CREATE TABLE IF NOT EXISTS files (
   file_id bigint PRIMARY KEY, channel_id bigint, uploader_id bigint, name text, content_type text,
-  size bigint, sha256 text, created_at timestamp, width int, height int, thumbnail_type text
+  size bigint, sha256 text, created_at timestamp, width int, height int, thumbnail_type text,
+  message_id bigint, deleted_at timestamp, workspace_id bigint
+);
+-- Added with file deletion (ADR-0024); existing installations get them here. message_id:
+-- the message the file was sent with (a file belongs to one); deleted_at: its message was
+-- deleted, so it's gone, and its bytes are removed after the grace period.
+ALTER TABLE files ADD IF NOT EXISTS message_id bigint;
+ALTER TABLE files ADD IF NOT EXISTS deleted_at timestamp;
+-- Added with storage quotas: whose quota the file counts against.
+ALTER TABLE files ADD IF NOT EXISTS workspace_id bigint;
+
+-- Writer: media. Files whose bytes are due for removal, by the day they were deleted.
+CREATE TABLE IF NOT EXISTS file_purges (
+  day int, file_id bigint, channel_id bigint, deleted_at timestamp, workspace_id bigint, size bigint,
+  PRIMARY KEY (day, file_id)
+);
+ALTER TABLE file_purges ADD IF NOT EXISTS workspace_id bigint;
+ALTER TABLE file_purges ADD IF NOT EXISTS size bigint;
+
+-- Writer: media. Bytes stored per workspace (files until their bytes are purged), for
+-- storage quotas (ADR-0024). Counters: approximate under retries, which is fine for a quota.
+CREATE TABLE IF NOT EXISTS workspace_storage (
+  workspace_id bigint PRIMARY KEY, bytes counter
 );
 
 -- Writer: calls (ADR-0025). A channel's call while it lasts: one row, removed when it ends.
