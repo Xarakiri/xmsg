@@ -6,7 +6,8 @@
 //! - **Deleted:** when that message is deleted, its files are marked deleted (gone for
 //!   everyone at once) and queued in `file_purges`, by day.
 //! - **Purged:** after the grace period (24 h by default) the sweeper removes the objects
-//!   and the thumbnail from storage. The `files` row stays, marked deleted.
+//!   and the thumbnail from storage, and the file stops counting against its workspace's
+//!   quota. The `files` row stays, marked deleted.
 
 use xmsg_proto::v1::{Attachment, SequencedEvent, sequenced_event::Payload};
 
@@ -23,6 +24,9 @@ pub struct Purge {
     pub file_id: i64,
     pub channel_id: i64,
     pub deleted_at_ms: i64,
+    /// Whose quota to release, and by how much.
+    pub workspace_id: Option<i64>,
+    pub size: i64,
 }
 
 /// What the lifecycle reads and writes (Cassandra in production).
@@ -33,6 +37,17 @@ pub trait Lifecycle: Send + Sync + 'static {
         channel_id: i64,
         msg_seq: i64,
     ) -> impl Future<Output = Result<Vec<i64>, String>> + Send;
+    /// The file's workspace and size (for its quota), if it exists.
+    fn usage_of(
+        &self,
+        file_id: i64,
+    ) -> impl Future<Output = Result<Option<(Option<i64>, i64)>, String>> + Send;
+    /// Stops counting bytes against a workspace's quota.
+    fn release(
+        &self,
+        workspace_id: i64,
+        bytes: i64,
+    ) -> impl Future<Output = Result<(), String>> + Send;
     /// Records which message a file was sent with.
     fn claim(
         &self,
@@ -72,11 +87,14 @@ pub async fn on_event(
         Some(Payload::MessageDeleted(d)) => {
             let files = store.message_files(event.channel_id, d.msg_seq).await?;
             for file_id in &files {
+                let (workspace_id, size) = store.usage_of(*file_id).await?.unwrap_or((None, 0));
                 store
                     .mark_deleted(&Purge {
                         file_id: *file_id,
                         channel_id: event.channel_id,
                         deleted_at_ms: event_time_ms,
+                        workspace_id,
+                        size,
                     })
                     .await?;
             }
@@ -105,6 +123,11 @@ pub async fn sweep(
             let removal = async {
                 blobs.delete(&format!("{key}.thumb")).await?;
                 blobs.delete(&key).await?;
+                // Released before forgetting: a crash in between releases twice on the
+                // next sweep, which a counter-based quota tolerates (it's approximate).
+                if let Some(ws) = p.workspace_id {
+                    store.release(ws, p.size).await?;
+                }
                 store.forget(day, p.file_id).await
             };
             match removal.await {
@@ -136,6 +159,8 @@ mod tests {
         claims: Mutex<HashMap<i64, i64>>,
         queue: Mutex<BTreeMap<(i64, i64), Purge>>,
         objects: Mutex<HashSet<String>>,
+        /// workspace -> bytes counted
+        usage: Mutex<HashMap<i64, i64>>,
     }
 
     impl Lifecycle for Fake {
@@ -145,6 +170,13 @@ mod tests {
                 .get(&(channel_id, msg_seq))
                 .cloned()
                 .unwrap_or_default())
+        }
+        async fn usage_of(&self, file_id: i64) -> Result<Option<(Option<i64>, i64)>, String> {
+            Ok(Some((Some(70), file_id * 100)))
+        }
+        async fn release(&self, workspace_id: i64, bytes: i64) -> Result<(), String> {
+            *self.usage.lock().unwrap().entry(workspace_id).or_default() -= bytes;
+            Ok(())
         }
         async fn claim(&self, file_id: i64, message_id: i64) -> Result<(), String> {
             self.claims.lock().unwrap().insert(file_id, message_id);
@@ -268,6 +300,8 @@ mod tests {
             HashSet::from(["7/9".to_string()])
         );
         assert!(f.queue.lock().unwrap().is_empty());
+        // Files 1 and 2 (100 and 200 bytes in this fake) no longer count.
+        assert_eq!(*f.usage.lock().unwrap(), HashMap::from([(70, -300)]));
         // A second sweep has nothing left to do.
         assert_eq!(
             sweep(&f, &f, deleted_at + 2 * DAY_MS, DAY_MS)

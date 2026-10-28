@@ -31,7 +31,7 @@ Presigned URLs and a CDN are for the Large tier, where serving bytes through our
 
 ### Not in this version
 - **Virus scanning:** ClamAV needs 1.5–3 GB of memory and signature updates (a mirror for air-gapped installs). It's an optional profile for later, with files held as pending until scanned.
-- **Retention, and per-workspace quotas.**
+- **Retention.**
 - **Resumable or multipart uploads** beyond 25 MB.
 
 ### Files in messages
@@ -43,6 +43,12 @@ Presigned URLs and a CDN are for the Large tier, where serving bytes through our
 - **A file belongs to one message.** The media service follows `messages.persisted` and records the message each file was sent with (`files.message_id`). The messages service then refuses to attach it again. This is best effort: two sends in the same instant can both pass.
 - **Deleting the message deletes its files.** On `MessageDeleted`, the media service reads the message's attachments from its row, marks those files deleted (every download answers 404 at once), and queues them in `file_purges` by day.
 - **The bytes go after a grace period**, 24 hours by default (`XMSG_MEDIA_PURGE_AFTER_SECS`). A sweeper in each media instance removes the object and its thumbnail; the `files` row stays, marked deleted. The grace period leaves room for undo and for legal hold (EE), which will be checked before purging.
+
+### Storage quotas
+- **Per workspace:** the installation's default (`XMSG_MEDIA_WORKSPACE_QUOTA_BYTES`, 10 GB; 0 is unlimited), or the instance operator's override for one workspace. The override lives in `workspaces.storage_quota_bytes` and is set through the users service's provisioning API (`PUT /internal/v1/workspaces/{id}/storage-quota {"bytes": N}`, or `null` for the default).
+- **Counted:** a file's size counts against its channel's workspace from upload until its bytes are purged (`workspace_storage`, a Cassandra counter: approximate under retries, which is fine for a quota). Thumbnails aren't counted.
+- **Enforced at upload:** past the quota, uploads answer 413 with how much is used. Overrides are cached for a minute.
+- **Visible** to the workspace's owners and admins: `GET /v1/workspaces/{id}/storage` on the media service returns `{used_bytes, quota_bytes}`.
 
 ## Consequences
 - The Small tier gains a backend: Garage (~50–100 MB of memory; capped at 256 MB) and two volumes (`garage-meta`, `garage-data`), which `xmsgctl backup` includes.

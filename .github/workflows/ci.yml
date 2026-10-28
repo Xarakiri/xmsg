@@ -524,6 +524,7 @@ jobs:
           diff deploy/compose/init/postgres/002_push.sql deploy/helm/xmsg/files/postgres-002_push.sql
           diff deploy/compose/init/postgres/003_sso.sql deploy/helm/xmsg/files/postgres-003_sso.sql
           diff deploy/compose/init/postgres/004_sso_policy.sql deploy/helm/xmsg/files/postgres-004_sso_policy.sql
+          diff deploy/compose/init/postgres/005_storage_quota.sql deploy/helm/xmsg/files/postgres-005_storage_quota.sql
       - name: Lint and render
         run: |
           helm lint deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml

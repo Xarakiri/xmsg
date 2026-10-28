@@ -4,6 +4,10 @@
 //! - `POST /v1/channels/{channel_id}/files?name=NAME`, the file as the body: members only.
 //! - `GET /v1/files/{file_id}`, `.../thumbnail`, `.../meta`: members of the file's channel
 //!   only. "No such file" and "not a member" look the same (404), so IDs don't leak.
+//! - `GET /v1/workspaces/{workspace_id}/storage`: `{used_bytes, quota_bytes}` for the
+//!   workspace's owners and admins (`quota_bytes` 0: unlimited).
+//!
+//! Uploads count against the channel's workspace quota (ADR-0024): over it, 413.
 //!
 //! Served files can't run as our origin: only images we decoded go out inline, as their
 //! sniffed type; everything else is a download (`application/octet-stream`,
@@ -33,6 +37,8 @@ pub struct App<S, B> {
     pub max_bytes: usize,
     /// Uploads are held in memory while they're checked and stored: this bounds how many.
     pub uploads: Semaphore,
+    /// A workspace's storage quota unless the operator set another (0: unlimited).
+    pub default_quota: i64,
 }
 
 pub fn router<S: Store, B: Blobs>(app: Arc<App<S, B>>) -> Router {
@@ -41,6 +47,10 @@ pub fn router<S: Store, B: Blobs>(app: Arc<App<S, B>>) -> Router {
         .route("/v1/files/{file_id}", get(download::<S, B>))
         .route("/v1/files/{file_id}/thumbnail", get(thumbnail::<S, B>))
         .route("/v1/files/{file_id}/meta", get(meta::<S, B>))
+        .route(
+            "/v1/workspaces/{workspace_id}/storage",
+            get(storage::<S, B>),
+        )
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }
@@ -111,6 +121,22 @@ async fn upload<S: Store, B: Blobs>(
     if bytes.is_empty() {
         return error(StatusCode::BAD_REQUEST, "the file is empty");
     }
+    let workspace_id = match app.store.workspace_of(user, channel_id).await {
+        Ok(w) => w,
+        Err(e) => return unavailable("workspace lookup", &e),
+    };
+    if let Some(ws) = workspace_id {
+        match quota(&app, ws).await {
+            Ok((used, limit)) if limit > 0 && used + bytes.len() as i64 > limit => {
+                return error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    &format!("this workspace's storage is full ({used} of {limit} bytes used)"),
+                );
+            }
+            Ok(_) => {}
+            Err(e) => return unavailable("quota read", &e),
+        }
+    }
 
     let inspected = {
         let bytes = bytes.clone();
@@ -139,6 +165,7 @@ async fn upload<S: Store, B: Blobs>(
         height: None,
         thumbnail_type: None,
         deleted: false,
+        workspace_id,
     };
     let mut thumb = None;
     if let Some(image) = image {
@@ -172,7 +199,49 @@ async fn upload<S: Store, B: Blobs>(
     if let Err(e) = app.store.insert(&file).await {
         return unavailable("recording the file", &e);
     }
+    if let Some(ws) = workspace_id
+        && let Err(e) = app.store.add_usage(ws, file.size).await
+    {
+        // Stored and recorded: the count is off by this file, not worth failing the upload.
+        tracing::warn!(error = %e, workspace_id = ws, "counting the upload failed");
+    }
     (StatusCode::CREATED, Json(&file)).into_response()
+}
+
+/// A workspace's usage and its effective quota (0: unlimited).
+async fn quota<S: Store, B: Blobs>(
+    app: &App<S, B>,
+    workspace_id: i64,
+) -> Result<(i64, i64), String> {
+    let used = app.store.used(workspace_id).await?;
+    let limit = app
+        .store
+        .quota_override(workspace_id)
+        .await?
+        .unwrap_or(app.default_quota);
+    Ok((used, limit))
+}
+
+async fn storage<S: Store, B: Blobs>(
+    State(app): State<Arc<App<S, B>>>,
+    headers: HeaderMap,
+    Path(workspace_id): Path<i64>,
+) -> Response {
+    let user = match caller(&app.verifier, &headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    match app.store.workspace_role(workspace_id, user).await {
+        Ok(Some(role)) if role == "owner" || role == "admin" => {}
+        Ok(_) => return error(StatusCode::NOT_FOUND, "unknown workspace"),
+        Err(e) => return unavailable("role read", &e),
+    }
+    match quota(&app, workspace_id).await {
+        Ok((used, limit)) => {
+            Json(serde_json::json!({ "used_bytes": used, "quota_bytes": limit })).into_response()
+        }
+        Err(e) => unavailable("quota read", &e),
+    }
 }
 
 /// The file, if it exists and the caller may see it.

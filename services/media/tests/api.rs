@@ -22,7 +22,12 @@ struct Fake {
     members: HashSet<(i64, i64)>,
     files: Mutex<HashMap<i64, FileMeta>>,
     blobs: Mutex<HashMap<String, Bytes>>,
+    /// The channel's workspace (WORKSPACE), its stored bytes and the operator's override.
+    used: Mutex<i64>,
+    quota_override: Option<i64>,
 }
+
+const WORKSPACE: i64 = 70;
 
 /// Shared by the app and the assertions.
 #[derive(Clone)]
@@ -42,6 +47,30 @@ impl Store for Shared {
     }
     async fn get(&self, file_id: i64) -> Result<Option<FileMeta>, String> {
         Ok(self.0.files.lock().unwrap().get(&file_id).cloned())
+    }
+    async fn workspace_of(&self, _: i64, channel_id: i64) -> Result<Option<i64>, String> {
+        Ok((channel_id == CHANNEL).then_some(WORKSPACE))
+    }
+    async fn used(&self, _: i64) -> Result<i64, String> {
+        Ok(*self.0.used.lock().unwrap())
+    }
+    async fn add_usage(&self, _: i64, delta: i64) -> Result<(), String> {
+        *self.0.used.lock().unwrap() += delta;
+        Ok(())
+    }
+    async fn quota_override(&self, _: i64) -> Result<Option<i64>, String> {
+        Ok(self.0.quota_override)
+    }
+    async fn workspace_role(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> Result<Option<String>, String> {
+        Ok(match (workspace_id, user_id) {
+            (WORKSPACE, ALICE) => Some("owner".into()),
+            (WORKSPACE, BOB) => Some("member".into()),
+            _ => None,
+        })
     }
 }
 
@@ -78,6 +107,11 @@ struct Harness {
 }
 
 async fn harness() -> Harness {
+    harness_with(None, 0).await
+}
+
+/// With the operator's override (if any) and the installation default (0: unlimited).
+async fn harness_with(quota_override: Option<i64>, default_quota: i64) -> Harness {
     let keys = Arc::new(Keys::generate());
     let jwks = keys.jwks();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -89,6 +123,7 @@ async fn harness() -> Harness {
     tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
     let fake = Arc::new(Fake {
         members: [(CHANNEL, ALICE), (CHANNEL, BOB)].into(),
+        quota_override,
         ..Default::default()
     });
     let app = router(Arc::new(App {
@@ -97,6 +132,7 @@ async fn harness() -> Harness {
         verifier: xmsg_authn::Verifier::new(url),
         max_bytes: 1024 * 1024,
         uploads: Semaphore::new(2),
+        default_quota,
     }));
     Harness { app, keys, fake }
 }
@@ -333,6 +369,66 @@ async fn names_are_cleaned() {
         .upload(ALICE, "..%2F..%2Fetc%2Fpasswd", "text/plain", b"x".to_vec())
         .await;
     assert_eq!(file["name"], "passwd");
+}
+
+#[tokio::test]
+async fn uploads_count_against_the_workspace_quota() {
+    // The default: 10 bytes per workspace.
+    let h = harness_with(None, 10).await;
+    h.upload(ALICE, "a.txt", "text/plain", b"123456".to_vec())
+        .await;
+    assert_eq!(*h.fake.used.lock().unwrap(), 6);
+    let (status, _, reply) = h
+        .send(
+            ALICE,
+            "POST",
+            &format!("/v1/channels/{CHANNEL}/files?name=b.txt"),
+            None,
+            b"12345".to_vec(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(String::from_utf8_lossy(&reply).contains("storage is full"));
+    assert_eq!(
+        h.fake.files.lock().unwrap().len(),
+        1,
+        "nothing stored for the refused one"
+    );
+    // Owners and admins see usage; members don't.
+    let (status, _, reply) = h
+        .send(
+            ALICE,
+            "GET",
+            &format!("/v1/workspaces/{WORKSPACE}/storage"),
+            None,
+            vec![],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&reply).unwrap(),
+        serde_json::json!({"used_bytes": 6, "quota_bytes": 10})
+    );
+    let (status, _, _) = h
+        .send(
+            BOB,
+            "GET",
+            &format!("/v1/workspaces/{WORKSPACE}/storage"),
+            None,
+            vec![],
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_operator_override_wins_and_zero_is_unlimited() {
+    let h = harness_with(Some(0), 10).await;
+    h.upload(ALICE, "big.bin", "application/octet-stream", vec![1; 100])
+        .await;
+    let h = harness_with(Some(1000), 10).await;
+    h.upload(ALICE, "big.bin", "application/octet-stream", vec![1; 100])
+        .await;
 }
 
 /// Needs a real S3 store: XMSG_IT_S3_ENDPOINT, XMSG_IT_S3_BUCKET, XMSG_IT_S3_KEY_ID,
