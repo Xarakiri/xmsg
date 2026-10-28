@@ -95,3 +95,9 @@ CREATE TABLE IF NOT EXISTS push_subscribers (
   channel_id bigint, user_id bigint,
   PRIMARY KEY (channel_id, user_id)
 );
+
+-- Writer: media (ADR-0024). One row per upload, never changed; the bytes are in object storage.
+CREATE TABLE IF NOT EXISTS files (
+  file_id bigint PRIMARY KEY, channel_id bigint, uploader_id bigint, name text, content_type text,
+  size bigint, sha256 text, created_at timestamp, width int, height int, thumbnail_type text
+);

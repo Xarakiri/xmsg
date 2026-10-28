@@ -11,6 +11,7 @@ The Small self-hosting tier ([ADR-0019](../../docs/adr/0019-self-hosting-and-dep
 | Valkey | `valkey/valkey:8.0` | 6379 | 256 MB |
 | NATS | `nats:2.10-alpine` | 4222 (monitoring 8222) | 256 MB |
 | OpenSearch *(profile `search`)* | `opensearchproject/opensearch:2.18.0` | 9200 | 1.5 GB |
+| Garage (files, [ADR-0024](../../docs/adr/0024-media-and-object-storage.md)) | `dxflrs/garage:v2.5.0` | 3900 (admin 3903) | 256 MB |
 
 One-shot jobs create the Kafka topics (`kafka-init`, N partitions from `XMSG_PARTITIONS`, default 16) and the Cassandra schema (`cassandra-init`). Postgres runs `init/postgres/*.sql` on first start.
 

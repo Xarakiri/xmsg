@@ -44,6 +44,7 @@ compose() {
     COMPOSE_PROFILES="$([[ $search -eq 1 ]] && echo search)" \
     XMSG_REGISTRY="$registry" XMSG_VERSION="$version" \
     XMSG_AUTH_KEY=- XMSG_POSTGRES_PASSWORD=- XMSG_PUSH_VAPID_PRIVATE_KEY=- \
+    XMSG_GARAGE_ADMIN_TOKEN=- XMSG_MEDIA_S3_KEY_ID=- XMSG_MEDIA_S3_SECRET=- \
     docker compose --env-file /dev/null "$@"
 }
 
@@ -67,7 +68,7 @@ trap 'rm -rf "$work"' EXIT
 stage="$work/$name"
 mkdir -p "$stage/images" "$stage/certs"
 cp README.md install.sh docker-compose.yml docker-compose.app.yml "$stage/"
-cp -R caddy init "$stage/"
+cp -R caddy garage init "$stage/"
 cp certs/.gitignore "$stage/certs/"
 [[ -n "$xmsgctl" ]] && cp "$xmsgctl" "$stage/xmsgctl"
 

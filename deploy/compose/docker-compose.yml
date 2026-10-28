@@ -130,6 +130,26 @@ services:
       timeout: 3s
       retries: 20
 
+  # Files (ADR-0024): S3-compatible, one node. Its secrets come from .env (install.sh); the
+  # defaults are for local development only. `xmsg-media garage-init` sets it up.
+  garage:
+    <<: *restart
+    image: dxflrs/garage:v2.5.0
+    ports: ["127.0.0.1:3900:3900", "127.0.0.1:3903:3903"]
+    mem_limit: 256m
+    environment:
+      GARAGE_RPC_SECRET: ${XMSG_GARAGE_RPC_SECRET:-000000000000000000000000000000000000000000000000000000000000de5e}
+      GARAGE_ADMIN_TOKEN: ${XMSG_GARAGE_ADMIN_TOKEN:-dev-garage-admin-token}
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # Large-tier outbox relay (ADR-0010, ADR-0020): Debezium reads the outbox from the WAL.
   # Use it instead of xmsg-outbox-relay (run that with XMSG_OUTBOX_MODE=cleanup), then
   # register the connector: init/debezium/register.sh
@@ -179,6 +199,8 @@ services:
     volumes: [opensearch-data:/usr/share/opensearch/data]
 
 volumes:
+  garage-meta:
+  garage-data:
   kafka-data:
   cassandra-data:
   postgres-data:

@@ -23,6 +23,7 @@ Only OSI-licensed software is bundled by default:
 | Relational | PostgreSQL | PostgreSQL |
 | Messaging | NATS | Apache-2.0 |
 | Search (optional) | OpenSearch | Apache-2.0 |
+| Object storage (files) | **Garage**, added by [ADR-0024](0024-media-and-object-storage.md) | AGPL-3.0 |
 
 **ScyllaDB, Redpanda, Redis and Dragonfly remain supported backends** through the contracts in [0020](0020-pluggable-backends.md). A customer who chooses one runs it under that product's licence terms.
 

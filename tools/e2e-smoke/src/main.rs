@@ -224,6 +224,9 @@ async fn run() -> Result<(), String> {
                 check_push(&push_url, url, &mut clients, &users, run_id).await?;
             }
         }
+        if let Ok(media_url) = std::env::var("XMSG_MEDIA_URL") {
+            check_media(&media_url, url, &users, run_id).await?;
+        }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
@@ -1151,6 +1154,136 @@ async fn check_reactions(
     println!(
         "reactions: a non-member is refused; bob's add and remove and alice's add end at 1, delivered in {} ms through the batcher",
         started.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+/// A 1x1 transparent PNG.
+const PIXEL_PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+    0x42, 0x60, 0x82,
+];
+
+/// Files (ADR-0024), in a channel of their own: alice uploads an image and a page that
+/// claims to be one; bob (a member) gets both back, the image inline with a thumbnail and
+/// the page only as a download; mallory (not a member) gets nothing.
+async fn check_media(
+    media_url: &str,
+    channels_url: &str,
+    users: &[(i64, String)],
+    run_id: i64,
+) -> Result<(), String> {
+    let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
+    let (status, reply) = call(
+        "POST",
+        &format!("{channels_url}/v1/channels"),
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": format!("e2e-media-{run_id}"), "member_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if status != 201 {
+        return Err(format!("media: creating the channel: {status} {reply}"));
+    }
+    let channel = reply["channel_id"]
+        .as_str()
+        .ok_or("media: no channel_id")?
+        .to_string();
+    let http = reqwest::Client::new();
+    let upload =
+        async |name: &str, content_type: &str, body: &[u8]| -> Result<serde_json::Value, String> {
+            // The membership the channel was created with reaches Cassandra a moment later.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let response = http
+                    .post(format!(
+                        "{media_url}/v1/channels/{channel}/files?name={name}"
+                    ))
+                    .bearer_auth(&alice.1)
+                    .header("content-type", content_type)
+                    .body(body.to_vec())
+                    .send()
+                    .await
+                    .map_err(|e| format!("media upload: {e}"))?;
+                let status = response.status().as_u16();
+                let reply: serde_json::Value = response.json().await.unwrap_or_default();
+                if status == 201 {
+                    return Ok(reply);
+                }
+                if status != 404 || Instant::now() > deadline {
+                    return Err(format!("media upload of {name}: {status} {reply}"));
+                }
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+        };
+    let get = async |who: &(i64, String),
+                     path: &str|
+           -> Result<(u16, reqwest::header::HeaderMap, Vec<u8>), String> {
+        let response = http
+            .get(format!("{media_url}{path}"))
+            .bearer_auth(&who.1)
+            .send()
+            .await
+            .map_err(|e| format!("media GET {path}: {e}"))?;
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let body = response.bytes().await.map_err(|e| e.to_string())?.to_vec();
+        Ok((status, headers, body))
+    };
+    let header = |h: &reqwest::header::HeaderMap, name: &str| {
+        h.get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+
+    let image = upload("pixel.png", "image/png", PIXEL_PNG).await?;
+    let id = image["file_id"].as_str().ok_or("media: no file_id")?;
+    if image["content_type"] != "image/png"
+        || image["width"] != 1
+        || image["thumbnail_type"] != "image/png"
+    {
+        return Err(format!("media: unexpected metadata {image}"));
+    }
+    let (status, headers, body) = get(bob, &format!("/v1/files/{id}")).await?;
+    if status != 200 || body != PIXEL_PNG || header(&headers, "content-type") != "image/png" {
+        return Err(format!(
+            "media: bob's download: {status}, {} bytes, {headers:?}",
+            body.len()
+        ));
+    }
+    let (status, headers, _) = get(bob, &format!("/v1/files/{id}/thumbnail")).await?;
+    if status != 200 || header(&headers, "content-type") != "image/png" {
+        return Err(format!("media: thumbnail: {status} {headers:?}"));
+    }
+    let (status, _, _) = get(mallory, &format!("/v1/files/{id}")).await?;
+    if status != 404 {
+        return Err(format!(
+            "media: a non-member's download: expected 404, got {status}"
+        ));
+    }
+
+    let page = upload(
+        "cat.png",
+        "image/png",
+        b"<html><script>alert(1)</script></html>",
+    )
+    .await?;
+    let id = page["file_id"].as_str().ok_or("media: no file_id")?;
+    let (status, headers, _) = get(bob, &format!("/v1/files/{id}")).await?;
+    if status != 200
+        || header(&headers, "content-type") != "application/octet-stream"
+        || !header(&headers, "content-disposition").starts_with("attachment")
+        || header(&headers, "x-content-type-options") != "nosniff"
+    {
+        return Err(format!(
+            "media: a fake image must be a plain download: {status} {headers:?}"
+        ));
+    }
+    println!(
+        "media: an image round-trips with a thumbnail, a page posing as an image is only a download, a non-member gets 404"
     );
     Ok(())
 }

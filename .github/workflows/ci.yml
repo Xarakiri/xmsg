@@ -154,12 +154,12 @@ jobs:
       - name: Validate configuration
         run: |
           docker compose -f deploy/compose/docker-compose.yml config -q
-          XMSG_AUTH_KEY=x XMSG_PUSH_VAPID_PRIVATE_KEY=x \
+          XMSG_AUTH_KEY=x XMSG_PUSH_VAPID_PRIVATE_KEY=x XMSG_GARAGE_ADMIN_TOKEN=x XMSG_MEDIA_S3_KEY_ID=x XMSG_MEDIA_S3_SECRET=x \
             docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.app.yml config -q
       - name: Start core stack and wait for init jobs
         working-directory: deploy/compose
         run: |
-          docker compose up -d --wait kafka cassandra postgres valkey nats
+          docker compose up -d --wait kafka cassandra postgres valkey nats garage
           docker compose up kafka-init --exit-code-from kafka-init
           docker compose up cassandra-init --exit-code-from cassandra-init
       - name: Check the Cassandra schema
@@ -233,6 +233,7 @@ jobs:
           XMSG_READSTATE_URL: http://localhost:8080/readstate
           XMSG_PUSH_URL: http://localhost:8080/push
           XMSG_GATEWAY_URL: ws://localhost:8080/ws
+          XMSG_MEDIA_URL: http://localhost:8080/media
           XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_EXPECT_OUTBOX_RELAY: "true"
           # The push service runs in a container: it reaches the stand-in endpoint this way.
@@ -267,6 +268,7 @@ jobs:
           XMSG_READSTATE_URL: http://localhost:8080/readstate
           XMSG_PUSH_URL: http://localhost:8080/push
           XMSG_GATEWAY_URL: ws://localhost:8080/ws
+          XMSG_MEDIA_URL: http://localhost:8080/media
           XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_EXPECT_OUTBOX_RELAY: "true"
           XMSG_PUSH_MOCK_HOST: host.docker.internal
@@ -352,6 +354,7 @@ jobs:
           XMSG_CHANNELS_URL: http://localhost:8080/channels
           XMSG_MESSAGES_URL: http://localhost:8080/messages
           XMSG_GATEWAY_URL: ws://localhost:8080/ws
+          XMSG_MEDIA_URL: http://localhost:8080/media
         run: |
           ./install.sh --yes --domain localhost --tls internal --registry xmsg --version previous
           "$GITHUB_WORKSPACE/target/release/xmsg-e2e-smoke" upgrade-seed "$RUNNER_TEMP/upgrade.json"
@@ -442,6 +445,7 @@ jobs:
           XMSG_MESSAGES_URL: http://localhost:8080/messages
           XMSG_READSTATE_URL: http://localhost:8080/readstate
           XMSG_GATEWAY_URL: ws://localhost:8080/ws
+          XMSG_MEDIA_URL: http://localhost:8080/media
           XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_EXPECT_OUTBOX_RELAY: "true"
         run: ./target/release/xmsg-e2e-smoke
@@ -595,7 +599,7 @@ jobs:
       - name: Start Kafka, NATS, Cassandra, PostgreSQL and Valkey (Small-tier compose)
         working-directory: deploy/compose
         run: |
-          docker compose up -d --wait kafka nats cassandra postgres valkey
+          docker compose up -d --wait kafka nats cassandra postgres valkey garage
           docker compose --profile search up -d opensearch
           docker compose up kafka-init --exit-code-from kafka-init
           docker compose up cassandra-init --exit-code-from cassandra-init
@@ -609,7 +613,7 @@ jobs:
           init/debezium/register.sh
       - name: Build
         run: |
-          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-search-indexer -p xmsg-push -p xmsg-e2e-smoke
+          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-search-indexer -p xmsg-push -p xmsg-media -p xmsg-e2e-smoke
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
       - name: Messages service integration tests (real Kafka + NATS)
@@ -656,6 +660,22 @@ jobs:
         env:
           XMSG_IT_PG: postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg
         run: cargo test -p xmsg-users --test integration -- --ignored
+      - name: Media against Garage (setup twice, then an S3 round trip)
+        env:
+          XMSG_GARAGE_ADMIN_TOKEN: dev-garage-admin-token
+          XMSG_MEDIA_S3_KEY_ID: GK0000000000000000000000c1
+          XMSG_MEDIA_S3_SECRET: 00000000000000000000000000000000000000000000000000000000000000c1
+          XMSG_IT_S3_ENDPOINT: http://localhost:3900
+          XMSG_IT_S3_BUCKET: xmsg-files
+          XMSG_IT_S3_KEY_ID: GK0000000000000000000000c1
+          XMSG_IT_S3_SECRET: 00000000000000000000000000000000000000000000000000000000000000c1
+        run: |
+          ./target/release/xmsg-media garage-init
+          # Again: nothing left to do (no step logged; the summary's fields are coloured).
+          again=$(./target/release/xmsg-media garage-init 2>&1)
+          echo "$again"
+          ! grep -qE 'assigned|imported|created bucket|gave key' <<<"$again"
+          cargo test -p xmsg-media --test api -- --include-ignored
       - name: Start auth, users, channels, sequencer, messages, persister, fan-out and gateway
         run: |
           mkdir -p logs
@@ -693,6 +713,10 @@ jobs:
             XMSG_DATABASE_URL=postgres://xmsg:xmsg-dev-only@localhost:5432/xmsg \
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
             ./target/release/xmsg-push > logs/push.log 2>&1 &
+          XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
+            XMSG_MEDIA_S3_KEY_ID=GK0000000000000000000000c1 \
+            XMSG_MEDIA_S3_SECRET=00000000000000000000000000000000000000000000000000000000000000c1 \
+            ./target/release/xmsg-media > logs/media.log 2>&1 &
           XMSG_SEQUENCER_URL=http://localhost:8090 ./target/release/xmsg-fanout > logs/fanout.log 2>&1 &
           (cd services/gateway && MIX_ENV=prod XMSG_GATEWAY_ID=ci \
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
@@ -713,6 +737,7 @@ jobs:
               && grep -q 'presence ready' logs/presence.log \
               && grep -q 'search indexer ready' logs/search-indexer.log \
               && grep -q 'push ready' logs/push.log \
+              && grep -q 'media ready' logs/media.log \
               && grep -q 'fanout ready' logs/fanout.log \
               && grep -q 'REBALANCING to RUNNING' logs/sequencer.log && exit 0
             sleep 2
@@ -726,6 +751,7 @@ jobs:
           XMSG_READSTATE_URL: http://localhost:8085
           XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_PUSH_URL: http://localhost:8086
+          XMSG_MEDIA_URL: http://localhost:8087
           XMSG_EXPECT_OUTBOX_RELAY: "true"
           XMSG_EXPECT_REVOCATION: "true"
           XMSG_EXPECT_WORKSPACE_REMOVAL: "true"

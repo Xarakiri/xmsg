@@ -16,5 +16,5 @@ COPY deploy/docker/web/default.conf.template /etc/nginx/templates/default.conf.t
 COPY --from=build /src/clients/web/dist /usr/share/nginx/html
 # Upstreams (service:port), set by the Helm chart.
 ENV XMSG_AUTH_UPSTREAM=auth:8081 XMSG_CHANNELS_UPSTREAM=channels:8082 XMSG_MESSAGES_UPSTREAM=messages:8083 \
-    XMSG_USERS_UPSTREAM=users:8084 XMSG_READSTATE_UPSTREAM=readstate:8085 XMSG_PUSH_UPSTREAM=push:8086 \
+    XMSG_USERS_UPSTREAM=users:8084 XMSG_READSTATE_UPSTREAM=readstate:8085 XMSG_PUSH_UPSTREAM=push:8086 XMSG_MEDIA_UPSTREAM=media:8087 \
     XMSG_GATEWAY_UPSTREAM=gateway:4000

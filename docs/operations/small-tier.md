@@ -24,29 +24,31 @@ Everything is one Compose project named `xmsg`. Only Caddy listens on public por
 | sequencer | orders every message and membership change (Kafka Streams) | 1 GB | 127.0.0.1:8090 |
 | 12 Rust services | auth, users, channels, messages, readstate, persister, fanout, outbox-relay, meta-relay, reaction-batcher, presence, push | 256 MB each | — |
 | search-indexer | only with search | 256 MB | — |
+| media | file uploads and downloads, thumbnails ([ADR-0024](../adr/0024-media-and-object-storage.md)) | 512 MB | — |
 | kafka | the event log | 1.5 GB | 127.0.0.1:9092 |
 | cassandra | messages and membership | 2.5 GB | 127.0.0.1:9042 |
 | postgres | accounts, workspaces, channels, settings | 512 MB | 127.0.0.1:5432 |
 | valkey | rate limits and presence | 256 MB | 127.0.0.1:6379 |
 | nats | real-time delivery between services | 256 MB | 127.0.0.1:4222, monitoring 127.0.0.1:8222 |
 | opensearch | only with search | 1.5 GB | 127.0.0.1:9200 |
+| garage | file storage (S3-compatible) | 256 MB | 127.0.0.1:3900, admin 127.0.0.1:3903 |
 
-`kafka-init` and `cassandra-init` run once at every start and exit with status 0; that's expected.
+`kafka-init`, `cassandra-init` and `garage-init` run once at every start and exit with status 0; that's expected.
 
-The data lives in Docker volumes, not in this directory: `xmsg_postgres-data`, `xmsg_kafka-data`, `xmsg_cassandra-data`, `xmsg_sequencer-state`, `xmsg_caddy-data` (certificates), and `xmsg_opensearch-data` with search. `.env` holds the secrets: the token signing key, the Postgres password, Kafka's cluster ID and the Web Push key. Losing `.env` signs everyone out and leaves the data unreadable, so it's part of every backup.
+The data lives in Docker volumes, not in this directory: `xmsg_postgres-data`, `xmsg_kafka-data`, `xmsg_cassandra-data`, `xmsg_sequencer-state`, `xmsg_caddy-data` (certificates), `xmsg_garage-meta` and `xmsg_garage-data` (uploaded files), and `xmsg_opensearch-data` with search. `.env` holds the secrets: the token signing key, the Postgres password, Kafka's cluster ID, the Web Push key, and Garage's secrets and access key. Losing `.env` signs everyone out and leaves the data unreadable, so it's part of every backup.
 
 ## Sizing
 These are starting points from the memory caps above, **not load-test results**: the tier hasn't been benchmarked yet, and published performance targets cover the Large tier only (plan §12).
 
 | | Evaluation | Production (up to ~10k users) |
 |---|---|---|
-| Memory | 8 GB (12 GB with search) | 16 GB (24 GB with search) |
-| CPU | 2 vCPU | 4–8 vCPU |
+| Memory | 8 GB (12 GB with search) | 32 GB |
+| CPU | 2 vCPU | 8 vCPU |
 | Disk | 40 GB SSD | SSD sized for a year of messages (below), 250 GB at least |
 | OS | any 64-bit Linux with Docker Engine and Compose v2 | the same; amd64 or arm64 |
 
-- **Memory:** the caps add up to about 10 GB (12 GB with search). Services rarely sit at their caps, which is why 8 GB is enough to try it; production leaves room for the OS page cache, which Cassandra and Kafka rely on. A service over its cap is killed and restarted (see [Troubleshooting](#troubleshooting)).
-- **Disk:** Cassandra holds every message for good, roughly 1 KB per message with its indexes (an estimate; long messages cost more). 10,000 users sending 50 messages a day each is 500,000 messages a day, about 15 GB a month, so plan for a year of that plus room to grow. Kafka keeps recent events only (3 days for incoming messages, 7 for sequenced ones), a few GB at that load. Backups need the same space again while they're written. Keep a quarter of the disk free: Cassandra's compaction needs room to work.
+- **Memory:** the caps add up to about 11 GB (13 GB with search). Production follows the plan's reference Small VM (8 vCPU, 32 GB; [ADR-0023](../adr/0023-osi-bundled-backends-and-wide-column-choice.md)). Services rarely sit at their caps, which is why 8 GB is enough to try it; production leaves room for the OS page cache, which Cassandra and Kafka rely on. A service over its cap is killed and restarted (see [Troubleshooting](#troubleshooting)).
+- **Disk:** Cassandra holds every message for good, roughly 1 KB per message with its indexes (an estimate; long messages cost more). 10,000 users sending 50 messages a day each is 500,000 messages a day, about 15 GB a month, so plan for a year of that plus room to grow. Kafka keeps recent events only (3 days for incoming messages, 7 for sequenced ones), a few GB at that load. Files (up to 25 MB each) usually outweigh messages: budget for what your users share. Backups need the same space again while they're written. Keep a quarter of the disk free: Cassandra's compaction needs room to work.
 - **One machine:** the Small tier has no failover. For high availability, use the Medium tier (Helm on Kubernetes).
 - **Partitions are fixed:** the Small tier uses 16 Kafka partitions, set at install and never changed in place ([ADR-0021](../adr/0021-partition-count-per-installation.md)).
 
@@ -145,6 +147,8 @@ Start with `./xmsgctl health` and `docker compose ps -a`, then `docker compose l
 | Sending works but nobody receives messages | The sequencer, fanout or NATS is down or lagging | `./xmsgctl health`; check `xmsg-sequencer` lag (above); `docker compose logs sequencer fanout nats` |
 | 502 on `/ws` or the APIs for a few seconds after a start | Services still starting | Wait for `./xmsgctl health --wait 120` |
 | Clients get 429 from the APIs, or 503 with `Retry-After` when opening their WebSocket | API rate limits (429), or gateway admission control (503) | Usually a script or a reconnect storm; if it's real load, raise `XMSG_ADMISSION_RATE` (see [Day to day](#day-to-day)) |
+| File uploads or downloads answer 503 | Garage is down, or `garage-init` failed (media then doesn't start) | `docker compose ps -a garage garage-init media`; `docker compose logs garage-init garage` |
+| An upload answers 413 | Over the 25 MB limit | The limit can be lowered with `XMSG_MEDIA_MAX_BYTES` for `media` (in `docker-compose.local.yml`); larger files aren't supported yet |
 | Search answers 503 | Search isn't enabled | `./install.sh --yes --search` (+1.5 GB of memory) |
 | Browser notifications never arrive | The site isn't on trusted HTTPS (browsers require it), or the user blocked notifications | Use `--tls acme` or `cert`; `docker compose logs push` |
 | A service keeps restarting, and `OOMKilled` is `true` | Memory cap too low for the load | Raise its `mem_limit` in `docker-compose.local.yml` |

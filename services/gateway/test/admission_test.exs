@@ -82,6 +82,8 @@ defmodule XmsgGateway.AdmissionTest do
     from = [{"x-forwarded-for", "203.0.113.7"}]
     {:ok, a} = WsClient.try_connect(port, from)
     {:ok, _b} = WsClient.try_connect(port, from)
+    # The 101 can reach us before the socket's init has registered it: wait for both.
+    wait_preauth("203.0.113.7", 2)
     assert refused?(WsClient.try_connect(port, from))
     # Another address isn't affected.
     assert {:ok, _} = WsClient.try_connect(port, [{"x-forwarded-for", "203.0.113.8"}])
@@ -122,5 +124,21 @@ defmodule XmsgGateway.AdmissionTest do
   defp wait_for_next_second do
     now = System.monotonic_time(:millisecond)
     Process.sleep(1_000 - rem(now, 1_000) + 5)
+  end
+
+  defp wait_preauth(ip, n, tries \\ 100) do
+    count = length(Registry.lookup(XmsgGateway.Admission.preauth_registry(), ip))
+
+    cond do
+      count >= n ->
+        :ok
+
+      tries == 0 ->
+        flunk("expected #{n} unauthenticated sockets from #{ip}, have #{count}")
+
+      true ->
+        Process.sleep(10)
+        wait_preauth(ip, n, tries - 1)
+    end
   end
 end

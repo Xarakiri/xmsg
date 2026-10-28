@@ -142,6 +142,12 @@ vapid_key() {
   rm -f "$der"
 }
 vapid=$(secret XMSG_PUSH_VAPID_PRIVATE_KEY vapid_key)
+# Files (ADR-0024): Garage's cluster secret and admin token, and the media service's key
+# (Garage wants "GK" and 24 hex digits for an imported key ID, 64 for its secret).
+garage_rpc=$(secret XMSG_GARAGE_RPC_SECRET "openssl rand -hex 32")
+garage_admin=$(secret XMSG_GARAGE_ADMIN_TOKEN "openssl rand -hex 32")
+media_key_id=$(secret XMSG_MEDIA_S3_KEY_ID "echo GK\$(openssl rand -hex 12)")
+media_secret=$(secret XMSG_MEDIA_S3_SECRET "openssl rand -hex 32")
 
 # Your own settings on top (resource limits, service tuning) survive re-runs and upgrades.
 compose_local=""
@@ -161,6 +167,10 @@ XMSG_AUTH_KEY=$auth_key
 XMSG_POSTGRES_PASSWORD=$postgres_password
 XMSG_KAFKA_CLUSTER_ID=$kafka_cluster_id
 XMSG_PUSH_VAPID_PRIVATE_KEY=$vapid
+XMSG_GARAGE_RPC_SECRET=$garage_rpc
+XMSG_GARAGE_ADMIN_TOKEN=$garage_admin
+XMSG_MEDIA_S3_KEY_ID=$media_key_id
+XMSG_MEDIA_S3_SECRET=$media_secret
 XMSG_PUSH_SUBJECT=mailto:${email:-admin@$domain}
 EOF
 if [[ -n "$search" ]]; then
