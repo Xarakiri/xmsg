@@ -24,7 +24,8 @@ spec:
           env:
             {{- /* nginx resolves upstreams at start: without push, its path goes to auth (404). */}}
             {{- $push := ternary "push:8086" "auth:8081" .Values.push.enabled }}
-            {{- range $name, $port := dict "AUTH" "auth:8081" "CHANNELS" "channels:8082" "MESSAGES" "messages:8083" "USERS" "users:8084" "READSTATE" "readstate:8085" "PUSH" $push "GATEWAY" "gateway:4000" }}
+            {{- $media := ternary "media:8087" "auth:8081" .Values.media.enabled }}
+            {{- range $name, $port := dict "AUTH" "auth:8081" "CHANNELS" "channels:8082" "MESSAGES" "messages:8083" "USERS" "users:8084" "READSTATE" "readstate:8085" "PUSH" $push "MEDIA" $media "GATEWAY" "gateway:4000" }}
             - { name: XMSG_{{ $name }}_UPSTREAM, value: "{{ $full }}-{{ $port }}" }
             {{- end }}
           ports:
@@ -50,7 +51,12 @@ kind: Ingress
 metadata:
   name: {{ $full }}
   labels: {{- include "xmsg.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- /* ingress-nginx allows 1 MB bodies by default: uploads (ADR-0024) need 26 MB. Yours win. */}}
+  {{- $annotations := deepCopy (default dict .Values.ingress.annotations) }}
+  {{- if and .Values.media.enabled (contains "nginx" (default "" .Values.ingress.className)) }}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/proxy-body-size" (default "26m" (index $annotations "nginx.ingress.kubernetes.io/proxy-body-size")) }}
+  {{- end }}
+  {{- with $annotations }}
   annotations: {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:

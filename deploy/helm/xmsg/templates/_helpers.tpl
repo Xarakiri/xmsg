@@ -60,5 +60,11 @@ be added.
 {{- if .Values.enterprise.enabled -}}{{- $c = append $c (dict "name" "admin" "bin" "xmsg-admin-ee" "port" 8096 "portEnv" "XMSG_EE_ADMIN_PORT" "enterprise" true) -}}{{- end -}}
 {{- if and .Values.enterprise.enabled .Values.enterprise.scim.enabled -}}{{- $c = append $c (dict "name" "scim" "bin" "xmsg-scim-ee" "port" 8095 "portEnv" "XMSG_EE_SCIM_PORT" "enterprise" true) -}}{{- end -}}
 {{- if .Values.opensearch.url -}}{{- $c = append $c (dict "name" "search-indexer" "bin" "xmsg-search-indexer" "port" 0) -}}{{- end -}}
+{{- if .Values.media.enabled -}}{{- $c = append $c (dict "name" "media" "bin" "xmsg-media" "port" 8087 "portEnv" "XMSG_MEDIA_PORT") -}}{{- end -}}
 {{- toJson $c -}}
+{{- end -}}
+
+{{/* The bundled Garage runs when media is on and no S3 endpoint of your own is set. */}}
+{{- define "xmsg.garageBundled" -}}
+{{- if and .Values.media.enabled (not .Values.media.s3.endpoint) -}}true{{- end -}}
 {{- end -}}
