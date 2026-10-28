@@ -16,7 +16,7 @@ metadata:
     helm.sh/hook-weight: "-10"
     helm.sh/hook-delete-policy: before-hook-creation
 data:
-{{ (.Files.Glob "files/*").AsConfig | indent 2 }}
+{{ (.Files.Glob "files/*.{sh,cql,sql}").AsConfig | indent 2 }}
 ---
 apiVersion: batch/v1
 kind: Job

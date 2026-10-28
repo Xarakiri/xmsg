@@ -38,7 +38,8 @@ valkey:
 
 secrets:
   # An existing Secret with XMSG_DATABASE_URL, XMSG_AUTH_KEY, XMSG_PUSH_VAPID_PRIVATE_KEY
-  # (and XMSG_PROVISIONING_TOKEN with SCIM).
+  # (and XMSG_PROVISIONING_TOKEN with SCIM; XMSG_MEDIA_S3_KEY_ID and XMSG_MEDIA_S3_SECRET with
+  # media; XMSG_GARAGE_RPC_SECRET and XMSG_GARAGE_ADMIN_TOKEN with the bundled Garage).
   # When empty, the chart creates one from the values below.
   existingSecret: ""
   authKey: ""                   # 32 random bytes, base64 (openssl rand -base64 32)
@@ -51,6 +52,40 @@ push:
   enabled: true
   subject: "mailto:admin@example.com"
 
+# Files and images (ADR-0024): the media service, and the S3-compatible store behind it.
+media:
+  enabled: true
+  maxBytes: 26214400            # largest upload (25 MB); the web pods' nginx allows 26 MB
+  concurrentUploads: 4          # per pod, held in memory while checked and stored
+  # Storage per workspace unless the operator sets another through the users service's
+  # provisioning API (PUT /internal/v1/workspaces/{id}/storage-quota); 0 = unlimited.
+  workspaceQuotaBytes: 10737418240
+  s3:
+    # Your own S3-compatible store (Ceph RGW, Amazon S3, GCS in S3 mode, SeaweedFS…), with
+    # the bucket and an access key already created. Empty: the bundled Garage below.
+    endpoint: ""                # e.g. https://s3.eu-west-1.amazonaws.com
+    region: ""                  # default: "garage" with the bundled store, else us-east-1
+    bucket: xmsg-files
+    # In the chart's Secret (or secrets.existingSecret: XMSG_MEDIA_S3_KEY_ID and
+    # XMSG_MEDIA_S3_SECRET). For the bundled Garage: "GK" + 24 hex digits, and 64 hex
+    # digits (openssl rand -hex 12 / -hex 32); the chart's setup job imports them.
+    keyId: ""
+    secret: ""
+
+# Garage (AGPL-3.0), bundled when media.s3.endpoint is empty: one pod, one copy of each
+# file on a PVC. For redundancy, run your own store (or a Garage cluster) and set the endpoint.
+garage:
+  image: dxflrs/garage:v2.5.0
+  storage: 50Gi
+  storageClassName: ""
+  # In the chart's Secret (or secrets.existingSecret: XMSG_GARAGE_RPC_SECRET and
+  # XMSG_GARAGE_ADMIN_TOKEN): openssl rand -hex 32 for each.
+  rpcSecret: ""
+  adminToken: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
 # Replicas and resources per Rust service (defaults below apply to all).
 services:
   defaults:
@@ -62,6 +97,8 @@ services:
   # (standbys wait), the others are Kafka consumer groups (extra instances share load).
   overrides:
     outbox-relay: { replicas: 2 }
+    # Up to 4 uploads of 25 MB in memory at once, plus thumbnails.
+    media: { resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 768Mi } } }
 
 sequencer:
   replicas: 3

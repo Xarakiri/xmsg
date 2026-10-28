@@ -525,23 +525,35 @@ jobs:
           diff deploy/compose/init/postgres/003_sso.sql deploy/helm/xmsg/files/postgres-003_sso.sql
           diff deploy/compose/init/postgres/004_sso_policy.sql deploy/helm/xmsg/files/postgres-004_sso_policy.sql
           diff deploy/compose/init/postgres/005_storage_quota.sql deploy/helm/xmsg/files/postgres-005_storage_quota.sql
+          # Garage's config, but for its RPC address (one pod: itself).
+          diff <(grep -v '^rpc_public_addr' deploy/compose/garage/garage.toml) <(grep -v '^rpc_public_addr' deploy/helm/xmsg/files/garage.toml)
       - name: Lint and render
         run: |
           helm lint deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml
           helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml > rendered.yaml
           # Search and push off too.
           helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml \
-            --set opensearch.url= --set push.enabled=false > rendered-minimal.yaml
+            --set opensearch.url= --set push.enabled=false --set media.enabled=false > rendered-minimal.yaml
           # The Enterprise Edition switch, with SCIM.
           helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml \
             -f deploy/helm/xmsg/ci-values-enterprise.yaml > rendered-enterprise.yaml
           grep -q 'command: \["xmsg-auth-ee"\]' rendered-enterprise.yaml
           grep -q 'command: \["xmsg-scim-ee"\]' rendered-enterprise.yaml
           grep -q 'command: \["xmsg-admin-ee"\]' rendered-enterprise.yaml
+          # Files (ADR-0024): the media service, Garage and its setup job by default; your own
+          # S3 store instead of Garage; nothing of either with media off.
+          grep -q 'command: \["xmsg-media"\]' rendered.yaml
+          grep -q 'command: \[xmsg-media, garage-init\]' rendered.yaml
+          grep -q 'XMSG_MEDIA_UPSTREAM' rendered.yaml
+          helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml \
+            --set media.s3.endpoint=https://s3.example.com --set media.s3.keyId=AKIAEXAMPLE > rendered-external-s3.yaml
+          grep -q 'command: \["xmsg-media"\]' rendered-external-s3.yaml
+          ! grep -q 'garage' rendered-external-s3.yaml
+          ! grep -qE 'garage|xmsg-media' rendered-minimal.yaml
       - name: Validate against the Kubernetes schemas
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
-          ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml rendered-minimal.yaml rendered-enterprise.yaml
+          ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml rendered-minimal.yaml rendered-enterprise.yaml rendered-external-s3.yaml
 
   images:
     name: Container images

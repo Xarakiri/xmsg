@@ -7,11 +7,12 @@
 
 | Workload | Kind | Notes |
 |---|---|---|
-| auth, users, channels, messages, readstate, push | Deployment + Service | HTTP, `/healthz` probes |
+| auth, users, channels, messages, readstate, push, media | Deployment + Service | HTTP, `/healthz` probes |
 | persister, fanout, outbox-relay, meta-relay, reaction-batcher, presence, search-indexer | Deployment | Kafka / NATS workers |
 | sequencer | StatefulSet + headless Service | RocksDB state on a PVC; each pod advertises its stable name for the membership endpoint |
 | gateway | Deployment + Service | WebSockets on 4000 |
-| web | Deployment + Service (+ Ingress) | nginx: the app, plus `/auth`, `/channels`, `/messages`, `/users`, `/readstate`, `/push` and `/ws` forwarded to the services: **the single entry point** |
+| web | Deployment + Service (+ Ingress) | nginx: the app, plus `/auth`, `/channels`, `/messages`, `/users`, `/readstate`, `/push`, `/media` and `/ws` forwarded to the services: **the single entry point** |
+| garage | StatefulSet + Service (+ setup Job after install and upgrade) | the bundled S3 store for files ([ADR-0024](../../../docs/adr/0024-media-and-object-storage.md)): one pod, one copy, on a PVC; not run when `media.s3.endpoint` points at your own store |
 | nats, valkey | Deployment + Service | when `nats.bundled` / `valkey.bundled` (nothing to keep: both rebuild after restarts) |
 | init: topics, keyspace, Postgres schema | Jobs (pre-install / pre-upgrade hooks) | idempotent; the base Postgres schema runs only on an empty database |
 
@@ -37,6 +38,9 @@ opensearch: { url: "" }             # optional: search is off without it
 secrets:
   authKey: "…"                      # openssl rand -base64 32
   vapidPrivateKey: "…"              # see services/push (Web Push); or push.enabled: false
+media:                              # files (or media.enabled: false)
+  s3: { keyId: "GK…", secret: "…" } # GK$(openssl rand -hex 12) and $(openssl rand -hex 32)
+garage: { rpcSecret: "…", adminToken: "…", storage: 200Gi }   # openssl rand -hex 32 each
 ingress: { enabled: true, className: nginx, host: chat.example.com, tls: [{ secretName: chat-tls, hosts: [chat.example.com] }] }
 ```
 
@@ -70,8 +74,9 @@ The admin console runs too, at `https://<host>/admin/`. `XMSG_AUTH_PUBLIC_URL` a
 - **Outbox:** the Rust poller by default; with Debezium relaying the outbox, set `outbox.mode: cleanup` (see `services/outbox`).
 - **Gateways** need nothing sticky: a client reconnecting to another pod resumes through sync.
 - **TLS** ends at your ingress (ADR-0013); the services speak plain HTTP inside the cluster.
+- **Files** (ADR-0024): with the bundled Garage, its PVC holds every uploaded file, so back it up with your volume snapshots; for redundancy, point `media.s3.endpoint` at your own S3-compatible store (bucket and key created beforehand). Uploads need request bodies of 26 MB: with an nginx ingress class the chart sets `nginx.ingress.kubernetes.io/proxy-body-size: 26m` (unless you set it); other ingress controllers need their own equivalent.
 
 ## Not yet
 - Bundled Kafka / Cassandra / PostgreSQL (use operators such as Strimzi, K8ssandra and CloudNativePG, or managed services).
 - Published images and a chart repository; PodDisruptionBudgets, autoscaling, NetworkPolicies and ServiceMonitors.
-- An install test on a real cluster in CI (today CI lints, renders with two value sets, validates against the Kubernetes 1.31 schemas and builds the images).
+- An install test on a real cluster in CI (today CI lints, renders with several value sets, validates against the Kubernetes 1.31 schemas and builds the images).
