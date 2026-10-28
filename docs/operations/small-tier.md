@@ -94,6 +94,15 @@ services:
       XMSG_ADMISSION_RATE: "5000"     # new connections per second (default 2000)
 ```
 
+**Storage quotas** (files, [ADR-0024](../adr/0024-media-and-object-storage.md)): each workspace may store `XMSG_MEDIA_WORKSPACE_QUOTA_BYTES` (default 10 GB, 0 = unlimited; set it for `media` in `docker-compose.local.yml`). To give one workspace another quota, enable the users service's operator API with a long random token (`XMSG_PROVISIONING_TOKEN` for `users` in `docker-compose.local.yml`), then:
+
+```bash
+curl -X PUT http://127.0.0.1:8080/users/internal/v1/workspaces/WORKSPACE_ID/storage-quota \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"bytes": 53687091200}'
+```
+
+`{"bytes": null}` returns it to the default. Workspace owners and admins can see their usage at `/media/v1/workspaces/WORKSPACE_ID/storage`. Files of deleted messages stop counting 24 hours after the deletion, when their bytes are removed.
+
 Gateway settings worth knowing: `XMSG_ADMISSION_RATE` (new connections per second, default 2000), `XMSG_MAX_CONNECTIONS` (default 0, no limit), `XMSG_PREAUTH_PER_IP` (connections per IP that haven't signed in yet, default 100) and `XMSG_DRAIN_SECONDS` (how long a restart spreads reconnects over; 30 in this bundle).
 
 ## Backups
@@ -149,6 +158,7 @@ Start with `./xmsgctl health` and `docker compose ps -a`, then `docker compose l
 | 502 on `/ws` or the APIs for a few seconds after a start | Services still starting | Wait for `./xmsgctl health --wait 120` |
 | Clients get 429 from the APIs, or 503 with `Retry-After` when opening their WebSocket | API rate limits (429), or gateway admission control (503) | Usually a script or a reconnect storm; if it's real load, raise `XMSG_ADMISSION_RATE` (see [Day to day](#day-to-day)) |
 | File uploads or downloads answer 503 | Garage is down, or `garage-init` failed (media then doesn't start) | `docker compose ps -a garage garage-init media`; `docker compose logs garage-init garage` |
+| An upload answers 413 "this workspace's storage is full" | The workspace reached its quota | Delete old files' messages (their bytes go after 24 h), or raise the workspace's quota (see [Day to day](#day-to-day)) |
 | An upload answers 413 | Over the 25 MB limit | The limit can be lowered with `XMSG_MEDIA_MAX_BYTES` for `media` (in `docker-compose.local.yml`); larger files aren't supported yet |
 | Calls connect but nobody hears or sees anyone | LiveKit's media ports are closed, or it advertises the wrong address | Open UDP 7882 / TCP 7881 and the TURN ports; `docker compose logs livekit` shows the address it found; set `XMSG_LIVEKIT_NODE_IP` |
 | Search answers 503 | Search isn't enabled | `./install.sh --yes --search` (+1.5 GB of memory) |

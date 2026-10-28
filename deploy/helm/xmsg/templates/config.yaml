@@ -58,6 +58,7 @@ data:
   XMSG_MEDIA_BUCKET: {{ .Values.media.s3.bucket | quote }}
   XMSG_MEDIA_MAX_BYTES: {{ .Values.media.maxBytes | quote }}
   XMSG_MEDIA_CONCURRENT_UPLOADS: {{ .Values.media.concurrentUploads | quote }}
+  XMSG_MEDIA_WORKSPACE_QUOTA_BYTES: {{ .Values.media.workspaceQuotaBytes | int64 | quote }}
   {{- end }}
 {{- if not .Values.secrets.existingSecret }}
 ---
