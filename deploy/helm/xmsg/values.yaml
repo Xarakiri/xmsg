@@ -69,6 +69,18 @@ media:
     keyId: ""
     secret: ""
 
+# Voice and video calls (ADR-0025): the calls service, with LiveKit run separately (its own
+# Helm chart, or a managed LiveKit) and coturn for TURN. Off by default.
+calls:
+  enabled: false
+  livekit:
+    url: ""                     # where browsers reach LiveKit, e.g. wss://livekit.example.com
+    apiKey: ""
+    # In the chart's Secret (or secrets.existingSecret: XMSG_LIVEKIT_API_SECRET); 32+ characters.
+    apiSecret: ""
+  # LiveKit's webhooks must reach https://<ingress.host>/calls/webhooks/livekit (or the
+  # service inside the cluster: http://<release>-xmsg-calls:8088/webhooks/livekit).
+
 # Garage (AGPL-3.0), bundled when media.s3.endpoint is empty: one pod, one copy of each
 # file on a PVC. For redundancy, run your own store (or a Garage cluster) and set the endpoint.
 garage:

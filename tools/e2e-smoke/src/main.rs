@@ -224,6 +224,22 @@ async fn run() -> Result<(), String> {
                 check_push(&push_url, url, &mut clients, &users, run_id).await?;
             }
         }
+        if let (Ok(calls_url), Ok(livekit_url), Ok(secret)) = (
+            std::env::var("XMSG_CALLS_URL"),
+            std::env::var("XMSG_LIVEKIT_API_URL"),
+            std::env::var("XMSG_LIVEKIT_API_SECRET"),
+        ) {
+            check_calls(
+                &calls_url,
+                &livekit_url,
+                &secret,
+                url,
+                &mut clients,
+                &users,
+                run_id,
+            )
+            .await?;
+        }
         if let Ok(media_url) = std::env::var("XMSG_MEDIA_URL") {
             let messages_url = std::env::var("XMSG_MESSAGES_URL").ok();
             check_media(
@@ -1164,6 +1180,148 @@ async fn check_reactions(
     println!(
         "reactions: a non-member is refused; bob's add and remove and alice's add end at 1, delivered in {} ms through the batcher",
         started.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+/// Calls (ADR-0025), against a real LiveKit: alice gets a token for her channel's huddle
+/// (mallory, not a member, gets nothing); the room is created and deleted through
+/// LiveKit's API, LiveKit's signed webhook reaches the calls service, and bob receives
+/// the call's end as a sequenced event. (Joining needs WebRTC, which this can't do.)
+#[allow(clippy::too_many_arguments)]
+async fn check_calls(
+    calls_url: &str,
+    livekit_url: &str,
+    secret: &str,
+    channels_url: &str,
+    clients: &mut [Client; 3],
+    users: &[(i64, String)],
+    run_id: i64,
+) -> Result<(), String> {
+    let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
+    let (status, reply) = call(
+        "POST",
+        &format!("{channels_url}/v1/channels"),
+        &alice.1,
+        Some(serde_json::json!({"type": "private", "name": format!("e2e-calls-{run_id}"), "member_ids": [bob.0.to_string()]})),
+    )
+    .await?;
+    if status != 201 {
+        return Err(format!("calls: creating the channel: {status} {reply}"));
+    }
+    let channel: i64 = reply["channel_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("calls: no channel_id")?;
+    // Membership reaches Cassandra a moment after the channel is created.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let joined = loop {
+        let (status, reply) = call(
+            "POST",
+            &format!("{calls_url}/v1/channels/{channel}/call"),
+            &alice.1,
+            None,
+        )
+        .await?;
+        if status == 200 {
+            break reply;
+        }
+        if status != 404 || Instant::now() > deadline {
+            return Err(format!("calls: alice's call: {status} {reply}"));
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    };
+    let room = joined["call_id"]
+        .as_str()
+        .ok_or("calls: no call_id")?
+        .to_string();
+    if room != format!("h{channel}")
+        || joined["huddle"] != true
+        || joined["token"].as_str().is_none_or(str::is_empty)
+    {
+        return Err(format!("calls: unexpected answer {joined}"));
+    }
+    let (status, _) = call(
+        "POST",
+        &format!("{calls_url}/v1/channels/{channel}/call"),
+        &mallory.1,
+        None,
+    )
+    .await?;
+    if status != 404 {
+        return Err(format!(
+            "calls: a non-member's call: expected 404, got {status}"
+        ));
+    }
+
+    // LiveKit's server API, with a token signed like the calls service's.
+    let keys = xmsg_calls::livekit::Keys {
+        api_key: "xmsg".into(),
+        api_secret: secret.into(),
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let admin = keys.admin_token(now, 600);
+    let http = reqwest::Client::new();
+    let twirp = async |method: &str, body: serde_json::Value| -> Result<(), String> {
+        let response = http
+            .post(format!("{livekit_url}/twirp/livekit.RoomService/{method}"))
+            .bearer_auth(&admin)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("calls: LiveKit {method}: {e}"))?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "calls: LiveKit {method}: {} {}",
+                response.status(),
+                response.text().await.unwrap_or_default()
+            ))
+        }
+    };
+    // LiveKit has no healthcheck to wait on: give it a moment.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while let Err(e) = twirp("CreateRoom", serde_json::json!({ "name": room })).await {
+        if Instant::now() > deadline {
+            return Err(e);
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    twirp("DeleteRoom", serde_json::json!({ "room": room })).await?;
+
+    let ended = |events: &[SequencedEvent]| {
+        events.iter().any(|e| {
+            e.channel_id == channel
+                && matches!(&e.payload, Some(sequenced_event::Payload::CallEvent(c))
+                    if c.call_id == room && c.change == xmsg_proto::v1::CallChange::Ended as i32)
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !ended(&clients[1].events) {
+        if Instant::now() > deadline {
+            return Err(
+                "calls: bob never saw the call end (LiveKit's webhook didn't come through)".into(),
+            );
+        }
+        let _ = tokio::time::timeout(Duration::from_millis(500), next_frame(&mut clients[1])).await;
+    }
+    // Over: the call is gone.
+    let (status, _) = call(
+        "GET",
+        &format!("{calls_url}/v1/channels/{channel}/call"),
+        &bob.1,
+        None,
+    )
+    .await?;
+    if status != 404 {
+        return Err(format!("calls: the ended call still answers {status}"));
+    }
+    println!(
+        "calls: a member gets a huddle token, a non-member nothing; LiveKit's signed webhook ends the call, and bob sees it sequenced"
     );
     Ok(())
 }

@@ -5068,6 +5068,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
+ "xmsg-calls",
  "xmsg-partition",
  "xmsg-proto",
 ]

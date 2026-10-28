@@ -64,6 +64,7 @@ These are starting points from the memory caps above, **not load-test results**:
 - **Firewall:** open 80 and 443 only. Everything else is bound to `127.0.0.1`.
 - **Without registry access:** build an [air-gapped bundle](../../deploy/compose/README.md#air-gapped-install) elsewhere and install from it.
 - **Search** (`--search`) needs another 1.5 GB of memory. It stays on once enabled.
+- **Calls** (`--calls`, [ADR-0025](../adr/0025-voice-and-video-calls.md)): voice and video in DMs, channel huddles and screen sharing, through LiveKit and coturn (about 1.25 GB more memory). Open UDP 7882 and TCP 7881 (LiveKit's media), and 3478 UDP/TCP plus UDP 49160–49200 (TURN, for people whose networks block the others). LiveKit finds the machine's public address over STUN; where it can't (air-gapped, or behind NAT with a known address), set `XMSG_LIVEKIT_NODE_IP` (and `XMSG_LIVEKIT_EXTERNAL_IP=false`) in `.env`. Calls stay on once enabled.
 - Re-running `install.sh` keeps the secrets, so it's also how you change the domain or TLS settings.
 
 ## Day to day
@@ -149,6 +150,7 @@ Start with `./xmsgctl health` and `docker compose ps -a`, then `docker compose l
 | Clients get 429 from the APIs, or 503 with `Retry-After` when opening their WebSocket | API rate limits (429), or gateway admission control (503) | Usually a script or a reconnect storm; if it's real load, raise `XMSG_ADMISSION_RATE` (see [Day to day](#day-to-day)) |
 | File uploads or downloads answer 503 | Garage is down, or `garage-init` failed (media then doesn't start) | `docker compose ps -a garage garage-init media`; `docker compose logs garage-init garage` |
 | An upload answers 413 | Over the 25 MB limit | The limit can be lowered with `XMSG_MEDIA_MAX_BYTES` for `media` (in `docker-compose.local.yml`); larger files aren't supported yet |
+| Calls connect but nobody hears or sees anyone | LiveKit's media ports are closed, or it advertises the wrong address | Open UDP 7882 / TCP 7881 and the TURN ports; `docker compose logs livekit` shows the address it found; set `XMSG_LIVEKIT_NODE_IP` |
 | Search answers 503 | Search isn't enabled | `./install.sh --yes --search` (+1.5 GB of memory) |
 | Browser notifications never arrive | The site isn't on trusted HTTPS (browsers require it), or the user blocked notifications | Use `--tls acme` or `cert`; `docker compose logs push` |
 | A service keeps restarting, and `OOMKilled` is `true` | Memory cap too low for the load | Raise its `mem_limit` in `docker-compose.local.yml` |

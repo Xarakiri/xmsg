@@ -549,10 +549,15 @@ jobs:
           grep -q 'command: \["xmsg-media"\]' rendered-external-s3.yaml
           ! grep -q 'garage' rendered-external-s3.yaml
           ! grep -qE 'garage|xmsg-media' rendered-minimal.yaml
+          # Calls (ADR-0025), with an external LiveKit.
+          helm template ci deploy/helm/xmsg -f deploy/helm/xmsg/ci-values.yaml --set calls.enabled=true \
+            --set calls.livekit.url=wss://livekit.example.com --set calls.livekit.apiKey=APIci \
+            --set calls.livekit.apiSecret=ci-livekit-secret-0123456789abcdef > rendered-calls.yaml
+          grep -q 'command: \["xmsg-calls"\]' rendered-calls.yaml
       - name: Validate against the Kubernetes schemas
         run: |
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
-          ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml rendered-minimal.yaml rendered-enterprise.yaml rendered-external-s3.yaml
+          ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml rendered-minimal.yaml rendered-enterprise.yaml rendered-external-s3.yaml rendered-calls.yaml
 
   images:
     name: Container images
@@ -612,6 +617,10 @@ jobs:
         working-directory: deploy/compose
         run: |
           docker compose up -d --wait kafka nats cassandra postgres valkey garage
+          # Calls (ADR-0025): LiveKit, its webhooks to the calls service on this host.
+          XMSG_LIVEKIT_API_SECRET=ci-livekit-secret-0123456789abcdef XMSG_LIVEKIT_EXTERNAL_IP=false \
+            XMSG_LIVEKIT_WEBHOOK_URL=http://host.docker.internal:8088/webhooks/livekit \
+            docker compose --profile calls up -d livekit
           docker compose --profile search up -d opensearch
           docker compose up kafka-init --exit-code-from kafka-init
           docker compose up cassandra-init --exit-code-from cassandra-init
@@ -625,7 +634,7 @@ jobs:
           init/debezium/register.sh
       - name: Build
         run: |
-          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-search-indexer -p xmsg-push -p xmsg-media -p xmsg-e2e-smoke
+          cargo build --release -p xmsg-auth -p xmsg-users -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-outbox -p xmsg-readstate -p xmsg-reaction-batcher -p xmsg-presence -p xmsg-search-indexer -p xmsg-push -p xmsg-media -p xmsg-calls -p xmsg-e2e-smoke
           (cd services/sequencer && ./gradlew installDist --console=plain)
           (cd services/gateway && mix deps.get && MIX_ENV=prod mix compile)
       - name: Messages service integration tests (real Kafka + NATS)
@@ -729,6 +738,10 @@ jobs:
             XMSG_MEDIA_S3_KEY_ID=GK0000000000000000000000c1 \
             XMSG_MEDIA_S3_SECRET=00000000000000000000000000000000000000000000000000000000000000c1 \
             ./target/release/xmsg-media > logs/media.log 2>&1 &
+          XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
+            XMSG_LIVEKIT_API_KEY=xmsg XMSG_LIVEKIT_API_SECRET=ci-livekit-secret-0123456789abcdef \
+            XMSG_LIVEKIT_PUBLIC_URL=ws://localhost:7880 \
+            ./target/release/xmsg-calls > logs/calls.log 2>&1 &
           XMSG_SEQUENCER_URL=http://localhost:8090 ./target/release/xmsg-fanout > logs/fanout.log 2>&1 &
           (cd services/gateway && MIX_ENV=prod XMSG_GATEWAY_ID=ci \
             XMSG_AUTH_JWKS_URL=http://localhost:8081/.well-known/jwks.json \
@@ -750,6 +763,7 @@ jobs:
               && grep -q 'search indexer ready' logs/search-indexer.log \
               && grep -q 'push ready' logs/push.log \
               && grep -q 'media ready' logs/media.log \
+              && grep -q 'calls ready' logs/calls.log \
               && grep -q 'fanout ready' logs/fanout.log \
               && grep -q 'REBALANCING to RUNNING' logs/sequencer.log && exit 0
             sleep 2
@@ -764,6 +778,9 @@ jobs:
           XMSG_SEQUENCER_URL: http://localhost:8090
           XMSG_PUSH_URL: http://localhost:8086
           XMSG_MEDIA_URL: http://localhost:8087
+          XMSG_CALLS_URL: http://localhost:8088
+          XMSG_LIVEKIT_API_URL: http://localhost:7880
+          XMSG_LIVEKIT_API_SECRET: ci-livekit-secret-0123456789abcdef
           XMSG_EXPECT_OUTBOX_RELAY: "true"
           XMSG_EXPECT_REVOCATION: "true"
           XMSG_EXPECT_WORKSPACE_REMOVAL: "true"
@@ -773,6 +790,10 @@ jobs:
         if: always() && matrix.relay == 'debezium'
         working-directory: deploy/compose
         run: mkdir -p ../../logs && docker compose --profile debezium logs debezium > ../../logs/debezium.log 2>&1 || true
+      - name: Save LiveKit's log
+        if: always()
+        working-directory: deploy/compose
+        run: mkdir -p ../../logs && docker compose --profile calls logs livekit > ../../logs/livekit.log 2>&1 || true
       - name: Upload service logs
         if: always()
         uses: actions/upload-artifact@v4

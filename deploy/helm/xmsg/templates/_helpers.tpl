@@ -61,6 +61,7 @@ be added.
 {{- if and .Values.enterprise.enabled .Values.enterprise.scim.enabled -}}{{- $c = append $c (dict "name" "scim" "bin" "xmsg-scim-ee" "port" 8095 "portEnv" "XMSG_EE_SCIM_PORT" "enterprise" true) -}}{{- end -}}
 {{- if .Values.opensearch.url -}}{{- $c = append $c (dict "name" "search-indexer" "bin" "xmsg-search-indexer" "port" 0) -}}{{- end -}}
 {{- if .Values.media.enabled -}}{{- $c = append $c (dict "name" "media" "bin" "xmsg-media" "port" 8087 "portEnv" "XMSG_MEDIA_PORT") -}}{{- end -}}
+{{- if .Values.calls.enabled -}}{{- $c = append $c (dict "name" "calls" "bin" "xmsg-calls" "port" 8088 "portEnv" "XMSG_CALLS_PORT") -}}{{- end -}}
 {{- toJson $c -}}
 {{- end -}}
 

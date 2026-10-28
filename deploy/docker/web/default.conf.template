@@ -20,6 +20,9 @@ server {
   location /readstate/ { proxy_pass http://${XMSG_READSTATE_UPSTREAM}/; }
   location /push/      { proxy_pass http://${XMSG_PUSH_UPSTREAM}/; }
   # Files (ADR-0024): streamed both ways, up to the media service's own limit (25 MB).
+  # Calls (ADR-0025). Without calls this points at auth (404): nginx needs every upstream
+  # to resolve when it starts.
+  location /calls/     { proxy_pass http://${XMSG_CALLS_UPSTREAM}/; }
   location /media/ {
     proxy_pass http://${XMSG_MEDIA_UPSTREAM}/;
     client_max_body_size 26m;

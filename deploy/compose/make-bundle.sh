@@ -41,7 +41,7 @@ cd "$(dirname "$0")"
 # Compose with this bundle's images; the secrets only need to be set for `config`.
 compose() {
   env COMPOSE_FILE=docker-compose.yml:docker-compose.app.yml \
-    COMPOSE_PROFILES="$([[ $search -eq 1 ]] && echo search)" \
+    COMPOSE_PROFILES="$([[ $search -eq 1 ]] && echo search,)calls" \
     XMSG_REGISTRY="$registry" XMSG_VERSION="$version" \
     XMSG_AUTH_KEY=- XMSG_POSTGRES_PASSWORD=- XMSG_PUSH_VAPID_PRIVATE_KEY=- \
     XMSG_GARAGE_ADMIN_TOKEN=- XMSG_MEDIA_S3_KEY_ID=- XMSG_MEDIA_S3_SECRET=- \

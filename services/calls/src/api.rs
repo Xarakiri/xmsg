@@ -186,7 +186,11 @@ async fn webhook<C: Calls, L: EventLog>(
     )
     .await
     {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(emitted) => {
+            let room = hook.room.as_ref().map_or("", |r| r.name.as_str());
+            tracing::info!(event = %hook.event, room, emitted, "LiveKit webhook");
+            StatusCode::OK.into_response()
+        }
         // LiveKit retries: the next try may work, and repeats are dropped by the sequencer.
         Err(e) => unavailable("applying the webhook", &e),
     }

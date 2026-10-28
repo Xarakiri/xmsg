@@ -12,6 +12,8 @@ The Small self-hosting tier ([ADR-0019](../../docs/adr/0019-self-hosting-and-dep
 | NATS | `nats:2.10-alpine` | 4222 (monitoring 8222) | 256 MB |
 | OpenSearch *(profile `search`)* | `opensearchproject/opensearch:2.18.0` | 9200 | 1.5 GB |
 | Garage (files, [ADR-0024](../../docs/adr/0024-media-and-object-storage.md)) | `dxflrs/garage:v2.5.0` | 3900 (admin 3903) | 256 MB |
+| LiveKit *(profile `calls`, [ADR-0025](../../docs/adr/0025-voice-and-video-calls.md))* | `livekit/livekit-server:v1.13.1` | 7880 (local), 7881/tcp, 7882/udp | 1 GB |
+| coturn *(profile `calls`)* | `coturn/coturn:4.6.3` | 3478 udp/tcp, 49160–49200/udp | 256 MB |
 
 One-shot jobs create the Kafka topics (`kafka-init`, N partitions from `XMSG_PARTITIONS`, default 16) and the Cassandra schema (`cassandra-init`). Postgres runs `init/postgres/*.sql` on first start.
 
