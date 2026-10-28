@@ -90,10 +90,30 @@ async fn main() {
     let grace_secs: i64 = get("XMSG_MEDIA_PURGE_AFTER_SECS", "86400")
         .parse()
         .unwrap_or_else(|_| fail("XMSG_MEDIA_PURGE_AFTER_SECS must be a number of seconds"));
+    let default_quota: i64 = get("XMSG_MEDIA_WORKSPACE_QUOTA_BYTES", "10737418240")
+        .parse()
+        .unwrap_or_else(|_| {
+            fail("XMSG_MEDIA_WORKSPACE_QUOTA_BYTES must be a number of bytes (0: unlimited)")
+        });
     let keyspace = get("XMSG_CQL_KEYSPACE", "xmsg");
-    let store = Cassandra::connect(&nodes, &keyspace)
+    let mut store = Cassandra::connect(&nodes, &keyspace)
         .await
         .unwrap_or_else(|e| fail(&e));
+    // Quota overrides and workspace roles (ADR-0024); without Postgres every workspace
+    // gets the default and nobody can read usage.
+    match std::env::var("XMSG_DATABASE_URL")
+        .ok()
+        .filter(|u| !u.is_empty())
+    {
+        Some(url) => {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(4)
+                .connect_lazy(&url)
+                .unwrap_or_else(|e| fail(&format!("XMSG_DATABASE_URL: {e}")));
+            store = store.with_postgres(pool);
+        }
+        None => tracing::warn!("XMSG_DATABASE_URL not set: every workspace gets the default quota"),
+    }
     let lifecycle_store = Arc::new(
         Cassandra::connect(&nodes, &keyspace)
             .await
@@ -127,6 +147,7 @@ async fn main() {
         verifier,
         max_bytes,
         uploads: Semaphore::new(concurrent.max(1)),
+        default_quota,
     });
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
