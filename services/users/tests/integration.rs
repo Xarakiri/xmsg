@@ -171,17 +171,23 @@ async fn workspaces_roles_members_and_unique_slugs() {
         .accept_invite(&code_hash(&code), bob, Utc::now())
         .await
         .unwrap();
+    // Listed by user ID, which isn't creation order (IDs carry random bits).
+    let mut expected = vec![(alice, "owner"), (bob, "member")];
+    expected.sort();
     let members = store.members(w, 0, 10).await.unwrap();
     assert_eq!(
         members
             .iter()
             .map(|m| (m.user_id, m.role.as_str()))
             .collect::<Vec<_>>(),
-        [(alice, "owner"), (bob, "member")]
+        expected
     );
-    let page = store.members(w, alice, 10).await.unwrap();
+    // The page after the first member holds the other one.
+    let (first, second) = (expected[0].0, expected[1].0);
+    let page = store.members(w, first, 10).await.unwrap();
     assert_eq!(page.len(), 1);
-    assert_eq!((page[0].user_id, page[0].name.as_str()), (bob, "Bob"));
+    let name = if second == bob { "Bob" } else { "Alice" };
+    assert_eq!((page[0].user_id, page[0].name.as_str()), (second, name));
 }
 
 #[tokio::test]
