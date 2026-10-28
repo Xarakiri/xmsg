@@ -6,9 +6,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
+use rdkafka::consumer::{
+    BaseConsumer, CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer,
+};
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::{ClientConfig, Message as _};
+use rdkafka::{ClientConfig, ClientContext, Message as _};
 use tracing_subscriber::EnvFilter;
 use xmsg_proto::Message;
 use xmsg_proto::v1::{ReadStateEvent, SequencedEvent, sequenced_event::Payload};
@@ -64,8 +66,29 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-fn consumer(bootstrap: &str, group: &str, topic: &str) -> StreamConsumer {
-    let consumer: StreamConsumer = ClientConfig::new()
+struct Readiness {
+    group: String,
+    assigned: tokio::sync::watch::Sender<bool>,
+}
+
+impl ClientContext for Readiness {}
+impl ConsumerContext for Readiness {
+    fn post_rebalance(&self, _consumer: &BaseConsumer<Self>, rebalance: &Rebalance<'_>) {
+        if let Rebalance::Assign(tpl) = rebalance {
+            let partitions: Vec<i32> = tpl.elements().iter().map(|e| e.partition()).collect();
+            tracing::info!(group = %self.group, ?partitions, "partitions assigned");
+            let _ = self.assigned.send(true);
+        }
+    }
+}
+
+fn consumer(
+    bootstrap: &str,
+    group: &str,
+    topic: &str,
+    assigned: tokio::sync::watch::Sender<bool>,
+) -> StreamConsumer<Readiness> {
+    let consumer: StreamConsumer<Readiness> = ClientConfig::new()
         .set("bootstrap.servers", bootstrap)
         .set("group.id", group)
         .set("auto.offset.reset", "earliest")
@@ -73,7 +96,10 @@ fn consumer(bootstrap: &str, group: &str, topic: &str) -> StreamConsumer {
         .set("isolation.level", "read_committed")
         // Offsets are stored explicitly (after the work) and committed by us.
         .set("enable.auto.offset.store", "false")
-        .create()
+        .create_with_context(Readiness {
+            group: group.to_string(),
+            assigned,
+        })
         .unwrap_or_else(|e| fail(&format!("Kafka consumer: {e}")));
     consumer
         .subscribe(&[topic])
@@ -83,8 +109,8 @@ fn consumer(bootstrap: &str, group: &str, topic: &str) -> StreamConsumer {
 
 /// The owner: applies each user's events in partition order. Offsets are committed after
 /// the write, so a crash re-applies a suffix in order, which converges to the same position.
-async fn own(bootstrap: String, store: Arc<Cassandra>) {
-    let consumer = consumer(&bootstrap, "xmsg-readstate-owner", TOPIC);
+async fn own(bootstrap: String, store: Arc<Cassandra>, assigned: tokio::sync::watch::Sender<bool>) {
+    let consumer = consumer(&bootstrap, "xmsg-readstate-owner", TOPIC, assigned);
     loop {
         let message = match consumer.recv().await {
             Ok(m) => m,
@@ -127,8 +153,18 @@ async fn own(bootstrap: String, store: Arc<Cassandra>) {
 /// doesn't matter: produces are enqueued without waiting, and every second (or 1,000
 /// records) the feeder waits for their deliveries, re-sends any that failed, and only
 /// then commits its offsets, so nothing is lost on a crash.
-async fn feeder(bootstrap: String, store: Arc<Cassandra>, events: Arc<Kafka>) {
-    let consumer = consumer(&bootstrap, "xmsg-readstate-feeder", "messages.persisted");
+async fn feeder(
+    bootstrap: String,
+    store: Arc<Cassandra>,
+    events: Arc<Kafka>,
+    assigned: tokio::sync::watch::Sender<bool>,
+) {
+    let consumer = consumer(
+        &bootstrap,
+        "xmsg-readstate-feeder",
+        "messages.persisted",
+        assigned,
+    );
     // Each channel's latest msg_seq, learnt from its messages in order (channel_heads
     // fills in channels seen first through a join after a restart).
     let mut latest: HashMap<i64, i64> = HashMap::new();
@@ -224,8 +260,23 @@ async fn main() {
         .unwrap_or_else(|e| fail(&format!("Kafka producer: {e}")));
     let events = Arc::new(Kafka(producer));
 
-    tokio::spawn(own(bootstrap.clone(), store.clone()));
-    tokio::spawn(feeder(bootstrap, store.clone(), events.clone()));
+    let (owner_assigned, mut owner_ready) = tokio::sync::watch::channel(false);
+    let (feeder_assigned, mut feeder_ready) = tokio::sync::watch::channel(false);
+    tokio::spawn(own(bootstrap.clone(), store.clone(), owner_assigned));
+    tokio::spawn(feeder(
+        bootstrap,
+        store.clone(),
+        events.clone(),
+        feeder_assigned,
+    ));
+    tokio::spawn(async move {
+        owner_ready.changed().await.expect("owner consumer dropped");
+        feeder_ready
+            .changed()
+            .await
+            .expect("feeder consumer dropped");
+        tracing::info!(port, "readstate ready");
+    });
 
     let verifier = xmsg_authn::Verifier::from_env(jwks)
         .await
@@ -238,7 +289,6 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
         .unwrap_or_else(|e| fail(&format!("bind :{port}: {e}")));
-    tracing::info!(port, "readstate ready");
     axum::serve(listener, router(app))
         .with_graceful_shutdown(shutdown_signal())
         .await
