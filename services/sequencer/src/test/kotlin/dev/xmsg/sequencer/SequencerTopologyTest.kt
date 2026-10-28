@@ -2,6 +2,8 @@
 package dev.xmsg.sequencer
 
 import dev.xmsg.proto.v1.Attachment
+import dev.xmsg.proto.v1.CallChange
+import dev.xmsg.proto.v1.CallEvent
 import dev.xmsg.proto.v1.ChannelCreated
 import dev.xmsg.proto.v1.ChannelType
 import dev.xmsg.proto.v1.DeleteMessage
@@ -202,6 +204,21 @@ class SequencerTopologyTest {
         assertEquals(listOf(alice), second.mentionedUserIdsList)
         assertTrue(!second.mentionsChannel, "bob isn't an admin")
         assertEquals(listOf(5L, 6L), Mentions.users("<@5> <@x> <@6> <@5>"))
+    }
+
+    @Test
+    fun `call events are sequenced like channel events, without a msg_seq`() {
+        create(100, alice, ChannelType.CHANNEL_TYPE_DM, bob)
+        val started = CallEvent.newBuilder().setCallId("c-100-x").setChange(CallChange.CALL_CHANGE_STARTED)
+            .addParticipantIds(alice).setStartedAtMs(1).build()
+        send(base(100, alice, dedupe = "lk-1").setCallEvent(started).build())
+        send(base(999, alice, dedupe = "lk-2").setCallEvent(started).build())
+        val out = drain()
+        val call = out.single { it.hasCallEvent() }
+        assertEquals(started, call.callEvent)
+        assertEquals(0L, call.msgSeq)
+        assertEquals(2L, call.eventSeq)
+        assertTrue(out.any { it.hasRejected() && it.channelId == 999L }, "unknown channel")
     }
 
     @Test

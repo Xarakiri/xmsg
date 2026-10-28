@@ -8,7 +8,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
-import type { ChannelType, FanoutMode, MemberRole, RejectReason } from "./enums_pb.js";
+import type { CallChange, ChannelType, FanoutMode, MemberRole, RejectReason } from "./enums_pb.js";
 
 /**
  * Describes the file xmsg/v1/events.proto.
@@ -105,6 +105,14 @@ export declare type InboundEvent = Message<"xmsg.v1.InboundEvent"> & {
      */
     value: MemberRoleChangeRequested;
     case: "memberRoleChangeRequested";
+  } | {
+    /**
+     * From the calls service only (ADR-0025): what LiveKit reported about a call.
+     *
+     * @generated from field: xmsg.v1.CallEvent call_event = 18;
+     */
+    value: CallEvent;
+    case: "callEvent";
   } | { case: undefined; value?: undefined };
 };
 
@@ -592,6 +600,12 @@ export declare type SequencedEvent = Message<"xmsg.v1.SequencedEvent"> & {
      */
     value: MemberRoleChanged;
     case: "memberRoleChanged";
+  } | {
+    /**
+     * @generated from field: xmsg.v1.CallEvent call_event = 22;
+     */
+    value: CallEvent;
+    case: "callEvent";
   } | { case: undefined; value?: undefined };
 };
 
@@ -980,4 +994,56 @@ export declare type SendResult = Message<"xmsg.v1.SendResult"> & {
  * Use `create(SendResultSchema)` to create a new message.
  */
 export declare const SendResultSchema: GenMessage<SendResult>;
+
+/**
+ * A voice/video call in a channel (ADR-0025): a call in a DM or group DM (the others are
+ * rung), or a channel's huddle (drop-in, no ringing). The calls service reports it from
+ * LiveKit's webhooks; the sequencer orders it like any channel event (no msg_seq), so
+ * every member learns of it and sync replays it.
+ *
+ * @generated from message xmsg.v1.CallEvent
+ */
+export declare type CallEvent = Message<"xmsg.v1.CallEvent"> & {
+  /**
+   * The LiveKit room: new for each DM call; one per channel for a huddle.
+   *
+   * @generated from field: string call_id = 1;
+   */
+  callId: string;
+
+  /**
+   * @generated from field: xmsg.v1.CallChange change = 2;
+   */
+  change: CallChange;
+
+  /**
+   * @generated from field: bool huddle = 3;
+   */
+  huddle: boolean;
+
+  /**
+   * Who's in the call after this change (absolute, so a lost update heals).
+   *
+   * @generated from field: repeated int64 participant_ids = 4;
+   */
+  participantIds: bigint[];
+
+  /**
+   * @generated from field: int64 started_at_ms = 5;
+   */
+  startedAtMs: bigint;
+
+  /**
+   * Set when it ends.
+   *
+   * @generated from field: int64 duration_ms = 6;
+   */
+  durationMs: bigint;
+};
+
+/**
+ * Describes the message xmsg.v1.CallEvent.
+ * Use `create(CallEventSchema)` to create a new message.
+ */
+export declare const CallEventSchema: GenMessage<CallEvent>;
 

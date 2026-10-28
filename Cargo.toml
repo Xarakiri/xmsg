@@ -3,7 +3,7 @@
 resolver = "3"
 # The Enterprise Edition is a workspace of its own (in the excluded directory): CE builds never compile it.
 exclude = ["ee"]
-members = ["crates/*", "services/auth", "services/channels", "services/fanout", "services/media", "services/messages", "services/outbox", "services/persister", "services/presence", "services/push", "services/reaction-batcher", "services/search-indexer", "services/readstate", "services/users", "tools/chaos", "tools/e2e-smoke", "tools/loadgen", "tools/xmsgctl"]
+members = ["crates/*", "services/auth", "services/calls", "services/channels", "services/fanout", "services/media", "services/messages", "services/outbox", "services/persister", "services/presence", "services/push", "services/reaction-batcher", "services/search-indexer", "services/readstate", "services/users", "tools/chaos", "tools/e2e-smoke", "tools/loadgen", "tools/xmsgctl"]
 
 [workspace.package]
 edition = "2024"

@@ -291,6 +291,10 @@ pub fn writes(event: &SequencedEvent, event_time_ms: i64) -> Vec<Write> {
             });
             out.push(channel_event(event, "channel.mode_changed", full_payload()));
         }
+        // Calls (ADR-0025): only in the event log, so sync tells clients who's in a call.
+        Some(Payload::CallEvent(_)) => {
+            out.push(channel_event(event, "call.changed", full_payload()));
+        }
         Some(Payload::Rejected(_)) | None => return Vec::new(),
     }
 

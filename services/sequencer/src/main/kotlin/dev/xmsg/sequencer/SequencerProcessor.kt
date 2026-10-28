@@ -85,6 +85,7 @@ class SequencerProcessor(
             InboundEvent.PayloadCase.REACTION_BATCH -> reactionBatch(event, now)
             InboundEvent.PayloadCase.EDIT_MESSAGE -> editMessage(event, now)
             InboundEvent.PayloadCase.DELETE_MESSAGE -> deleteMessage(event, now)
+            InboundEvent.PayloadCase.CALL_EVENT -> callEvent(event, now)
             else -> reject(event, now, RejectReason.REJECT_REASON_INVALID, "empty payload")
         }
     }
@@ -252,6 +253,18 @@ class SequencerProcessor(
         emit(event, updated, now) {
             it.setMessageDeleted(MessageDeleted.newBuilder().setMsgSeq(delete.msgSeq).setMessageId(delete.messageId))
         }
+    }
+
+    /**
+     * A call's change (ADR-0025), from the calls service, which checked membership when it
+     * let people join. Ordered like any channel event: an event_seq, no msg_seq.
+     */
+    private fun callEvent(event: InboundEvent, now: Long) {
+        val head = head(event.channelId)
+            ?: return reject(event, now, RejectReason.REJECT_REASON_UNKNOWN_CHANNEL, "unknown channel")
+        val updated = head.toBuilder().setEventSeq(head.eventSeq + 1).build()
+        heads.put(event.channelId, updated.toByteArray())
+        emit(event, updated, now) { it.setCallEvent(event.callEvent) }
     }
 
     /** The channel's head if the actor is a member and `msgSeq` names a sequenced message; else rejects. */

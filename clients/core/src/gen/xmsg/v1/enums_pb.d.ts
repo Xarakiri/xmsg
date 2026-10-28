@@ -189,3 +189,41 @@ export enum PresenceStatus {
  */
 export declare const PresenceStatusSchema: GenEnum<PresenceStatus>;
 
+/**
+ * What happened to a call (ADR-0025).
+ *
+ * @generated from enum xmsg.v1.CallChange
+ */
+export enum CallChange {
+  /**
+   * @generated from enum value: CALL_CHANGE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The first person joined: the call exists now.
+   *
+   * @generated from enum value: CALL_CHANGE_STARTED = 1;
+   */
+  STARTED = 1,
+
+  /**
+   * Someone joined or left; `participant_ids` is who's in it now.
+   *
+   * @generated from enum value: CALL_CHANGE_PARTICIPANTS = 2;
+   */
+  PARTICIPANTS = 2,
+
+  /**
+   * Everyone left (or it timed out): it's over.
+   *
+   * @generated from enum value: CALL_CHANGE_ENDED = 3;
+   */
+  ENDED = 3,
+}
+
+/**
+ * Describes the enum xmsg.v1.CallChange.
+ */
+export declare const CallChangeSchema: GenEnum<CallChange>;
+
