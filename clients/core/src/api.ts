@@ -26,6 +26,8 @@ export interface Endpoints {
   push?: string;
   /** Files (ADR-0024); "/media" behind the proxy by default. */
   media?: string;
+  /** Calls (ADR-0025); "/calls" behind the proxy by default. */
+  calls?: string;
 }
 
 /** Largest upload the media service takes (its default). */
@@ -324,6 +326,18 @@ export class Api {
     const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
     if (!response.ok) throw new ApiError(response.status, response.statusText);
     return response.blob();
+  }
+
+  /**
+   * Joins the channel's call, or starts one (ADR-0025): members only. The answer has what
+   * LiveKit needs (`url`, `token`) and the call it is.
+   */
+  async joinCall(token: string, channelId: string): Promise<{ callId: string; huddle: boolean; url: string; token: string }> {
+    const reply = await call<{ call_id: string; huddle: boolean; url: string; token: string }>(
+      `${this.endpoints.calls ?? "/calls"}/v1/channels/${channelId}/call`,
+      { method: "POST", token },
+    );
+    return { callId: reply.call_id, huddle: reply.huddle, url: reply.url, token: reply.token };
   }
 
   /** A thread's replies, oldest first (ADR-0005). */

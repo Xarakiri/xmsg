@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@xmsg/client-core": "*",
+    "livekit-client": "2.22.4",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

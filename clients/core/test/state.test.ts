@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { SequencedEventSchema, type SequencedEvent } from "../src/gen/xmsg/v1/events_pb.js";
-import { ChannelType, MemberRole, RejectReason } from "../src/gen/xmsg/v1/enums_pb.js";
-import { canPost, initialState, needsCatchUp, reduce, unread, unsent, type ChatState } from "../src/state.ts";
+import { CallChange, ChannelType, MemberRole, RejectReason } from "../src/gen/xmsg/v1/enums_pb.js";
+import { canPost, initialState, ringing, needsCatchUp, reduce, unread, unsent, type ChatState } from "../src/state.ts";
 
 const ME = "101";
 const BOB = "102";
@@ -483,4 +483,22 @@ test("thread replies carry files, live and when the thread is loaded", () => {
     replies: [{ replySeq: 2, messageId: "2002", authorId: "102", body: "", attachments: [file] }],
   });
   assert.deepEqual(s.messages["7#1"]![1]!.attachments, [file]);
+});
+
+test("calls: a DM call rings until I'm in it; huddles never ring; the end clears it", () => {
+  const callEvent = (seq: number, change: CallChange, participants: bigint[], callId = "c7-ab", huddle = false) =>
+    ev({ eventSeq: BigInt(seq), actorId: 102n, payload: { case: "callEvent", value: { callId, change, huddle, participantIds: participants, startedAtMs: 5n } } });
+  let s = apply(initialState(ME), created, callEvent(2, CallChange.STARTED, [102n]));
+  assert.deepEqual(s.channels["7"]!.call, { callId: "c7-ab", huddle: false, participants: ["102"], startedAt: 5 });
+  assert.equal(ringing(s.channels["7"]!, ME), true, "bob is calling me");
+  s = apply(s, callEvent(3, CallChange.PARTICIPANTS, [102n, 101n]));
+  assert.equal(ringing(s.channels["7"]!, ME), false, "I joined");
+  // A late end of another call changes nothing; this call's end clears it.
+  s = apply(s, callEvent(4, CallChange.ENDED, [], "c7-old"));
+  assert.equal(s.channels["7"]!.call?.callId, "c7-ab");
+  s = apply(s, callEvent(5, CallChange.ENDED, []));
+  assert.equal(s.channels["7"]!.call, undefined);
+  // A huddle with someone in it doesn't ring.
+  s = apply(s, callEvent(6, CallChange.STARTED, [102n], "h7", true));
+  assert.equal(ringing(s.channels["7"]!, ME), false);
 });

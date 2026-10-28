@@ -19,6 +19,7 @@ export default defineConfig({
       "/push": { target: env("XMSG_PUSH_ORIGIN", "http://127.0.0.1:8086"), rewrite: strip("/push") },
       "/readstate": { target: env("XMSG_READSTATE_ORIGIN", "http://127.0.0.1:8085"), rewrite: strip("/readstate") },
       "/media": { target: env("XMSG_MEDIA_ORIGIN", "http://127.0.0.1:8087"), rewrite: strip("/media") },
+      "/calls": { target: env("XMSG_CALLS_ORIGIN", "http://127.0.0.1:8088"), rewrite: strip("/calls") },
       "/ws": { target: env("XMSG_GATEWAY_ORIGIN", "ws://127.0.0.1:4000"), ws: true },
     },
   },
