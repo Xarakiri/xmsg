@@ -172,7 +172,9 @@ class SequencerProcessor(
                     .setMessageId(messageId)
                     .setBody(body)
                     .addAllMentionedUserIds(mentioned)
-                    .setMentionsChannel(channelWide),
+                    .setMentionsChannel(channelWide)
+                    // Checked and filled in by the messages service (ADR-0024).
+                    .addAllAttachments(event.sendMessage.attachmentsList),
             )
         }
     }

@@ -113,6 +113,36 @@ defmodule Xmsg.V1.SendMessage do
 
   field :body, 1, type: :string
   field :thread_root, 2, type: Xmsg.V1.ThreadRoot, json_name: "threadRoot"
+  field :file_ids, 3, repeated: true, type: :int64, json_name: "fileIds"
+  field :attachments, 4, repeated: true, type: Xmsg.V1.Attachment
+end
+
+defmodule Xmsg.V1.Attachment do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.Attachment",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :file_id, 1, type: :int64, json_name: "fileId"
+  field :name, 2, type: :string
+  field :content_type, 3, type: :string, json_name: "contentType"
+  field :size, 4, type: :int64
+  field :width, 5, type: :int32
+  field :height, 6, type: :int32
+  field :has_thumbnail, 7, type: :bool, json_name: "hasThumbnail"
+end
+
+defmodule Xmsg.V1.Attachments do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "xmsg.v1.Attachments",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :items, 1, repeated: true, type: Xmsg.V1.Attachment
 end
 
 defmodule Xmsg.V1.ChannelCreated do
@@ -247,6 +277,7 @@ defmodule Xmsg.V1.MessageCreated do
   field :body, 2, type: :string
   field :mentioned_user_ids, 3, repeated: true, type: :int64, json_name: "mentionedUserIds"
   field :mentions_channel, 4, type: :bool, json_name: "mentionsChannel"
+  field :attachments, 5, repeated: true, type: Xmsg.V1.Attachment
 end
 
 defmodule Xmsg.V1.MemberJoined do

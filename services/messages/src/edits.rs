@@ -271,6 +271,7 @@ mod tests {
             body: if deleted { String::new() } else { "hi".into() },
             edited_at_ms: 0,
             deleted,
+            attachments: Vec::new(),
         }
     }
 

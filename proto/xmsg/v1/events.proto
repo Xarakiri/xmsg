@@ -73,6 +73,30 @@ message SendMessage {
   string body = 1;
   // Set for a thread reply (ADR-0005).
   ThreadRoot thread_root = 2;
+  // Files the sender uploaded to this channel (ADR-0024), from the client.
+  repeated int64 file_ids = 3;
+  // Those files' details, filled in by the messages service from its own records (never
+  // taken from the client); the sequencer copies them into MessageCreated.
+  repeated Attachment attachments = 4;
+}
+
+// A file in a message (ADR-0024): what a client needs to show it without asking the media
+// service first. The bytes are at /v1/files/{file_id} for members of the channel.
+message Attachment {
+  int64 file_id = 1;
+  string name = 2;
+  // Sniffed for images; otherwise the uploader's claim (display only).
+  string content_type = 3;
+  int64 size = 4;
+  // Images only.
+  int32 width = 5;
+  int32 height = 6;
+  bool has_thumbnail = 7;
+}
+
+// How a message's attachments are stored (the `attachments` blob in Cassandra).
+message Attachments {
+  repeated Attachment items = 1;
 }
 
 message ChannelCreated {
@@ -159,6 +183,8 @@ message MessageCreated {
   repeated int64 mentioned_user_ids = 3;
   // `<!channel>` or `<!here>` from a channel admin (never in broadcast channels).
   bool mentions_channel = 4;
+  // Files attached by the author (ADR-0024).
+  repeated Attachment attachments = 5;
 }
 
 message MemberJoined {

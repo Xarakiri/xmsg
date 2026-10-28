@@ -225,7 +225,7 @@ async fn run() -> Result<(), String> {
             }
         }
         if let Ok(media_url) = std::env::var("XMSG_MEDIA_URL") {
-            check_media(&media_url, url, &users, run_id).await?;
+            check_media(&media_url, url, &mut clients, &users, run_id).await?;
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
@@ -992,6 +992,7 @@ async fn check_threads(
                 msg_seq: root_seq,
                 message_id: root_message_id,
             }),
+            ..Default::default()
         })),
     };
     for (id, root_message_id) in [("thread-reply", root_id), ("thread-bad", root_id + 1)] {
@@ -1173,6 +1174,7 @@ const PIXEL_PNG: &[u8] = &[
 async fn check_media(
     media_url: &str,
     channels_url: &str,
+    clients: &mut [Client; 3],
     users: &[(i64, String)],
     run_id: i64,
 ) -> Result<(), String> {
@@ -1191,6 +1193,7 @@ async fn check_media(
         .as_str()
         .ok_or("media: no channel_id")?
         .to_string();
+    let channel_id: i64 = channel.parse().map_err(|_| "media: bad channel_id")?;
     let http = reqwest::Client::new();
     let upload =
         async |name: &str, content_type: &str, body: &[u8]| -> Result<serde_json::Value, String> {
@@ -1282,8 +1285,65 @@ async fn check_media(
             "media: a fake image must be a plain download: {status} {headers:?}"
         ));
     }
+    // The image in a message: only its ID is sent; everyone gets its details.
+    let image_id: i64 = image["file_id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or("media: bad file_id")?;
+    let with_files = |client_msg_id: &str| ClientFrame {
+        frame: Some(client_frame::Frame::SendMessage(SendMessageRequest {
+            channel_id,
+            client_msg_id: client_msg_id.into(),
+            file_ids: vec![image_id],
+            ..Default::default()
+        })),
+    };
+    clients[0]
+        .ws
+        .send(Ws::Binary(with_files("files-1").encode_to_vec().into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    expect_ack(&mut clients[0], "files-1").await?;
+    let attached = |events: &[SequencedEvent]| {
+        events.iter().find_map(|e| match &e.payload {
+            Some(sequenced_event::Payload::MessageCreated(m))
+                if e.channel_id == channel_id && e.dedupe_id == "files-1" =>
+            {
+                Some(m.attachments.clone())
+            }
+            _ => None,
+        })
+    };
+    wait_events(&mut clients[1], |e| attached(e).is_some()).await?;
+    let files =
+        attached(&clients[1].events).ok_or("media: bob didn't get the message with a file")?;
+    if files.len() != 1
+        || files[0].file_id != image_id
+        || files[0].name != "pixel.png"
+        || files[0].content_type != "image/png"
+        || !files[0].has_thumbnail
+    {
+        return Err(format!("media: unexpected attachments {files:?}"));
+    }
+    // Bob can't attach alice's upload.
+    clients[1]
+        .ws
+        .send(Ws::Binary(with_files("files-2").encode_to_vec().into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    loop {
+        match next_frame(&mut clients[1]).await? {
+            server_frame::Frame::SendRejected(r) if r.client_msg_id == "files-2" => break,
+            server_frame::Frame::Event(_) => {}
+            other => {
+                return Err(format!(
+                    "media: bob attaching alice's file: expected a rejection, got {other:?}"
+                ));
+            }
+        }
+    }
     println!(
-        "media: an image round-trips with a thumbnail, a page posing as an image is only a download, a non-member gets 404"
+        "media: an image round-trips with a thumbnail, a page posing as an image is only a download, a non-member gets 404; a message carries the file's details, and nobody can attach someone else's upload"
     );
     Ok(())
 }

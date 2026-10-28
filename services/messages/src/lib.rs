@@ -4,6 +4,7 @@
 //! events to `messages.in`, keyed by channel. The sequencer makes the
 //! authoritative checks (membership, ordering) later (ADR-0006).
 
+pub mod attachments;
 pub mod cassandra;
 pub mod config;
 pub mod edits;
@@ -62,7 +63,7 @@ pub fn validate(event: &InboundEvent) -> Result<(), (RejectReason, String)> {
     if !event.request_id.is_empty() {
         return invalid("sends are not commands; request_id must be empty");
     }
-    if send.body.trim().is_empty() {
+    if send.body.trim().is_empty() && send.file_ids.is_empty() {
         return invalid("message body is empty");
     }
     if send.body.chars().count() > MAX_BODY_CHARS {
@@ -82,18 +83,28 @@ pub const DEFAULT_SEND_RATE: xmsg_ratelimit::Rule =
     xmsg_ratelimit::Rule::new(20, std::time::Duration::from_secs(10));
 
 /// Handles one encoded request from the gateway and returns the encoded reply.
-pub async fn handle(log: &impl EventLog, limits: &SendLimits, request: &[u8]) -> Vec<u8> {
+pub async fn handle(
+    log: &impl EventLog,
+    limits: &SendLimits,
+    files: &impl attachments::Files,
+    request: &[u8],
+) -> Vec<u8> {
     let result = match InboundEvent::decode(request) {
         Err(_) => rejected(RejectReason::Invalid, "malformed InboundEvent".into()),
         Ok(event) => match validate(&event) {
             Err((reason, detail)) => rejected(reason, detail),
-            Ok(()) => send(log, limits, event).await,
+            Ok(()) => send(log, limits, files, event).await,
         },
     };
     result.encode_to_vec()
 }
 
-async fn send(log: &impl EventLog, limits: &SendLimits, event: InboundEvent) -> SendResult {
+async fn send(
+    log: &impl EventLog,
+    limits: &SendLimits,
+    files: &impl attachments::Files,
+    mut event: InboundEvent,
+) -> SendResult {
     let key = format!("send:u:{}", event.actor_id);
     if let xmsg_ratelimit::Decision::Limited { retry_after } =
         limits.limiter.check(&key, limits.per_user).await
@@ -105,6 +116,9 @@ async fn send(log: &impl EventLog, limits: &SendLimits, event: InboundEvent) -> 
             detail: "you're sending too fast; wait a moment".into(),
             retry_after_ms: retry_after.as_millis().min(u128::from(u32::MAX)) as u32,
         };
+    }
+    if let Err((reason, detail)) = attachments::resolve(files, &mut event).await {
+        return rejected(reason, detail);
     }
     match log.append(event.channel_id, event.encode_to_vec()).await {
         Ok(()) => SendResult {
@@ -183,7 +197,15 @@ mod tests {
     #[tokio::test]
     async fn valid_send_is_appended_keyed_by_channel() {
         let log = FakeLog::default();
-        let result = reply(handle(&log, &limits(), &send("hello").encode_to_vec()).await);
+        let result = reply(
+            handle(
+                &log,
+                &limits(),
+                &attachments::Lookup::Off,
+                &send("hello").encode_to_vec(),
+            )
+            .await,
+        );
         assert!(result.accepted);
         let appended = log.appended.lock().unwrap();
         assert_eq!(appended.len(), 1);
@@ -218,12 +240,20 @@ mod tests {
         ];
 
         for case in cases {
-            let result = reply(handle(&log, &limits(), &case.encode_to_vec()).await);
+            let result = reply(
+                handle(
+                    &log,
+                    &limits(),
+                    &attachments::Lookup::Off,
+                    &case.encode_to_vec(),
+                )
+                .await,
+            );
             assert!(!result.accepted, "{case:?} should be rejected");
             assert_eq!(result.reason, RejectReason::Invalid as i32);
         }
         assert_eq!(
-            handle(&log, &limits(), b"\xff\xff").await,
+            handle(&log, &limits(), &attachments::Lookup::Off, b"\xff\xff").await,
             rejected(RejectReason::Invalid, "malformed InboundEvent".into()).encode_to_vec()
         );
         assert!(log.appended.lock().unwrap().is_empty());
@@ -233,7 +263,18 @@ mod tests {
     async fn the_longest_allowed_body_is_accepted() {
         let log = FakeLog::default();
         let body = "é".repeat(MAX_BODY_CHARS); // characters, not bytes
-        assert!(reply(handle(&log, &limits(), &send(&body).encode_to_vec()).await).accepted);
+        assert!(
+            reply(
+                handle(
+                    &log,
+                    &limits(),
+                    &attachments::Lookup::Off,
+                    &send(&body).encode_to_vec()
+                )
+                .await
+            )
+            .accepted
+        );
     }
 
     #[tokio::test]
@@ -242,7 +283,15 @@ mod tests {
             fail: true,
             ..Default::default()
         };
-        let result = reply(handle(&log, &limits(), &send("hello").encode_to_vec()).await);
+        let result = reply(
+            handle(
+                &log,
+                &limits(),
+                &attachments::Lookup::Off,
+                &send("hello").encode_to_vec(),
+            )
+            .await,
+        );
         assert!(!result.accepted);
         assert_eq!(result.reason, RejectReason::Unavailable as i32);
     }
@@ -256,9 +305,28 @@ mod tests {
             per_user: xmsg_ratelimit::Rule::new(2, std::time::Duration::from_secs(365 * 24 * 3600)),
         };
         for _ in 0..2 {
-            assert!(reply(handle(&log, &limits, &send("hi").encode_to_vec()).await).accepted);
+            assert!(
+                reply(
+                    handle(
+                        &log,
+                        &limits,
+                        &attachments::Lookup::Off,
+                        &send("hi").encode_to_vec()
+                    )
+                    .await
+                )
+                .accepted
+            );
         }
-        let result = reply(handle(&log, &limits, &send("hi").encode_to_vec()).await);
+        let result = reply(
+            handle(
+                &log,
+                &limits,
+                &attachments::Lookup::Off,
+                &send("hi").encode_to_vec(),
+            )
+            .await,
+        );
         assert!(!result.accepted);
         assert_eq!(result.reason, RejectReason::RateLimited as i32);
         assert!(result.retry_after_ms > 0);
@@ -266,6 +334,17 @@ mod tests {
         // Another person isn't affected.
         let mut other = send("hi");
         other.actor_id += 1;
-        assert!(reply(handle(&log, &limits, &other.encode_to_vec()).await).accepted);
+        assert!(
+            reply(
+                handle(
+                    &log,
+                    &limits,
+                    &attachments::Lookup::Off,
+                    &other.encode_to_vec()
+                )
+                .await
+            )
+            .accepted
+        );
     }
 }

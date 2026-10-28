@@ -138,6 +138,14 @@ export declare type SendMessageRequest = Message<"xmsg.v1.SendMessageRequest"> &
    * @generated from field: xmsg.v1.ThreadRoot thread_root = 4;
    */
   threadRoot?: ThreadRoot | undefined;
+
+  /**
+   * Files uploaded to this channel first (POST /v1/channels/{id}/files), at most 10. The
+   * body may be empty when there are files.
+   *
+   * @generated from field: repeated int64 file_ids = 5;
+   */
+  fileIds: bigint[];
 };
 
 /**

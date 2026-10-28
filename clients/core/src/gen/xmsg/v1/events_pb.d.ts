@@ -269,6 +269,21 @@ export declare type SendMessage = Message<"xmsg.v1.SendMessage"> & {
    * @generated from field: xmsg.v1.ThreadRoot thread_root = 2;
    */
   threadRoot?: ThreadRoot | undefined;
+
+  /**
+   * Files the sender uploaded to this channel (ADR-0024), from the client.
+   *
+   * @generated from field: repeated int64 file_ids = 3;
+   */
+  fileIds: bigint[];
+
+  /**
+   * Those files' details, filled in by the messages service from its own records (never
+   * taken from the client); the sequencer copies them into MessageCreated.
+   *
+   * @generated from field: repeated xmsg.v1.Attachment attachments = 4;
+   */
+  attachments: Attachment[];
 };
 
 /**
@@ -276,6 +291,77 @@ export declare type SendMessage = Message<"xmsg.v1.SendMessage"> & {
  * Use `create(SendMessageSchema)` to create a new message.
  */
 export declare const SendMessageSchema: GenMessage<SendMessage>;
+
+/**
+ * A file in a message (ADR-0024): what a client needs to show it without asking the media
+ * service first. The bytes are at /v1/files/{file_id} for members of the channel.
+ *
+ * @generated from message xmsg.v1.Attachment
+ */
+export declare type Attachment = Message<"xmsg.v1.Attachment"> & {
+  /**
+   * @generated from field: int64 file_id = 1;
+   */
+  fileId: bigint;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * Sniffed for images; otherwise the uploader's claim (display only).
+   *
+   * @generated from field: string content_type = 3;
+   */
+  contentType: string;
+
+  /**
+   * @generated from field: int64 size = 4;
+   */
+  size: bigint;
+
+  /**
+   * Images only.
+   *
+   * @generated from field: int32 width = 5;
+   */
+  width: number;
+
+  /**
+   * @generated from field: int32 height = 6;
+   */
+  height: number;
+
+  /**
+   * @generated from field: bool has_thumbnail = 7;
+   */
+  hasThumbnail: boolean;
+};
+
+/**
+ * Describes the message xmsg.v1.Attachment.
+ * Use `create(AttachmentSchema)` to create a new message.
+ */
+export declare const AttachmentSchema: GenMessage<Attachment>;
+
+/**
+ * How a message's attachments are stored (the `attachments` blob in Cassandra).
+ *
+ * @generated from message xmsg.v1.Attachments
+ */
+export declare type Attachments = Message<"xmsg.v1.Attachments"> & {
+  /**
+   * @generated from field: repeated xmsg.v1.Attachment items = 1;
+   */
+  items: Attachment[];
+};
+
+/**
+ * Describes the message xmsg.v1.Attachments.
+ * Use `create(AttachmentsSchema)` to create a new message.
+ */
+export declare const AttachmentsSchema: GenMessage<Attachments>;
 
 /**
  * @generated from message xmsg.v1.ChannelCreated
@@ -602,6 +688,13 @@ export declare type MessageCreated = Message<"xmsg.v1.MessageCreated"> & {
    * @generated from field: bool mentions_channel = 4;
    */
   mentionsChannel: boolean;
+
+  /**
+   * Files attached by the author (ADR-0024).
+   *
+   * @generated from field: repeated xmsg.v1.Attachment attachments = 5;
+   */
+  attachments: Attachment[];
 };
 
 /**
