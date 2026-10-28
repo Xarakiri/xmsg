@@ -174,6 +174,75 @@ services:
       timeout: 5s
       retries: 20
 
+  # Calls (ADR-0025, profile `calls`): LiveKit carries the audio and video. Signalling
+  # (7880) is reached through Caddy at /livekit; media goes to UDP 7882 (TCP 7881 as a
+  # fallback), which must be open. The config is built here so .env's secrets fill it in.
+  livekit:
+    <<: *restart
+    profiles: [calls]
+    image: livekit/livekit-server:v1.13.1
+    mem_limit: 1g
+    ports: ["127.0.0.1:7880:7880", "7881:7881/tcp", "7882:7882/udp"]
+    # The pipeline's CI runs the calls service on the host.
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: info
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          # Finds the machine's public address (STUN); set XMSG_LIVEKIT_NODE_IP instead
+          # where it can't (air-gapped installs, or a known address).
+          use_external_ip: ${XMSG_LIVEKIT_EXTERNAL_IP:-true}
+          node_ip: "${XMSG_LIVEKIT_NODE_IP:-}"
+          turn_servers:
+            - { host: "${XMSG_DOMAIN:-localhost}", port: 3478, protocol: udp, username: xmsg, credential: "${XMSG_TURN_SECRET:-dev-turn-secret}" }
+            - { host: "${XMSG_DOMAIN:-localhost}", port: 3478, protocol: tcp, username: xmsg, credential: "${XMSG_TURN_SECRET:-dev-turn-secret}" }
+        keys:
+          xmsg: "${XMSG_LIVEKIT_API_SECRET:-dev-livekit-secret-0000000000000000}"
+        webhook:
+          api_key: xmsg
+          urls: ["${XMSG_LIVEKIT_WEBHOOK_URL:-http://calls:8088/webhooks/livekit}"]
+        room:
+          # A call ends this long after the last person leaves.
+          empty_timeout: 30
+          departure_timeout: 10
+
+  # TURN (ADR-0025, profile `calls`): relays media for clients whose networks block
+  # LiveKit's UDP port. It never relays to private or link-local addresses (no reaching
+  # into this machine's networks or a cloud's metadata service through it).
+  coturn:
+    <<: *restart
+    profiles: [calls]
+    image: coturn/coturn:4.6.3
+    mem_limit: 256m
+    ports: ["3478:3478/udp", "3478:3478/tcp", "49160-49200:49160-49200/udp"]
+    command:
+      - -n
+      - --log-file=stdout
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+      - --fingerprint
+      - --lt-cred-mech
+      - --user=xmsg:${XMSG_TURN_SECRET:-dev-turn-secret}
+      - --realm=${XMSG_DOMAIN:-localhost}
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --no-multicast-peers
+      - --denied-peer-ip=0.0.0.0-0.255.255.255
+      - --denied-peer-ip=10.0.0.0-10.255.255.255
+      - --denied-peer-ip=100.64.0.0-100.127.255.255
+      - --denied-peer-ip=127.0.0.0-127.255.255.255
+      - --denied-peer-ip=169.254.0.0-169.254.255.255
+      - --denied-peer-ip=172.16.0.0-172.31.255.255
+      - --denied-peer-ip=192.168.0.0-192.168.255.255
+      - --denied-peer-ip=::1
+      - --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+      - --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+
   # Large-tier outbox relay (ADR-0010, ADR-0020): Debezium reads the outbox from the WAL.
   # Use it instead of xmsg-outbox-relay (run that with XMSG_OUTBOX_MODE=cleanup), then
   # register the connector: init/debezium/register.sh

@@ -16,6 +16,8 @@
 #   --registry R --version V   use published images R/<name>:V instead of building
 #   --partitions N       Kafka partitions (default 16; fixed forever, ADR-0021)
 #   --search             also run search (OpenSearch and the indexer; +1.5 GB of memory)
+#   --calls              also run voice and video calls (LiveKit and TURN; open UDP 7882,
+#                        TCP 7881, and 3478 UDP/TCP plus UDP 49160-49200 for TURN)
 #   --no-start           write the configuration only
 #   --yes                no questions; defaults for anything not given
 #
@@ -24,7 +26,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-domain="" tls="" email="" cert="" key="" registry="" version="" partitions="" search="" start=1 ask=1
+domain="" tls="" email="" cert="" key="" registry="" version="" partitions="" search="" calls="" start=1 ask=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain) domain="$2"; shift 2 ;;
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --version) version="$2"; shift 2 ;;
     --partitions) partitions="$2"; shift 2 ;;
     --search) search=1; shift ;;
+    --calls) calls=1; shift ;;
     --no-start) start=0; shift ;;
     --yes|-y) ask=0; shift ;;
     -h|--help) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -81,7 +84,9 @@ existing() { [[ -f .env ]] && sed -n "s/^$1=//p" .env | tail -n 1 || true; }
 : "${domain:=$(existing XMSG_DOMAIN)}"
 : "${partitions:=$(existing XMSG_PARTITIONS)}"
 # Search stays on once installed with it.
-[[ -n "$(existing COMPOSE_PROFILES)" ]] && : "${search:=1}"
+# Search and calls stay on once installed with them.
+[[ ",$(existing COMPOSE_PROFILES)," == *,search,* ]] && : "${search:=1}"
+[[ ",$(existing COMPOSE_PROFILES)," == *,calls,* ]] && : "${calls:=1}"
 if [[ $bundle -eq 1 && -n "$search" && "$(sed -n 's/^XMSG_BUNDLE_SEARCH=//p' bundle.env)" != 1 ]]; then
   fail "search is on, but this bundle was made without it (make-bundle.sh --no-search)"
 fi
@@ -173,9 +178,18 @@ XMSG_MEDIA_S3_KEY_ID=$media_key_id
 XMSG_MEDIA_S3_SECRET=$media_secret
 XMSG_PUSH_SUBJECT=mailto:${email:-admin@$domain}
 EOF
+profiles=""
 if [[ -n "$search" ]]; then
-  printf 'COMPOSE_PROFILES=search\nXMSG_SEARCH_URL=http://opensearch:9200\n' >> .env.new
+  profiles="search"
+  printf 'XMSG_SEARCH_URL=http://opensearch:9200\n' >> .env.new
 fi
+if [[ -n "$calls" ]]; then
+  profiles="${profiles:+$profiles,}calls"
+  # LiveKit wants an API secret of at least 32 characters.
+  printf 'XMSG_LIVEKIT_API_SECRET=%s\nXMSG_TURN_SECRET=%s\nXMSG_CALLS_UPSTREAM=calls:8088\n' \
+    "$(secret XMSG_LIVEKIT_API_SECRET "openssl rand -hex 32")" "$(secret XMSG_TURN_SECRET "openssl rand -hex 24")" >> .env.new
+fi
+[[ -n "$profiles" ]] && printf 'COMPOSE_PROFILES=%s\n' "$profiles" >> .env.new
 mv .env.new .env
 say "Configuration written to $(pwd)/.env"
 [[ $start -eq 1 ]] || exit 0

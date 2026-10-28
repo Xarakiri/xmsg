@@ -8,5 +8,12 @@
 {$XMSG_DOMAIN} {
 	tls {$XMSG_TLS}
 	encode zstd gzip
-	reverse_proxy web:8080
+	# Calls (ADR-0025, with --calls): LiveKit's signalling WebSocket and API. Its media goes
+	# straight to LiveKit's UDP port, not through here.
+	handle_path /livekit/* {
+		reverse_proxy livekit:7880
+	}
+	handle {
+		reverse_proxy web:8080
+	}
 }

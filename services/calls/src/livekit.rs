@@ -26,8 +26,7 @@ fn sign(secret: &str, data: &str) -> Vec<u8> {
 impl Keys {
     /// An access token for `identity` (our user ID) to join `room`, valid `ttl_secs`.
     pub fn token(&self, room: &str, identity: &str, now_secs: i64, ttl_secs: i64) -> String {
-        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
-        let claims = json!({
+        self.sign_claims(&json!({
             "iss": self.api_key,
             "sub": identity,
             "nbf": now_secs - 10,
@@ -40,9 +39,23 @@ impl Keys {
                 "canPublishData": true,
                 "canPublishSources": SOURCES,
             },
-        });
-        let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
-        let signed = format!("{header}.{payload}");
+        }))
+    }
+
+    /// A token for LiveKit's server API (RoomService): create, list and end rooms.
+    pub fn admin_token(&self, now_secs: i64, ttl_secs: i64) -> String {
+        self.sign_claims(&json!({
+            "iss": self.api_key,
+            "sub": "xmsg-calls",
+            "nbf": now_secs - 10,
+            "exp": now_secs + ttl_secs,
+            "video": { "roomCreate": true, "roomList": true, "roomAdmin": true },
+        }))
+    }
+
+    fn sign_claims(&self, claims: &Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
+        let signed = format!("{header}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
         let signature = URL_SAFE_NO_PAD.encode(sign(&self.api_secret, &signed));
         format!("{signed}.{signature}")
     }

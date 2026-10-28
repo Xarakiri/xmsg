@@ -98,6 +98,21 @@ services:
     environment:
       <<: *env
       XMSG_PUSH_VAPID_PRIVATE_KEY: "${XMSG_PUSH_VAPID_PRIVATE_KEY:?run install.sh first - XMSG_PUSH_VAPID_PRIVATE_KEY is not set}"
+  # Calls (ADR-0025, profile `calls`): LiveKit tokens and LiveKit's webhooks.
+  calls:
+    <<: *service
+    profiles: [calls]
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      cassandra-init: { condition: service_completed_successfully }
+    command: ["xmsg-calls"]
+    environment:
+      <<: *env
+      XMSG_LIVEKIT_API_KEY: xmsg
+      # Compose fills in every service, profile or not: the service itself refuses an empty one.
+      XMSG_LIVEKIT_API_SECRET: ${XMSG_LIVEKIT_API_SECRET:-}
+      XMSG_LIVEKIT_PUBLIC_URL: wss://${XMSG_DOMAIN:-localhost}/livekit
+
   # Files (ADR-0024). garage-init sets up the bundled Garage (layout, key, bucket) at every
   # start, changing nothing once done; media waits for it.
   garage-init:
@@ -190,6 +205,9 @@ services:
     <<: *restart
     image: ${XMSG_REGISTRY:-xmsg}/web:${XMSG_VERSION:-dev}
     build: { context: ../.., dockerfile: deploy/docker/web.Dockerfile }
+    environment:
+      # install.sh --calls sets it to calls:8088.
+      XMSG_CALLS_UPSTREAM: ${XMSG_CALLS_UPSTREAM:-auth:8081}
     mem_limit: 128m
     depends_on: [auth, users, channels, messages, readstate, push, media, gateway]
     # Plain HTTP on this machine only, behind Caddy (xmsgctl health, tests).

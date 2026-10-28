@@ -48,6 +48,10 @@ data:
   XMSG_SEARCH_URL: {{ . | quote }}
   XMSG_OPENSEARCH_URL: {{ . | quote }}
   {{- end }}
+  {{- if .Values.calls.enabled }}
+  XMSG_LIVEKIT_PUBLIC_URL: {{ required "calls.livekit.url is required with calls" .Values.calls.livekit.url | quote }}
+  XMSG_LIVEKIT_API_KEY: {{ required "calls.livekit.apiKey is required with calls" .Values.calls.livekit.apiKey | quote }}
+  {{- end }}
   {{- if .Values.media.enabled }}
   XMSG_MEDIA_S3_ENDPOINT: {{ default (printf "http://%s-garage:3900" $full) .Values.media.s3.endpoint | quote }}
   XMSG_MEDIA_S3_REGION: {{ default (ternary "garage" "us-east-1" (empty .Values.media.s3.endpoint)) .Values.media.s3.region | quote }}
@@ -80,6 +84,12 @@ stringData:
   {{- if .Values.media.enabled }}
   XMSG_MEDIA_S3_KEY_ID: {{ required "media.s3.keyId is required with media (or secrets.existingSecret)" .Values.media.s3.keyId | quote }}
   XMSG_MEDIA_S3_SECRET: {{ required "media.s3.secret is required with media (or secrets.existingSecret)" .Values.media.s3.secret | quote }}
+  {{- end }}
+  {{- if .Values.calls.enabled }}
+  {{- if lt (len .Values.calls.livekit.apiSecret) 32 }}
+  {{- fail "calls.livekit.apiSecret must be at least 32 characters (LiveKit refuses shorter ones)" }}
+  {{- end }}
+  XMSG_LIVEKIT_API_SECRET: {{ .Values.calls.livekit.apiSecret | quote }}
   {{- end }}
   {{- if include "xmsg.garageBundled" . }}
   {{- if not (regexMatch "^[0-9a-f]{64}$" .Values.garage.rpcSecret) }}
