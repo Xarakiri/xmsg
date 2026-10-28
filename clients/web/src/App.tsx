@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ApiError,
   canPost,
   fromSsoFragment,
   mentionCount,
+  ringing,
   threadKey,
   unread,
   type Attachment,
@@ -22,6 +23,9 @@ import { disablePush, enablePush, pushState, type PushState } from "./push.ts";
 import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
 import { useNames } from "./useNames.ts";
+
+// LiveKit's client is large: loaded when a call starts, not with the app.
+const CallPanel = lazy(() => import("./calls.tsx").then((m) => ({ default: m.CallPanel })));
 
 // Back from single sign-on: the session's tokens (or the reason it failed) are in the
 // fragment. Taken once, and removed from the address bar and history at once.
@@ -202,6 +206,10 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
   };
   // The thread open next to the conversation: its root message's msg_seq.
   const [threadOf, setThreadOf] = useState<number | null>(null);
+  // The call I'm in (ADR-0025): its channel. Calls I declined don't ring again.
+  const [inCall, setInCall] = useState<string | null>(null);
+  const [declined, setDeclined] = useState<Set<string>>(new Set());
+  const leaveCall = useCallback(() => setInCall(null), []);
   const names = useNames(me);
   // A notification click opens its channel: `?channel=` in a new window, a message otherwise.
   const [selected, setSelected] = useState<string | null>(() => new URLSearchParams(location.search).get("channel"));
@@ -310,6 +318,37 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
         </footer>
       </aside>
       <main className="main">
+        {inCall && state.channels[inCall] && (
+          <Suspense fallback={<section className="call-panel muted small">Starting the call…</section>}>
+            <CallPanel
+              key={inCall}
+              channelId={inCall}
+              title={channelTitle(state.channels[inCall]!, me, names)}
+              label={(id) => names.label(id)}
+              onLeave={leaveCall}
+            />
+          </Suspense>
+        )}
+        {Object.values(state.channels)
+          .filter((c) => c.id !== inCall && c.call && ringing(c, me) && !declined.has(c.call.callId))
+          .map((c) => (
+            <div key={c.id} className="call-ring row" role="alert">
+              <span>
+                📞 <span className="strong">{names.label(c.call!.participants[0]!)}</span> is calling
+                {c.kind === "group_dm" ? ` in ${channelTitle(c, me, names)}` : ""}
+              </span>
+              <button
+                className="primary"
+                onClick={() => {
+                  setSelected(c.id);
+                  setInCall(c.id);
+                }}
+              >
+                Join
+              </button>
+              <button onClick={() => setDeclined((d) => new Set(d).add(c.call!.callId))}>Decline</button>
+            </div>
+          ))}
         {panel !== "none" && (
           <CreatePanel
             kind={panel}
@@ -346,6 +385,8 @@ function ChatView({ me, initial, onSignOut }: { me: string; initial: ChatState; 
             onSend={(b, files) => send(current.id, b, undefined, files)}
             onUpload={(file) => upload(current.id, file)}
             onToggleMute={() => setMuted(current.id, !current.muted)}
+            inCall={inCall === current.id}
+            onCall={() => setInCall(current.id)}
             onRetry={retry}
             typing={typingIn(current.id)}
             onTyping={() => notifyTyping(current.id)}
@@ -511,6 +552,8 @@ function Conversation({
   onSend,
   onUpload,
   onToggleMute,
+  inCall,
+  onCall,
   onRetry,
   typing,
   onTyping,
@@ -525,6 +568,9 @@ function Conversation({
   onSend: (body: string, files: Attachment[]) => void;
   onUpload: (file: File) => Promise<Attachment>;
   onToggleMute: () => void;
+  /** I'm in this channel's call; joining or starting one. */
+  inCall: boolean;
+  onCall: () => void;
   onRetry: (key: string) => void;
   typing: string[];
   onTyping: () => void;
@@ -618,6 +664,11 @@ function Conversation({
           </div>
         </div>
         <div className="row">
+          {!inCall && (
+            <button onClick={onCall} className={channel.call ? "primary" : ""}>
+              {channel.call ? `Join ${channel.call.huddle ? "huddle" : "call"} (${channel.call.participants.length})` : isDm ? "📞 Call" : "🎧 Huddle"}
+            </button>
+          )}
           <button onClick={onToggleMute} aria-pressed={channel.muted}>
             {channel.muted ? "Unmute" : "Mute"}
           </button>

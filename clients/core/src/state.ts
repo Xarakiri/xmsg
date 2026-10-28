@@ -3,7 +3,7 @@
 // (IDs as decimal strings, sequence numbers as numbers), so it can be saved and restored.
 
 import type { Attachment as ProtoAttachment, SequencedEvent } from "./gen/xmsg/v1/events_pb.js";
-import { ChannelType, MemberRole, RejectReason } from "./gen/xmsg/v1/enums_pb.js";
+import { CallChange, ChannelType, MemberRole, RejectReason } from "./gen/xmsg/v1/enums_pb.js";
 
 export type NotifyLevel = "all" | "mentions" | "nothing";
 
@@ -49,6 +49,22 @@ export interface Channel {
   headSeq?: number;
   /** Members' roles, as far as this client has seen membership events. */
   roles?: Record<string, Role>;
+  /** The call going on in it now (ADR-0025), if any. */
+  call?: Call;
+}
+
+/** A voice/video call in a channel: a DM call (rings) or the channel's huddle. */
+export interface Call {
+  callId: string;
+  huddle: boolean;
+  /** Who's in it now. */
+  participants: string[];
+  startedAt: number;
+}
+
+/** A DM call this user isn't in yet: the app rings. Huddles never ring. */
+export function ringing(channel: Channel, me: string): boolean {
+  return !!channel.call && !channel.call.huddle && !channel.call.participants.includes(me) && channel.call.participants.length > 0;
 }
 
 export type MessageStatus = "pending" | "sent" | "confirmed" | "rejected" | "failed";
@@ -570,6 +586,24 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
           return { ...m, reactions: withReaction(m.reactions, r.emoji, { count: Number(r.count), mine, seq: eventSeq }) };
         }),
       );
+    }
+    case "callEvent": {
+      const c = payload.value;
+      if (c.change === CallChange.ENDED) {
+        // Only the call that ended (a late END for an earlier one changes nothing).
+        if (channel.call && channel.call.callId !== c.callId) return withChannel(state, channel);
+        const { call: _ended, ...rest } = channel;
+        return withChannel(state, rest);
+      }
+      return withChannel(state, {
+        ...channel,
+        call: {
+          callId: c.callId,
+          huddle: c.huddle,
+          participants: c.participantIds.map((p) => p.toString()),
+          startedAt: Number(c.startedAtMs),
+        },
+      });
     }
     case "messageDeleted": {
       const target = Number(payload.value.msgSeq);

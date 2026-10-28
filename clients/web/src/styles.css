@@ -138,3 +138,18 @@ label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .message .hit { text-align: left; text-decoration: none; display: block; width: 100%; }
 .auth .sso { display: flex; flex-direction: column; gap: 8px; align-items: stretch; text-align: center; margin-top: 8px; }
 .auth .sso .button { display: block; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: inherit; text-decoration: none; }
+
+/* Calls (ADR-0025) */
+button.danger { background: var(--error); color: #fff; border-color: var(--error); }
+.call-ring { gap: 10px; align-items: center; padding: 10px 20px; background: var(--own); border-bottom: 1px solid var(--border); }
+.call-ring > span { flex: 1; }
+.call-panel { display: grid; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.call-panel header { gap: 10px; align-items: baseline; }
+.call-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.call-tile { position: relative; aspect-ratio: 16 / 9; border-radius: 8px; overflow: hidden; background: var(--sidebar); display: grid; place-items: center; outline: 2px solid transparent; }
+.call-tile.speaking { outline-color: var(--accent); }
+.call-tile video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.call-avatar { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; font-size: 24px; background: var(--sidebar-active); color: var(--sidebar-fg); }
+.call-name { position: absolute; left: 6px; bottom: 6px; padding: 1px 6px; border-radius: 4px; background: rgb(0 0 0 / 55%); color: #fff; }
+.call-controls { gap: 8px; flex-wrap: wrap; }
+.conv-header .row button { white-space: nowrap; }
