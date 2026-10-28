@@ -60,6 +60,7 @@ pub async fn replies<S: Store, L>(
                         "message_id": r.message_id.to_string(),
                         "author_id": r.author_id.to_string(),
                         "body": r.body,
+                        "attachments": attachments_json(&r.attachments),
                     })
                 })
                 .collect();
@@ -69,5 +70,53 @@ pub async fn replies<S: Store, L>(
             tracing::error!(error = %e, channel_id, root_msg_seq, "thread read failed");
             error(StatusCode::SERVICE_UNAVAILABLE, "try again later")
         }
+    }
+}
+/// A stored `Attachments` as JSON (IDs as strings, as everywhere in the API).
+fn attachments_json(stored: &[u8]) -> Vec<serde_json::Value> {
+    use xmsg_proto::Message as _;
+    xmsg_proto::v1::Attachments::decode(stored)
+        .map(|a| a.items)
+        .unwrap_or_default()
+        .iter()
+        .map(|a| {
+            serde_json::json!({
+                "file_id": a.file_id.to_string(),
+                "name": a.name,
+                "content_type": a.content_type,
+                "size": a.size,
+                "width": (a.width > 0).then_some(a.width),
+                "height": (a.height > 0).then_some(a.height),
+                "has_thumbnail": a.has_thumbnail,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reply_attachments_come_out_as_json() {
+        use xmsg_proto::Message as _;
+        let stored = xmsg_proto::v1::Attachments {
+            items: vec![xmsg_proto::v1::Attachment {
+                file_id: 42,
+                name: "cat.png".into(),
+                content_type: "image/png".into(),
+                size: 10,
+                width: 4,
+                height: 3,
+                has_thumbnail: true,
+            }],
+        }
+        .encode_to_vec();
+        assert_eq!(
+            super::attachments_json(&stored),
+            vec![
+                serde_json::json!({"file_id": "42", "name": "cat.png", "content_type": "image/png",
+                "size": 10, "width": 4, "height": 3, "has_thumbnail": true})
+            ]
+        );
+        assert!(super::attachments_json(&[]).is_empty());
     }
 }

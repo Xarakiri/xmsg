@@ -2,7 +2,7 @@
 // Client chat state: a pure reducer over server events and local actions. Plain JSON
 // (IDs as decimal strings, sequence numbers as numbers), so it can be saved and restored.
 
-import type { SequencedEvent } from "./gen/xmsg/v1/events_pb.js";
+import type { Attachment as ProtoAttachment, SequencedEvent } from "./gen/xmsg/v1/events_pb.js";
 import { ChannelType, MemberRole, RejectReason } from "./gen/xmsg/v1/enums_pb.js";
 
 export type NotifyLevel = "all" | "mentions" | "nothing";
@@ -176,6 +176,22 @@ export interface LoadedReply {
   messageId: string;
   authorId: string;
   body: string;
+  attachments?: Attachment[];
+}
+
+/** Files as the server sends them in events (ADR-0024). */
+function attachmentsOf(list: ProtoAttachment[]): { attachments?: Attachment[] } {
+  if (list.length === 0) return {};
+  return {
+    attachments: list.map((a) => ({
+      fileId: a.fileId.toString(),
+      name: a.name,
+      contentType: a.contentType,
+      size: Number(a.size),
+      ...(a.width > 0 && { width: a.width, height: a.height }),
+      hasThumbnail: a.hasThumbnail,
+    })),
+  };
 }
 
 export interface ListedChannel {
@@ -258,6 +274,7 @@ export function reduce(state: ChatState, action: Action): ChatState {
             status: "confirmed",
             at: 0,
             threadRoot: action.root,
+            ...(r.attachments?.length && { attachments: r.attachments }),
           }));
         return loaded.length ? sortMessages([...list, ...loaded]) : list;
       });
@@ -473,16 +490,7 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
         messageId: payload.value.messageId.toString(),
         status: "confirmed",
         at,
-        ...(payload.value.attachments.length > 0 && {
-          attachments: payload.value.attachments.map((a) => ({
-            fileId: a.fileId.toString(),
-            name: a.name,
-            contentType: a.contentType,
-            size: Number(a.size),
-            ...(a.width > 0 && { width: a.width, height: a.height }),
-            hasThumbnail: a.hasThumbnail,
-          })),
-        }),
+        ...attachmentsOf(payload.value.attachments),
       };
       // Own messages count as read (the server's feeder does the same, ADR-0012).
       let updated: Channel = {
@@ -532,6 +540,7 @@ function applyEvent(state: ChatState, e: SequencedEvent, at: number): ChatState 
         status: "confirmed",
         at,
         threadRoot: root,
+        ...attachmentsOf(r.attachments),
       };
       // The root shows how many replies it has (absolute, so repeats change nothing).
       let next = withMessages(withChannel(state, channel), channelId, (list) =>

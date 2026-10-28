@@ -59,8 +59,8 @@ impl Store {
             ))
             .await?,
             insert_thread_message: prepare(format!(
-                "INSERT INTO {k}.thread_messages (channel_id, thread_root, reply_seq, message_id, author_id, body, also_sent_to_channel, deleted) \
-                 VALUES (?, ?, ?, ?, ?, ?, false, false)"
+                "INSERT INTO {k}.thread_messages (channel_id, thread_root, reply_seq, message_id, author_id, body, attachments, also_sent_to_channel, deleted) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, false, false)"
             ))
             .await?,
             root_exists: prepare(format!(
@@ -236,6 +236,7 @@ impl Store {
                 body,
                 reply_count,
                 at_ms,
+                attachments,
             } => {
                 s.execute_unpaged(
                     &self.insert_thread_message,
@@ -246,6 +247,7 @@ impl Store {
                         message_id,
                         author_id,
                         body,
+                        attachments,
                     ),
                 )
                 .await?;

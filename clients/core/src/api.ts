@@ -328,12 +328,31 @@ export class Api {
 
   /** A thread's replies, oldest first (ADR-0005). */
   async thread(token: string, channelId: string, rootMsgSeq: number, after = 0): Promise<{ replies: LoadedReply[]; hasMore: boolean }> {
-    const reply = await call<{ replies: { reply_seq: string; message_id: string; author_id: string; body: string }[]; has_more: boolean }>(
+    type FileJson = { file_id: string; name: string; content_type: string; size: number; width?: number; height?: number; has_thumbnail: boolean };
+    const reply = await call<{
+      replies: { reply_seq: string; message_id: string; author_id: string; body: string; attachments?: FileJson[] }[];
+      has_more: boolean;
+    }>(
       `${this.endpoints.messages}/v1/channels/${channelId}/threads/${rootMsgSeq}?after=${after}`,
       { method: "GET", token },
     );
     return {
-      replies: reply.replies.map((r) => ({ replySeq: Number(r.reply_seq), messageId: r.message_id, authorId: r.author_id, body: r.body })),
+      replies: reply.replies.map((r) => ({
+        replySeq: Number(r.reply_seq),
+        messageId: r.message_id,
+        authorId: r.author_id,
+        body: r.body,
+        ...(r.attachments?.length && {
+          attachments: r.attachments.map((a) => ({
+            fileId: a.file_id,
+            name: a.name,
+            contentType: a.content_type,
+            size: a.size,
+            ...(a.width != null && { width: a.width, height: a.height }),
+            hasThumbnail: a.has_thumbnail,
+          })),
+        }),
+      })),
       hasMore: reply.has_more,
     };
   }

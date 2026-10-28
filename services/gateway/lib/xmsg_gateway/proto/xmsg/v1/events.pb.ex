@@ -330,6 +330,7 @@ defmodule Xmsg.V1.ThreadReply do
   field :reply_seq, 5, type: :int64, json_name: "replySeq"
   field :reply_count, 6, type: :int64, json_name: "replyCount"
   field :mentioned_user_ids, 7, repeated: true, type: :int64, json_name: "mentionedUserIds"
+  field :attachments, 8, repeated: true, type: Xmsg.V1.Attachment
 end
 
 defmodule Xmsg.V1.ReactionsChanged do

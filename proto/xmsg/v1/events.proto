@@ -213,6 +213,8 @@ message ThreadReply {
   int64 reply_count = 6;
   // As for MessageCreated: members only, never the author, at most 50.
   repeated int64 mentioned_user_ids = 7;
+  // Files attached by the author (ADR-0024).
+  repeated Attachment attachments = 8;
 }
 
 // A reaction batch applied by the sequencer: an event_seq, no msg_seq. `count` is the

@@ -20,9 +20,11 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE TABLE IF NOT EXISTS thread_messages (
   channel_id bigint, thread_root bigint, reply_seq bigint, message_id bigint, author_id bigint,
-  body text, also_sent_to_channel boolean, edited_at timestamp, deleted boolean,
+  body text, also_sent_to_channel boolean, edited_at timestamp, deleted boolean, attachments blob,
   PRIMARY KEY ((channel_id, thread_root), reply_seq, message_id)
 ) WITH compaction = {'class': 'UnifiedCompactionStrategy'};
+-- Added with files in replies (ADR-0024); existing installations get it here.
+ALTER TABLE thread_messages ADD IF NOT EXISTS attachments blob;
 
 CREATE TABLE IF NOT EXISTS thread_followers (
   channel_id bigint, thread_root bigint, user_id bigint,

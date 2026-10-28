@@ -225,7 +225,16 @@ async fn run() -> Result<(), String> {
             }
         }
         if let Ok(media_url) = std::env::var("XMSG_MEDIA_URL") {
-            check_media(&media_url, url, &mut clients, &users, run_id).await?;
+            let messages_url = std::env::var("XMSG_MESSAGES_URL").ok();
+            check_media(
+                &media_url,
+                url,
+                messages_url.as_deref(),
+                &mut clients,
+                &users,
+                run_id,
+            )
+            .await?;
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
             let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
@@ -1174,6 +1183,7 @@ const PIXEL_PNG: &[u8] = &[
 async fn check_media(
     media_url: &str,
     channels_url: &str,
+    messages_url: Option<&str>,
     clients: &mut [Client; 3],
     users: &[(i64, String)],
     run_id: i64,
@@ -1342,8 +1352,78 @@ async fn check_media(
             }
         }
     }
+    // A thread reply with the file: delivered with its details, and in the thread API.
+    let root = clients[1].events.iter().find_map(|e| match &e.payload {
+        Some(sequenced_event::Payload::MessageCreated(m))
+            if e.channel_id == channel_id && e.dedupe_id == "files-1" =>
+        {
+            Some((e.msg_seq, m.message_id))
+        }
+        _ => None,
+    });
+    let (root_seq, root_id) = root.ok_or("media: no root for the reply")?;
+    let reply = ClientFrame {
+        frame: Some(client_frame::Frame::SendMessage(SendMessageRequest {
+            channel_id,
+            client_msg_id: "files-reply".into(),
+            body: "the same, in a thread".into(),
+            thread_root: Some(ThreadRoot {
+                msg_seq: root_seq,
+                message_id: root_id,
+            }),
+            file_ids: vec![image_id],
+        })),
+    };
+    clients[0]
+        .ws
+        .send(Ws::Binary(reply.encode_to_vec().into()))
+        .await
+        .map_err(|e| e.to_string())?;
+    expect_ack(&mut clients[0], "files-reply").await?;
+    let in_reply = |events: &[SequencedEvent]| {
+        events.iter().find_map(|e| match &e.payload {
+            Some(sequenced_event::Payload::ThreadReply(r))
+                if e.channel_id == channel_id && e.dedupe_id == "files-reply" =>
+            {
+                Some(r.attachments.clone())
+            }
+            _ => None,
+        })
+    };
+    wait_events(&mut clients[1], |e| in_reply(e).is_some()).await?;
+    let files =
+        in_reply(&clients[1].events).ok_or("media: bob didn't get the reply with a file")?;
+    if files.len() != 1 || files[0].file_id != image_id {
+        return Err(format!("media: unexpected reply attachments {files:?}"));
+    }
+    if let Some(messages_url) = messages_url {
+        // The persister writes the reply a moment after delivery.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let (status, page) = call(
+                "GET",
+                &format!("{messages_url}/v1/channels/{channel_id}/threads/{root_seq}"),
+                &users[1].1,
+                None,
+            )
+            .await?;
+            let file = &page["replies"][0]["attachments"][0];
+            if status == 200
+                && file["file_id"].as_str() == Some(image_id.to_string().as_str())
+                && file["has_thumbnail"] == true
+            {
+                break;
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "media: the thread API's reply has no file: {status} {page}"
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }
     println!(
-        "media: an image round-trips with a thumbnail, a page posing as an image is only a download, a non-member gets 404; a message carries the file's details, and nobody can attach someone else's upload"
+        "media: an image round-trips with a thumbnail, a page posing as an image is only a download, a non-member gets 404; a message and a thread reply carry the file's details, and nobody can attach someone else's upload"
     );
     Ok(())
 }

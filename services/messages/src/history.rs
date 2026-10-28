@@ -48,6 +48,8 @@ pub struct ReplyRow {
     pub message_id: i64,
     pub author_id: i64,
     pub body: String,
+    /// `Attachments`, encoded (ADR-0024); empty without files.
+    pub attachments: Vec<u8>,
 }
 
 /// One `messages` row.

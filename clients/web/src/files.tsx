@@ -3,8 +3,8 @@
 // list. The media service wants a bearer token, which <img src> and <a href> can't send,
 // so files are fetched with it and shown through object URLs.
 
-import { useEffect, useState } from "react";
-import type { Attachment } from "@xmsg/client-core";
+import { useEffect, useRef, useState } from "react";
+import { MAX_FILE_BYTES, type Attachment } from "@xmsg/client-core";
 import { api, session } from "./session.ts";
 
 export function formatSize(bytes: number): string {
@@ -117,5 +117,57 @@ export function PendingFiles({ files, onRemove }: { files: PendingFile[]; onRemo
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Files picked for the next message or reply: each uploads at once. `reset` empties the
+ * list (sent, or another conversation opened).
+ */
+export function useFileDrafts(onUpload: (file: File) => Promise<Attachment>, errorText: (e: unknown) => string) {
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const add = (picked: FileList | null) => {
+    for (const file of Array.from(picked ?? [])) {
+      const id = crypto.randomUUID();
+      if (file.size > MAX_FILE_BYTES) {
+        setFiles((fs) => [...fs, { id, name: file.name, size: file.size, error: `over ${formatSize(MAX_FILE_BYTES)}` }]);
+        continue;
+      }
+      setFiles((fs) => [...fs, { id, name: file.name, size: file.size }]);
+      onUpload(file)
+        .then((attachment) => setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, attachment } : f))))
+        .catch((err) => setFiles((fs) => fs.map((f) => (f.id === id ? { ...f, error: errorText(err) } : f))));
+    }
+  };
+  return {
+    files,
+    add,
+    remove: (id: string) => setFiles((fs) => fs.filter((f) => f.id !== id)),
+    reset: () => setFiles([]),
+    /** Uploaded and ready to send. */
+    ready: files.flatMap((f) => (f.attachment ? [f.attachment] : [])),
+    uploading: files.some((f) => !f.attachment && !f.error),
+  };
+}
+
+/** The 📎 button with its hidden file input. */
+export function AttachButton({ onPick }: { onPick: (files: FileList | null) => void }) {
+  const picker = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          onPick(e.target.files);
+          e.target.value = "";
+        }}
+      />
+      <button type="button" onClick={() => picker.current?.click()} aria-label="Attach files" title="Attach files">
+        📎
+      </button>
+    </>
   );
 }

@@ -451,3 +451,36 @@ test("a message without files has no attachments field", () => {
   const s = apply(initialState(ME), created, message(1, 102n, "", "hi"));
   assert.equal("attachments" in s.messages["7"]![0]!, false);
 });
+
+test("thread replies carry files, live and when the thread is loaded", () => {
+  const file = { fileId: "42", name: "cat.png", contentType: "image/png", size: 10, width: 4, height: 3, hasThumbnail: true };
+  let s = apply(initialState(ME), created, message(1, 102n, "", "root"));
+  s = apply(
+    s,
+    ev({
+      eventSeq: 3n,
+      actorId: 102n,
+      payload: {
+        case: "threadReply",
+        value: {
+          messageId: 2001n,
+          body: "",
+          rootMsgSeq: 1n,
+          rootMessageId: 1001n,
+          replySeq: 1n,
+          replyCount: 1n,
+          attachments: [{ fileId: 42n, name: "cat.png", contentType: "image/png", size: 10n, width: 4, height: 3, hasThumbnail: true }],
+        },
+      },
+    }),
+  );
+  assert.deepEqual(s.messages["7#1"]![0]!.attachments, [file]);
+
+  s = reduce(s, {
+    type: "threadLoaded",
+    channelId: "7",
+    root: { msgSeq: 1, messageId: "1001" },
+    replies: [{ replySeq: 2, messageId: "2002", authorId: "102", body: "", attachments: [file] }],
+  });
+  assert.deepEqual(s.messages["7#1"]![1]!.attachments, [file]);
+});

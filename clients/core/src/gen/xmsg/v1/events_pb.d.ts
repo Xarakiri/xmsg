@@ -805,6 +805,13 @@ export declare type ThreadReply = Message<"xmsg.v1.ThreadReply"> & {
    * @generated from field: repeated int64 mentioned_user_ids = 7;
    */
   mentionedUserIds: bigint[];
+
+  /**
+   * Files attached by the author (ADR-0024).
+   *
+   * @generated from field: repeated xmsg.v1.Attachment attachments = 8;
+   */
+  attachments: Attachment[];
 };
 
 /**
