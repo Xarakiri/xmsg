@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+.dev-nav { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.dev-nav strong { margin-right: 14px; } .dev-nav span { flex: 1; } .dev-nav .active { color: var(--green); border-color: var(--green); }
+.dev-stage { height: calc(100dvh - 46px); } .dev-stage .terminal-app { height: 100%; }
+.fixture-camera { display: grid; place-items: center; color: var(--muted); font-size: 24px; }
+.fixture-screen-share { border: 0; background: var(--surface); }
+.fake-dashboard { padding: 20px; display: grid; gap: 24px; color: var(--green); background: #0b1114; aspect-ratio: 16 / 9; align-content: center; }
+.fake-dashboard > div:first-child { display: flex; justify-content: space-between; } .fake-chart { color: var(--violet); font-size: 24px; letter-spacing: 8px; overflow: hidden; }
+.fake-bars { font-size: 28px; letter-spacing: 10px; overflow: hidden; }

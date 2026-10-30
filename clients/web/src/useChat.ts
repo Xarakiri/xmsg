@@ -225,7 +225,8 @@ export function useChat(me: string, initial: ChatState) {
     conn.current?.send(message.channelId, newKey, message.body, message.threadRoot, fileIds(message));
   };
 
-  return { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, view };
+  const presenceKnown = (userId: string) => userId in presence;
+  return { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, presenceKnown, view };
 }
 
 const fileIds = (m: Message) => (m.attachments ?? []).map((a) => a.fileId);
