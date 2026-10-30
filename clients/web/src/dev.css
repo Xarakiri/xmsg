@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+.dev-nav { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.dev-nav strong { margin-right: 14px; } .dev-nav span { flex: 1; } .dev-nav .active { color: var(--green); border-color: var(--green); }
+.dev-stage { height: calc(100dvh - 46px); } .dev-stage .terminal-app { height: 100%; }
+.fixture-participants { flex: 1; padding: 12px; display: grid; gap: 16px; align-content: start; }
+.fixture-participants > div { display: grid; grid-template-columns: 64px 1fr; gap: 2px 12px; align-items: center; }
+.fixture-participants .avatar { grid-row: 1 / 3; } .fixture-participants span { color: var(--muted); }
+.share-preview { margin: 16px 18px 0; border: 1px solid var(--border); background: var(--surface); }
+.share-preview header { padding: 8px 12px; } .fake-dashboard { padding: 20px; display: grid; gap: 24px; color: var(--green); background: #0b1114; }
+.fake-dashboard > div:first-child { display: flex; justify-content: space-between; } .fake-chart { color: var(--violet); font-size: 24px; letter-spacing: 8px; overflow: hidden; }
+.fake-bars { font-size: 28px; letter-spacing: 10px; overflow: hidden; }
