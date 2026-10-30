@@ -7,12 +7,8 @@ import { isDesktop } from "./session.ts";
 
 export type Theme = "dark" | "light";
 
-export function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
-  return <button className="link status-theme" onClick={onToggle} title="Toggle colour theme">[{theme === "dark" ? "light" : "dark"}]</button>;
-}
-
-export function StatusLine({ workspace, channel, status, theme, onToggle }: { workspace: string; channel: string; status: ConnectionStatus | "offline"; theme: Theme; onToggle: () => void }) {
-  return <header className="status-line"><span>xmsg v0.9 <b>·</b> workspace:{workspace || "default"} <b>·</b> {channel || "not connected"} <b>·</b> {location.host}</span><span className={`connection ${status}`}><i />{status === "online" ? "connected" : status === "offline" ? "offline" : status}</span><ThemeToggle theme={theme} onToggle={onToggle} /></header>;
+export function StatusLine({ workspace, channel, status }: { workspace: string; channel: string; status: ConnectionStatus | "offline" }) {
+  return <header className="status-line"><span>xmsg v0.9 <b>·</b> workspace:{workspace || "default"} <b>·</b> {channel || "not connected"} <b>·</b> {location.host}</span><span className={`connection ${status}`}><i />{status === "online" ? "connected" : status === "offline" ? "offline" : status}</span></header>;
 }
 
 const AVATAR_COLORS = ["violet", "amber", "pink", "green", "blue", "cyan"];
@@ -24,12 +20,12 @@ export function Avatar({ id, name, url, presence, size = "normal" }: { id: strin
 }
 
 export function KeyHints({ inCall = false }: { inCall?: boolean }) {
-  return <footer className="key-hints"><span>^K search</span><span>^T thread</span><span>^N new channel</span><span>/huddle huddle</span>{inCall && <><span>m mute</span><span>v video</span><span>s share</span><span>q leave</span></>}<span>esc close</span></footer>;
+  return <footer className="key-hints">{inCall ? <><span>m mute</span><span>v video</span><span>s share</span><span>q leave</span><span>esc close</span></> : <><span>^K search</span><span>^T thread</span><span>^N new channel</span><span>/huddle huddle</span><span>esc close</span></>}</footer>;
 }
 
 export interface SidebarChannel { channel: Channel; title: string; presence?: Presence }
-export function Sidebar({ rooms, dms, calls, selected, onSelect, onNewChannel, onNewDm, onWorkspaces, onProfile, onServer, onSignOut }: { rooms: SidebarChannel[]; dms: SidebarChannel[]; calls: SidebarChannel[]; selected: string | null; onSelect: (id: string) => void; onNewChannel: () => void; onNewDm: () => void; onWorkspaces: () => void; onProfile: () => void; onServer?: () => void; onSignOut: () => void }) {
-  return <aside className="sidebar"><SidebarSection title="CHANNELS" onAdd={onNewChannel} items={rooms} selected={selected} onSelect={onSelect} /><SidebarSection title="DIRECT" onAdd={onNewDm} items={dms} selected={selected} onSelect={onSelect} /><SidebarSection title="VOICE" items={calls} selected={selected} onSelect={onSelect} /><div className="sidebar-tools"><button className="link" onClick={onWorkspaces}>[ workspaces / invites ]</button><button className="link" onClick={onProfile}>[ profile / settings ]</button>{onServer && <button className="link" onClick={onServer}>[ server ]</button>}<NotificationsToggle /><button className="link" onClick={onSignOut}>[ sign out ]</button></div></aside>;
+export function Sidebar({ rooms, dms, calls, selected, onSelect, onNewChannel, onNewDm, onAdmin, meName, onOpenSettings }: { rooms: SidebarChannel[]; dms: SidebarChannel[]; calls: SidebarChannel[]; selected: string | null; onSelect: (id: string) => void; onNewChannel: () => void; onNewDm: () => void; onAdmin?: () => void; meName: string; onOpenSettings: () => void }) {
+  return <aside className="sidebar"><SidebarSection title="CHANNELS" onAdd={onNewChannel} items={rooms} selected={selected} onSelect={onSelect} /><SidebarSection title="DIRECT" onAdd={onNewDm} items={dms} selected={selected} onSelect={onSelect} />{calls.length > 0 && <SidebarSection title="VOICE" items={calls} selected={selected} onSelect={onSelect} />}<div className="sidebar-tools">{onAdmin && <button className="link" onClick={onAdmin}>[ admin ]</button>}<button className="link sidebar-me" onClick={onOpenSettings} title="settings">{meName}</button></div></aside>;
 }
 function SidebarSection({ title, items, selected, onSelect, onAdd }: { title: string; items: SidebarChannel[]; selected: string | null; onSelect: (id: string) => void; onAdd?: () => void }) {
   return <section className="sidebar-section"><h2>{title}{onAdd && <button className="link" onClick={onAdd} aria-label={`New ${title.toLowerCase()}`}>+</button>}</h2><ul>{items.map(({ channel, title: label, presence }) => { const count = channel.muted ? 0 : unread(channel); const mentions = mentionCount(channel); return <li key={channel.id}><button className={`channel-item ${selected === channel.id ? "selected" : ""} ${channel.muted ? "muted" : ""}`} onClick={() => onSelect(channel.id)}><span className="selection">{selected === channel.id ? "▸" : " "}</span>{presence && <span className={`presence ${presence}`} />}<span className="channel-label">{label}</span>{mentions > 0 && selected !== channel.id ? <span className="unread">[@{mentions}]</span> : count > 0 && selected !== channel.id ? <span className="unread">[{count}]</span> : null}{title === "VOICE" && <span className="muted">({channel.call?.participants.length ?? 0})</span>}</button></li>; })}</ul></section>;
@@ -57,7 +53,7 @@ export function toTokens(body: string, members: string[], me: string, names: Dir
   return out;
 }
 export function errorText(e: unknown): string {
-  return e instanceof Error && "status" in e ? (typeof e.status === "number" && e.status >= 500 ? "Service unavailable, try again" : e.message) : "Can't reach the server";
+  return e instanceof Error && "status" in e ? (typeof e.status === "number" && e.status >= 500 ? "Service unavailable, try again" : e.status === 403 ? "not allowed" : e.message) : "Can't reach the server";
 }
 
 export function MessageRow({ message: m, me, names, presence, onOpenThread, onReact, onEdit, onDelete, onRetry, compact = false }: { message: Message; me: string; names: Directory; presence?: Presence; onOpenThread?: () => void; onReact?: (emoji: string, add: boolean) => void; onEdit?: (text: string) => Promise<void>; onDelete?: () => void; onRetry?: () => void; compact?: boolean }) {
@@ -85,11 +81,16 @@ export function Prompt({ channel, members, me, names, onSend, onUpload, onTyping
     onSend(toTokens(body, members, me, names), drafts.ready); setDraft(""); drafts.reset();
   };
   if (readOnly) return <p className="composer-note">Only posters and admins post in this broadcast channel.</p>;
-  return <form className="prompt" onSubmit={submit} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); drafts.add(e.dataTransfer.files); }}><PendingFiles files={drafts.files} onRemove={drafts.remove} /><span className="prompt-label">{channel} <b>›</b></span><AttachButton onPick={drafts.add} /><textarea aria-label={`Message ${channel}`} value={draft} rows={1} placeholder="type a message or /huddle" onChange={(e) => { setDraft(e.target.value); if (e.target.value.trim()) onTyping?.(); }} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) submit(e); }} /><span className="send-hints">↵ send&nbsp;&nbsp;⇧↵ newline</span><button className="prompt-send" disabled={(!draft.trim() && drafts.ready.length === 0) || drafts.uploading}>send</button></form>;
+  return <form className="prompt" onSubmit={submit} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); drafts.add(e.dataTransfer.files); }}><PendingFiles files={drafts.files} onRemove={drafts.remove} /><span className="prompt-label">{channel} <b>›</b></span><AttachButton onPick={drafts.add} /><textarea aria-label={`Message ${channel}`} value={draft} rows={1} placeholder="type a message or /huddle" onChange={(e) => { setDraft(e.target.value); if (e.target.value.trim()) onTyping?.(); }} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) submit(e); }} /><span className="send-hints">↵ send&nbsp;&nbsp;⇧↵ newline</span></form>;
 }
 
-export function ConversationHeader({ channel, title, me, names, onCall, onMute, onInvite, onLeave }: { channel: Channel; title: string; me: string; names: Directory; onCall: () => void; onMute: () => void; onInvite?: () => void; onLeave?: () => void }) {
-  return <header className="conversation-header"><div><strong>{title}</strong><span className="muted"> · {channel.members.length} members · {channel.kind.replace("_", " ")}</span></div><div className="header-actions"><button className="link" onClick={onCall}>{channel.call ? `join ${channel.call.huddle ? "huddle" : "call"} (${channel.call.participants.length})` : channel.kind === "dm" ? "call" : "huddle"}</button><button className="link" onClick={onMute}>{channel.muted ? "unmute" : "mute"}</button>{onInvite && <button className="link" onClick={onInvite}>invite</button>}{onLeave && <button className="link" onClick={onLeave}>leave</button>}</div></header>;
+export function ConversationHeader({ title, onCall, onOpenInfo }: { title: string; onCall: () => void; onOpenInfo: () => void }) {
+  return <header className="conversation-header"><button className="link header-title" onClick={onOpenInfo} title="channel info"><strong>{title}</strong></button><div className="header-actions"><button className="link" onClick={onCall}>huddle</button></div></header>;
+}
+
+/** Mute, invite and leave, behind the channel name (ADR-0026 interface cleanup). */
+export function ChannelInfoPanel({ channel, title, me, names, onMute, onInvite, onLeave, onClose }: { channel: Channel; title: string; me: string; names: Directory; onMute: () => void; onInvite?: () => void; onLeave?: () => void; onClose: () => void }) {
+  return <Modal title={title.toUpperCase()} onClose={onClose}><div className="modal-form channel-info"><p className="muted">{channel.members.length} members</p><ul className="member-list">{channel.members.map((id) => <li key={id}><Avatar id={id} name={id === me ? "you" : names.label(id)} url={names.profile(id)?.avatar_url} size="small" />{id === me ? "you" : names.label(id)}</li>)}</ul><div className="info-actions"><button className="link" onClick={() => { onMute(); onClose(); }}>{channel.muted ? "unmute" : "mute"}</button>{onInvite && <button className="link" onClick={() => { onInvite(); onClose(); }}>invite people</button>}{onLeave && <button className="link" onClick={() => { onLeave(); onClose(); }}>leave channel</button>}</div></div></Modal>;
 }
 
 export function ThreadPanel({ root, replies, me, names, channel, onSend, onUpload, onRetry, onClose }: { root: Message; replies: Message[]; me: string; names: Directory; channel: string; onSend: (body: string, files: import("@xmsg/client-core").Attachment[]) => void; onUpload: (file: File) => Promise<import("@xmsg/client-core").Attachment>; onRetry: (key: string) => void; onClose: () => void }) {
@@ -107,29 +108,70 @@ export function AuthScreen({ mode, setMode, name, setName, email, setEmail, pass
   return <main className="auth-shell"><section className="auth-terminal"><header><strong>xmsg · {mode === "up" ? "create account" : mode === "code" ? "recovery login" : "log in"}</strong><span>{location.host}</span></header><form onSubmit={onSubmit}>{mode === "up" && <label>name<input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} autoComplete="name" autoFocus /></label>}<label>email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" /></label>{mode === "code" ? <label>recovery code<input value={code} onChange={(e) => setCode(e.target.value)} required autoComplete="one-time-code" placeholder="xxxx-xxxx-xxxx-xxxx" /></label> : <><label>password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === "up" ? 10 : undefined} maxLength={mode === "up" ? 256 : undefined} autoComplete={mode === "up" ? "new-password" : "current-password"} /></label>{mode === "up" && <><label>password again<input type="password" value={passwordAgain} onChange={(e) => setPasswordAgain(e.target.value)} required minLength={10} maxLength={256} autoComplete="new-password" /></label><p className="password-rule">10–256 characters</p></>}</>}{error && <p className="error" role="alert">{error}</p>}<button className="auth-submit" disabled={busy}>[ {busy ? "working…" : mode === "up" ? "create account" : "connect"} ↵ ]</button></form><footer>{mode === "up" ? <button className="link" onClick={() => setMode("in")}>have an account? [l] log in</button> : <><button className="link" onClick={() => setMode("up")}>no account? [r] register</button><button className="link" onClick={() => setMode(mode === "code" ? "in" : "code")}>{mode === "code" ? "use password" : "use recovery code"}</button></>}</footer>{providers.length > 0 && <div className="sso-links">{providers.map((p) => <a key={p.id} href={p.url}>[ sso: {p.name} ]</a>)}</div>}</section><div className="auth-hints">tab next field · ↵ submit · esc cancel</div></main>;
 }
 
+/** First run, owner/admin only (ADR-0026): name the workspace, create its first channel. Not skippable. */
+export function SetupScreen({ workspaceName, setWorkspaceName, channelName, setChannelName, error, busy, onSubmit }: { workspaceName: string; setWorkspaceName: (v: string) => void; channelName: string; setChannelName: (v: string) => void; error: string; busy: boolean; onSubmit: (e: FormEvent) => void }) {
+  return <main className="auth-shell"><section className="auth-terminal"><header><strong>xmsg · set up workspace</strong><span>{location.host}</span></header><form onSubmit={onSubmit}><label>workspace name<input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} required maxLength={80} autoFocus /></label><label>first channel<input value={channelName} onChange={(e) => setChannelName(e.target.value)} required maxLength={80} /></label>{error && <p className="error" role="alert">{error}</p>}<button className="auth-submit" disabled={busy}>[ {busy ? "working…" : "create workspace"} ⏎ ]</button></form><div className="auth-hints">↵ create · this can't be skipped</div></section></main>;
+}
+
+/** Signed in, nothing to do yet: someone else owns the workspace and hasn't finished setup. */
+export function WaitingScreen() {
+  return <main className="auth-shell"><div className="waiting-state"><p className="muted">waiting for the workspace owner to finish setup</p></div></main>;
+}
+
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className="modal"><header className="panel-title">{title}<button className="link" onClick={onClose}>×</button></header>{children}</section></div>;
-}
-
-export function ProfilePanel({ me, names, onSave, onClose }: { me: string; names: Directory; onSave: (name: string, avatar: string) => Promise<void>; onClose: () => void }) {
-  const profile = names.profile(me);
-  const [name, setName] = useState(profile?.name ?? names.label(me));
-  const [avatar, setAvatar] = useState(profile?.avatar_url ?? "");
-  const [error, setError] = useState("");
-  return <Modal title="PROFILE / SETTINGS" onClose={onClose}><form className="modal-form" onSubmit={(e) => { e.preventDefault(); onSave(name.trim(), avatar.trim()).then(onClose).catch((err) => setError(errorText(err))); }}><div className="profile-preview"><Avatar id={me} name={name} url={avatar} size="large" /><span className="mono">{me}</span></div><label>display name<input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} /></label><label>avatar URL<input type="url" value={avatar} onChange={(e) => setAvatar(e.target.value)} placeholder="https://…" /></label>{error && <p className="error">{error}</p>}<button>[ save profile ]</button></form></Modal>;
-}
-
-export function WorkspacesPanel({ workspaces, onCreate, onInvite, onAccept, onClose }: { workspaces: Workspace[]; onCreate: (name: string, slug: string) => Promise<void>; onInvite: (workspaceId: string) => Promise<string>; onAccept: (code: string) => Promise<void>; onClose: () => void }) {
-  const [name, setName] = useState(""); const [slug, setSlug] = useState(""); const [code, setCode] = useState(""); const [note, setNote] = useState("");
-  return <Modal title="WORKSPACES / INVITES" onClose={onClose}><div className="modal-form"><ul className="workspace-list">{workspaces.map((w) => <li key={w.workspace_id}><span>{w.name} <span className="muted">:{w.slug} · {w.role}</span></span><button className="link" onClick={() => onInvite(w.workspace_id).then((value) => { setNote(`invite code: ${value}`); return navigator.clipboard?.writeText(value); }).catch((e) => setNote(errorText(e)))}>create invite</button></li>)}</ul>{note && <p className="note-text">{note}</p>}<form onSubmit={(e) => { e.preventDefault(); onAccept(code.trim()).then(() => setNote("Invite accepted")).catch((err) => setNote(errorText(err))); }}><label>accept invite code<input value={code} onChange={(e) => setCode(e.target.value)} required /></label><button>[ accept ]</button></form><form onSubmit={(e) => { e.preventDefault(); onCreate(name.trim(), slug.trim()).then(() => { setName(""); setSlug(""); setNote("Workspace created"); }).catch((err) => setNote(errorText(err))); }}><label>new workspace name<input value={name} onChange={(e) => setName(e.target.value)} required /></label><label>slug<input value={slug} onChange={(e) => setSlug(e.target.value)} required pattern="[a-z0-9-]+" /></label><button>[ create workspace ]</button></form></div></Modal>;
 }
 
 function NotificationsToggle() {
   const [state, setState] = useState<PushState | "busy">("busy"); const [note, setNote] = useState("");
   useEffect(() => { void pushState().then(setState).catch(() => setState("unsupported")); }, []);
-  if (isDesktop || state === "unsupported") return null;
+  if (isDesktop || state === "unsupported" || state === "blocked") return null;
   const toggle = async () => { setState("busy"); try { setState(state === "on" ? await disablePush() : await enablePush()); } catch (e) { setState("off"); setNote(errorText(e)); } };
-  return <div>{state === "blocked" ? <span className="muted">notifications blocked</span> : <button className="link" disabled={state === "busy"} onClick={() => void toggle()}>[ {state === "on" ? "disable" : "enable"} web push ]</button>}{note && <span className="error">{note}</span>}</div>;
+  return <div>{<button className="link" disabled={state === "busy"} onClick={() => void toggle()}>[ {state === "on" ? "disable" : "enable"} web push ]</button>}{note && <span className="error">{note}</span>}</div>;
+}
+
+/** Profile, notifications, theme, server (desktop), workspaces and sign out — one panel. */
+export function SettingsPanel({ me, names, theme, onToggleTheme, workspaces, currentWorkspaceId, serverInitial, onSaveProfile, onSaveServer, onAcceptInvite, onSignOut, onClose }: { me: string; names: Directory; theme: Theme; onToggleTheme: () => void; workspaces: Workspace[]; currentWorkspaceId: string; serverInitial?: string; onSaveProfile: (name: string, avatar: string) => Promise<void>; onSaveServer?: (url: string) => void; onAcceptInvite: (code: string) => Promise<void>; onSignOut: () => void; onClose: () => void }) {
+  const profile = names.profile(me);
+  const [name, setName] = useState(profile?.name ?? names.label(me));
+  const [avatar, setAvatar] = useState(profile?.avatar_url ?? "");
+  const [server, setServer] = useState(serverInitial ?? "");
+  const [code, setCode] = useState("");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const multiple = workspaces.length > 1;
+  return <Modal title="SETTINGS" onClose={onClose}><div className="modal-form settings-panel">
+    <form onSubmit={(e) => { e.preventDefault(); setError(""); onSaveProfile(name.trim(), avatar.trim()).then(() => setNote("profile saved")).catch((err) => setError(errorText(err))); }}><h3>profile</h3><div className="profile-preview"><Avatar id={me} name={name} url={avatar} size="large" /><span className="mono">{me}</span></div><label>display name<input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} /></label><label>avatar URL<input type="url" value={avatar} onChange={(e) => setAvatar(e.target.value)} placeholder="https://…" /></label><button>[ save profile ]</button></form>
+    <section><h3>notifications</h3><NotificationsToggle /></section>
+    <section><h3>theme</h3><button className="link" onClick={onToggleTheme}>[ {theme === "dark" ? "light" : "dark"} ]</button></section>
+    {multiple && <section><h3>workspace</h3><ul className="workspace-list">{workspaces.map((w) => <li key={w.workspace_id}><span>{w.name} <span className="muted">:{w.slug} · {w.role}</span></span>{w.workspace_id !== currentWorkspaceId && <button className="link" onClick={() => { localStorage.setItem("xmsg.workspace", w.workspace_id); location.reload(); }}>[ switch ]</button>}</li>)}</ul></section>}
+    <form onSubmit={(e) => { e.preventDefault(); onAcceptInvite(code.trim()).then(() => { setNote("invite accepted"); setCode(""); }).catch((err) => setNote(errorText(err))); }}><h3>invite</h3><label>accept invite code<input value={code} onChange={(e) => setCode(e.target.value)} required /></label><button>[ accept ]</button></form>
+    {onSaveServer && <form onSubmit={(e) => { e.preventDefault(); onSaveServer(server.trim()); }}><h3>server</h3><label>server URL<input value={server} onChange={(e) => setServer(e.target.value)} placeholder="https://…" spellCheck={false} /></label><p className="muted small">Changing the server reloads the app.</p><button>[ save server ]</button></form>}
+    {(note || error) && <p className={error ? "error" : "note-text"}>{error || note}</p>}
+    <button className="link sign-out" onClick={onSignOut}>[ sign out ]</button>
+  </div></Modal>;
+}
+
+export type WorkspaceRole = Workspace["role"];
+
+export interface AdminMember { user_id: string; name: string; avatar_url: string | null; role: WorkspaceRole }
+
+/** Workspace administration for owners and admins (ADR-0026); replaces the main column. */
+export function AdminPanel({ workspace, myRole, me, members, defaults, publicChannels, onRename, onAddDefault, onRemoveDefault, onSetRole, onRemoveMember, onCreateInvite, onClose }: { workspace: Workspace; myRole: WorkspaceRole; me: string; members: AdminMember[]; defaults: { channelId: string; name: string }[]; publicChannels: { channelId: string; name: string }[]; onRename: (name: string) => Promise<void>; onAddDefault: (channelId: string, addExistingMembers: boolean) => Promise<void>; onRemoveDefault: (channelId: string) => Promise<void>; onSetRole: (userId: string, role: "admin" | "member") => Promise<void>; onRemoveMember: (userId: string) => Promise<void>; onCreateInvite: () => Promise<string>; onClose: () => void }) {
+  const [tab, setTab] = useState<"workspace" | "channels" | "members" | "invites">("workspace");
+  const [name, setName] = useState(workspace.name);
+  const [pick, setPick] = useState(""); const [addExisting, setAddExisting] = useState(false);
+  const [invite, setInvite] = useState(""); const [copied, setCopied] = useState(false);
+  const [note, setNote] = useState("");
+  const run = (action: Promise<unknown>, ok: string) => action.then(() => setNote(ok)).catch((err) => setNote(errorText(err)));
+  const candidates = publicChannels.filter((c) => !defaults.some((d) => d.channelId === c.channelId));
+  return <section className="admin-panel"><header className="panel-title">ADMIN · {workspace.name.toUpperCase()}<button className="link" onClick={onClose}>×</button></header><nav className="admin-tabs">{(["workspace", "channels", "members", "invites"] as const).map((item) => <button key={item} className={`link ${tab === item ? "active" : ""}`} onClick={() => setTab(item)}>{item}</button>)}</nav>
+    {tab === "workspace" && <div className="modal-form"><form onSubmit={(e) => { e.preventDefault(); run(onRename(name.trim()), "workspace renamed"); }}><label>name<input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} /></label><button>[ save ]</button></form></div>}
+    {tab === "channels" && <div className="modal-form"><h3>default channels</h3><ul className="workspace-list">{defaults.map((d) => <li key={d.channelId}><span>#{d.name}</span><button className="link" onClick={() => run(onRemoveDefault(d.channelId), `removed #${d.name}`)}>[ remove ]</button></li>)}</ul>{candidates.length > 0 && <form onSubmit={(e) => { e.preventDefault(); if (!pick) return; run(onAddDefault(pick, addExisting).then(() => { setPick(""); setAddExisting(false); }), "default channel added"); }}><label>add from public channels<select value={pick} onChange={(e) => setPick(e.target.value)}><option value="">choose…</option>{candidates.map((c) => <option key={c.channelId} value={c.channelId}>#{c.name}</option>)}</select></label><label className="checkbox"><input type="checkbox" checked={addExisting} onChange={(e) => setAddExisting(e.target.checked)} />add existing members</label><button>[ add default ]</button></form>}{defaults.length === 0 && <p className="muted">no default channels yet — new members would land nowhere.</p>}</div>}
+    {tab === "members" && <div className="modal-form"><ul className="member-rows">{members.map((m) => <li key={m.user_id}><span>{m.name}{m.user_id === me ? " (you)" : ""} <span className="muted">· {m.role}</span></span>{myRole === "owner" && m.role !== "owner" && m.user_id !== me && <span className="member-actions"><select value={m.role} onChange={(e) => run(onSetRole(m.user_id, e.target.value as "admin" | "member"), `role updated`)}><option value="admin">admin</option><option value="member">member</option></select><button className="link" onClick={() => run(onRemoveMember(m.user_id), `removed ${m.name}`)}>[ remove ]</button></span>}</li>)}</ul></div>}
+    {tab === "invites" && <div className="modal-form"><button onClick={() => { setCopied(false); run(onCreateInvite().then((value) => { setInvite(value); }), "invite created"); }}>[ create invite link ]</button>{invite && <p className="invite-code">{invite} <button className="link" onClick={() => { void navigator.clipboard?.writeText(invite).then(() => setCopied(true)); }}>[ copy ]</button>{copied && <span className="muted"> copied</span>}</p>}<p className="muted small">anyone with the link can join {workspace.name}.</p></div>}
+    {note && <p className="note-text">{note}</p>}
+  </section>;
 }
 
 export { canPost };

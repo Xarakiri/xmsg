@@ -54,6 +54,8 @@ export interface Workspace {
   name: string;
   slug: string;
   role: "owner" | "admin" | "member";
+  /** False until the owner finished first-run setup (ADR-0026). Absent on older servers. */
+  setup_completed?: boolean;
 }
 
 export interface WorkspaceMember extends UserProfile {
@@ -416,8 +418,9 @@ export class Api {
     return (await call<{ workspaces: Workspace[] }>(`${this.endpoints.users}/v1/me/workspaces`, { method: "GET", token })).workspaces;
   }
 
-  createWorkspace(token: string, name: string, slug: string): Promise<Workspace> {
-    return call(`${this.endpoints.users}/v1/workspaces`, { method: "POST", token, body: json({ name, slug }) });
+  /** Owner/admin: rename the workspace and/or mark first-run setup done (ADR-0026). */
+  updateWorkspace(token: string, workspaceId: string, change: { name?: string; setup_completed?: true }): Promise<Workspace> {
+    return call(`${this.endpoints.users}/v1/workspaces/${workspaceId}`, { method: "PATCH", token, body: json(change) });
   }
 
   /** One page of members by user ID; pass `next` back as `after` for the following page. */
@@ -441,6 +444,54 @@ export class Api {
   /** Leave (your own ID) or remove someone (admins). */
   remove(token: string, channelId: string, userId: string): Promise<CommandOutcome> {
     return call(`${this.endpoints.channels}/v1/channels/${channelId}/members/${userId}`, { method: "DELETE", token });
+  }
+
+  /** The workspace's default channels (ADR-0026); any member. */
+  async defaultChannels(token: string, workspaceId: string): Promise<{ channelId: string; name: string }[]> {
+    const reply = await call<{ channels: { channel_id: string; name: string }[] }>(
+      `${this.endpoints.channels}/v1/workspaces/${workspaceId}/default-channels`,
+      { method: "GET", token },
+    );
+    return reply.channels.map((c) => ({ channelId: c.channel_id, name: c.name }));
+  }
+
+  /** Owner/admin: make a public channel a default. True when existing members are being added. */
+  async addDefaultChannel(token: string, workspaceId: string, channelId: string, addExistingMembers: boolean): Promise<boolean> {
+    const response = await activeFetch(`${this.endpoints.channels}/v1/workspaces/${workspaceId}/default-channels`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: json({ channel_id: channelId, add_existing_members: addExistingMembers }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new ApiError(response.status, (body as { error?: string }).error ?? response.statusText);
+    }
+    return response.status === 202;
+  }
+
+  /** Owner/admin: a default channel stops being one; members keep it (ADR-0026). */
+  async removeDefaultChannel(token: string, workspaceId: string, channelId: string): Promise<void> {
+    await call(`${this.endpoints.channels}/v1/workspaces/${workspaceId}/default-channels/${channelId}`, { method: "DELETE", token });
+  }
+
+  /** First sign-in: join the workspace's default channels (idempotent, ADR-0026). */
+  async joinDefaultChannels(token: string, workspaceId: string): Promise<string[]> {
+    const reply = await call<{ joined: string[] }>(`${this.endpoints.channels}/v1/me/default-channels/join`, {
+      method: "POST",
+      token,
+      body: json({ workspace_id: workspaceId }),
+    });
+    return reply.joined;
+  }
+
+  /** Owner: change a member's workspace role, as far as the API allows (403 otherwise). */
+  async updateWorkspaceMemberRole(token: string, workspaceId: string, userId: string, role: "admin" | "member"): Promise<void> {
+    await call(`${this.endpoints.users}/v1/workspaces/${workspaceId}/members/${userId}`, { method: "PATCH", token, body: json({ role }) });
+  }
+
+  /** Owner/admin: remove a member from the workspace (they keep no channels). */
+  async removeWorkspaceMember(token: string, workspaceId: string, userId: string): Promise<void> {
+    await call(`${this.endpoints.users}/v1/workspaces/${workspaceId}/members/${userId}`, { method: "DELETE", token });
   }
 }
 
