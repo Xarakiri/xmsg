@@ -14,7 +14,8 @@
 #   --email ADDRESS      for Let's Encrypt (--tls acme)
 #   --cert FILE --key FILE   your certificate and key (--tls cert), copied to ./certs
 #   --registry R --version V   use published images R/<name>:V instead of building
-#   --partitions N       Kafka partitions (default 16; fixed forever, ADR-0021)
+#   --partitions N       Kafka partitions (default 16, or 4 with --tiny; fixed forever, ADR-0021)
+#   --tiny               one user on an 8 GB VM: reduced memory limits and 4 partitions
 #   --search             also run search (OpenSearch and the indexer; +1.5 GB of memory)
 #   --calls              also run voice and video calls (LiveKit and TURN; open UDP 7882,
 #                        TCP 7881, and 3478 UDP/TCP plus UDP 49160-49200 for TURN)
@@ -26,7 +27,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-domain="" tls="" email="" cert="" key="" registry="" version="" partitions="" search="" calls="" start=1 ask=1
+domain="" tls="" email="" cert="" key="" registry="" version="" partitions="" tiny="" search="" calls="" start=1 ask=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain) domain="$2"; shift 2 ;;
@@ -37,14 +38,23 @@ while [[ $# -gt 0 ]]; do
     --registry) registry="$2"; shift 2 ;;
     --version) version="$2"; shift 2 ;;
     --partitions) partitions="$2"; shift 2 ;;
+    --tiny) tiny=1; shift ;;
     --search) search=1; shift ;;
     --calls) calls=1; shift ;;
     --no-start) start=0; shift ;;
     --yes|-y) ask=0; shift ;;
-    -h|--help) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
+
+if [[ -n "$tiny" ]]; then
+  if [[ -f docker-compose.local.yml ]]; then
+    echo "warning: keeping existing docker-compose.local.yml; tiny limits were not copied" >&2
+  else
+    cp docker-compose.tiny.yml docker-compose.local.yml
+  fi
+fi
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 fail() { echo "error: $*" >&2; exit 1; }
@@ -125,7 +135,11 @@ case "$tls" in
   *) fail "--tls must be acme, cert or internal" ;;
 esac
 
-: "${partitions:=16}"
+if [[ -n "$tiny" ]]; then
+  : "${partitions:=4}"
+else
+  : "${partitions:=16}"
+fi
 [[ "$partitions" =~ ^[0-9]+$ ]] || fail "--partitions must be a number"
 if [[ -n "$(existing XMSG_PARTITIONS)" && "$partitions" != "$(existing XMSG_PARTITIONS)" ]]; then
   fail "the partition count is fixed once set (ADR-0021); moving tiers is 'xmsgctl migrate-partitions'"

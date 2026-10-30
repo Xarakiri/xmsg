@@ -67,7 +67,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 stage="$work/$name"
 mkdir -p "$stage/images" "$stage/certs"
-cp README.md install.sh docker-compose.yml docker-compose.app.yml "$stage/"
+cp README.md install.sh docker-compose.yml docker-compose.app.yml docker-compose.tiny.yml "$stage/"
 cp -R caddy garage init "$stage/"
 cp certs/.gitignore "$stage/certs/"
 [[ -n "$xmsgctl" ]] && cp "$xmsgctl" "$stage/xmsgctl"
