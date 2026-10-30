@@ -6,6 +6,23 @@ import react from "@vitejs/plugin-react";
 // services (override with XMSG_AUTH_ORIGIN etc.), so the services need no CORS.
 const env = (name: string, fallback: string) => process.env[name] ?? fallback;
 const strip = (prefix: string) => (path: string) => path.slice(prefix.length);
+const proxyPaths = ["/auth", "/channels", "/users", "/messages", "/push", "/readstate", "/media", "/calls", "/ws"] as const;
+const localProxies = {
+  "/auth": { target: env("XMSG_AUTH_ORIGIN", "http://127.0.0.1:8081"), rewrite: strip("/auth") },
+  "/channels": { target: env("XMSG_CHANNELS_ORIGIN", "http://127.0.0.1:8082"), rewrite: strip("/channels") },
+  "/users": { target: env("XMSG_USERS_ORIGIN", "http://127.0.0.1:8084"), rewrite: strip("/users") },
+  "/messages": { target: env("XMSG_MESSAGES_ORIGIN", "http://127.0.0.1:8083"), rewrite: strip("/messages") },
+  "/push": { target: env("XMSG_PUSH_ORIGIN", "http://127.0.0.1:8086"), rewrite: strip("/push") },
+  "/readstate": { target: env("XMSG_READSTATE_ORIGIN", "http://127.0.0.1:8085"), rewrite: strip("/readstate") },
+  "/media": { target: env("XMSG_MEDIA_ORIGIN", "http://127.0.0.1:8087"), rewrite: strip("/media") },
+  "/calls": { target: env("XMSG_CALLS_ORIGIN", "http://127.0.0.1:8088"), rewrite: strip("/calls") },
+  "/ws": { target: env("XMSG_GATEWAY_ORIGIN", "ws://127.0.0.1:4000"), ws: true },
+};
+// XMSG_BACKEND points every service path at one TLS origin, preserving prefixes.
+const backend = process.env.XMSG_BACKEND;
+const proxy = backend
+  ? Object.fromEntries(proxyPaths.map((path) => [path, { target: backend, changeOrigin: true, secure: true, ...(path === "/ws" && { ws: true }) }]))
+  : localProxies;
 
 export default defineConfig({
   plugins: [react()],
@@ -13,16 +30,6 @@ export default defineConfig({
   publicDir: process.env.VITE_XMSG_DESKTOP === "1" ? false : "public",
   server: {
     port: 5173,
-    proxy: {
-      "/auth": { target: env("XMSG_AUTH_ORIGIN", "http://127.0.0.1:8081"), rewrite: strip("/auth") },
-      "/channels": { target: env("XMSG_CHANNELS_ORIGIN", "http://127.0.0.1:8082"), rewrite: strip("/channels") },
-      "/users": { target: env("XMSG_USERS_ORIGIN", "http://127.0.0.1:8084"), rewrite: strip("/users") },
-      "/messages": { target: env("XMSG_MESSAGES_ORIGIN", "http://127.0.0.1:8083"), rewrite: strip("/messages") },
-      "/push": { target: env("XMSG_PUSH_ORIGIN", "http://127.0.0.1:8086"), rewrite: strip("/push") },
-      "/readstate": { target: env("XMSG_READSTATE_ORIGIN", "http://127.0.0.1:8085"), rewrite: strip("/readstate") },
-      "/media": { target: env("XMSG_MEDIA_ORIGIN", "http://127.0.0.1:8087"), rewrite: strip("/media") },
-      "/calls": { target: env("XMSG_CALLS_ORIGIN", "http://127.0.0.1:8088"), rewrite: strip("/calls") },
-      "/ws": { target: env("XMSG_GATEWAY_ORIGIN", "ws://127.0.0.1:4000"), ws: true },
-    },
+    proxy,
   },
 });
