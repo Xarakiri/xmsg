@@ -69,13 +69,13 @@ These are starting points from the memory caps above, **not load-test results**:
 - Re-running `install.sh` keeps the secrets, so it's also how you change the domain or TLS settings.
 
 ## One user on a small VM
-For one user on an 8 GB VM, install with `--tiny`:
+For one user on an 8 GB VM with 4 GB of swap, install with `--tiny --search --calls`:
 
 ```bash
-./install.sh --tiny --domain chat.example.com --tls acme --email ops@example.com --yes
+./install.sh --tiny --search --calls --domain chat.example.com --tls acme --email ops@example.com --yes
 ```
 
-This uses `docker-compose.tiny.yml`, with container caps totaling about 5.1 GB, and defaults to 4 Kafka partitions instead of 16. An explicit `--partitions N` still wins. Search and calls are not enabled. If `docker-compose.local.yml` already exists, the installer warns and keeps it instead of applying the tiny limits.
+This uses `docker-compose.tiny.yml` and defaults to 4 Kafka partitions instead of 16. An explicit `--partitions N` still wins. Container caps may add up to more than 6 GB, but usage for one user stays below that; swap is required. If `docker-compose.local.yml` already exists, the installer warns and keeps it instead of applying the tiny limits.
 
 ## Day to day
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# One user on an 8 GB VM. Together these caps use about 5.1 GB, without search or calls.
+# One user on an 8 GB VM with 4 GB swap. Caps exceed 6 GB; actual one-user usage stays below that.
 services:
   kafka:
     mem_limit: 640m
@@ -49,4 +49,20 @@ services:
   presence:
     mem_limit: 128m
   push:
+    mem_limit: 128m
+  opensearch:
+    mem_limit: 640m
+    environment:
+      OPENSEARCH_JAVA_OPTS: -Xms256m -Xmx256m
+  debezium:
+    mem_limit: 512m
+    environment:
+      HEAP_OPTS: -Xms128m -Xmx256m
+  livekit:
+    mem_limit: 256m
+  coturn:
+    mem_limit: 64m
+  calls:
+    mem_limit: 128m
+  search-indexer:
     mem_limit: 128m
