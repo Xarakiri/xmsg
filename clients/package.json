@@ -2,6 +2,6 @@
   "name": "@xmsg/clients",
   "private": true,
   "license": "Apache-2.0",
-  "workspaces": ["core", "web"],
+  "workspaces": ["core", "web", "desktop"],
   "engines": { "node": ">=26" }
 }

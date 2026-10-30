@@ -1,0 +1,19 @@
+{
+  "name": "@xmsg/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "xmsg desktop app (Tauri 2), bundling the @xmsg/web build",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "dev": "VITE_XMSG_DESKTOP=1 tauri dev",
+    "build": "VITE_XMSG_DESKTOP=1 tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

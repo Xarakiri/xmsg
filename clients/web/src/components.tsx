@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { canPost, mentionCount, unread, type Channel, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit, type Workspace } from "@xmsg/client-core";
 import { AttachButton, Attachments, PendingFiles, useFileDrafts } from "./files.tsx";
 import { pushState, enablePush, disablePush, type PushState } from "./push.ts";
+import { isDesktop } from "./session.ts";
 
 export type Theme = "dark" | "light";
 
@@ -27,8 +28,8 @@ export function KeyHints({ inCall = false }: { inCall?: boolean }) {
 }
 
 export interface SidebarChannel { channel: Channel; title: string; presence?: Presence }
-export function Sidebar({ rooms, dms, calls, selected, onSelect, onNewChannel, onNewDm, onWorkspaces, onProfile, onSignOut }: { rooms: SidebarChannel[]; dms: SidebarChannel[]; calls: SidebarChannel[]; selected: string | null; onSelect: (id: string) => void; onNewChannel: () => void; onNewDm: () => void; onWorkspaces: () => void; onProfile: () => void; onSignOut: () => void }) {
-  return <aside className="sidebar"><SidebarSection title="CHANNELS" onAdd={onNewChannel} items={rooms} selected={selected} onSelect={onSelect} /><SidebarSection title="DIRECT" onAdd={onNewDm} items={dms} selected={selected} onSelect={onSelect} /><SidebarSection title="VOICE" items={calls} selected={selected} onSelect={onSelect} /><div className="sidebar-tools"><button className="link" onClick={onWorkspaces}>[ workspaces / invites ]</button><button className="link" onClick={onProfile}>[ profile / settings ]</button><NotificationsToggle /><button className="link" onClick={onSignOut}>[ sign out ]</button></div></aside>;
+export function Sidebar({ rooms, dms, calls, selected, onSelect, onNewChannel, onNewDm, onWorkspaces, onProfile, onServer, onSignOut }: { rooms: SidebarChannel[]; dms: SidebarChannel[]; calls: SidebarChannel[]; selected: string | null; onSelect: (id: string) => void; onNewChannel: () => void; onNewDm: () => void; onWorkspaces: () => void; onProfile: () => void; onServer?: () => void; onSignOut: () => void }) {
+  return <aside className="sidebar"><SidebarSection title="CHANNELS" onAdd={onNewChannel} items={rooms} selected={selected} onSelect={onSelect} /><SidebarSection title="DIRECT" onAdd={onNewDm} items={dms} selected={selected} onSelect={onSelect} /><SidebarSection title="VOICE" items={calls} selected={selected} onSelect={onSelect} /><div className="sidebar-tools"><button className="link" onClick={onWorkspaces}>[ workspaces / invites ]</button><button className="link" onClick={onProfile}>[ profile / settings ]</button>{onServer && <button className="link" onClick={onServer}>[ server ]</button>}<NotificationsToggle /><button className="link" onClick={onSignOut}>[ sign out ]</button></div></aside>;
 }
 function SidebarSection({ title, items, selected, onSelect, onAdd }: { title: string; items: SidebarChannel[]; selected: string | null; onSelect: (id: string) => void; onAdd?: () => void }) {
   return <section className="sidebar-section"><h2>{title}{onAdd && <button className="link" onClick={onAdd} aria-label={`New ${title.toLowerCase()}`}>+</button>}</h2><ul>{items.map(({ channel, title: label, presence }) => { const count = channel.muted ? 0 : unread(channel); const mentions = mentionCount(channel); return <li key={channel.id}><button className={`channel-item ${selected === channel.id ? "selected" : ""} ${channel.muted ? "muted" : ""}`} onClick={() => onSelect(channel.id)}><span className="selection">{selected === channel.id ? "▸" : " "}</span>{presence && <span className={`presence ${presence}`} />}<span className="channel-label">{label}</span>{mentions > 0 && selected !== channel.id ? <span className="unread">[@{mentions}]</span> : count > 0 && selected !== channel.id ? <span className="unread">[{count}]</span> : null}{title === "VOICE" && <span className="muted">({channel.call?.participants.length ?? 0})</span>}</button></li>; })}</ul></section>;
@@ -126,7 +127,7 @@ export function WorkspacesPanel({ workspaces, onCreate, onInvite, onAccept, onCl
 function NotificationsToggle() {
   const [state, setState] = useState<PushState | "busy">("busy"); const [note, setNote] = useState("");
   useEffect(() => { void pushState().then(setState).catch(() => setState("unsupported")); }, []);
-  if (state === "unsupported") return null;
+  if (isDesktop || state === "unsupported") return null;
   const toggle = async () => { setState("busy"); try { setState(state === "on" ? await disablePush() : await enablePush()); } catch (e) { setState("off"); setNote(errorText(e)); } };
   return <div>{state === "blocked" ? <span className="muted">notifications blocked</span> : <button className="link" disabled={state === "busy"} onClick={() => void toggle()}>[ {state === "on" ? "disable" : "enable"} web push ]</button>}{note && <span className="error">{note}</span>}</div>;
 }

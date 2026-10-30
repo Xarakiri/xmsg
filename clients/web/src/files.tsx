@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MAX_FILE_BYTES, type Attachment } from "@xmsg/client-core";
-import { api, session } from "./session.ts";
+import { api, isDesktop, session } from "./session.ts";
 
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -40,6 +40,14 @@ function useFileUrl(fileId: string, thumbnail: boolean): string | null | "error"
 /** Saves the file under its name (fetched with the token, then handed to the browser). */
 async function download(file: Attachment): Promise<void> {
   const blob = await api.fileBlob(await session.accessToken(), file.fileId);
+  if (isDesktop) {
+    // Native save dialog + write: the webview has no download sink.
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
+    const path = await save({ defaultPath: file.name });
+    if (path) await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

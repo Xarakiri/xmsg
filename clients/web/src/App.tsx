@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ApiError, canPost, fromSsoFragment, ringing, threadKey, unread, type ChatState, type SearchHit, type Workspace } from "@xmsg/client-core";
-import { api, session } from "./session.ts";
+import { api, DEFAULT_SERVER, isDesktop, saveServerUrl, serverUrl, session, validServerUrl } from "./session.ts";
 import { loadState } from "./storage.ts";
 import { useChat } from "./useChat.ts";
 import { useNames } from "./useNames.ts";
@@ -31,13 +31,45 @@ export function App() {
   const [me, setMe] = useState<string | null>(null);
   const [checking, setChecking] = useState(session.hasRefreshToken);
   const [theme, toggleTheme] = useTheme();
+  const [server, setServer] = useState(serverUrl());
   useEffect(() => {
     if (!checking) return;
     session.accessToken().then(() => setMe(session.userId)).catch(() => undefined).finally(() => setChecking(false));
   }, [checking]);
+  if (isDesktop && !server) return <ConnectScreen onConnect={(url) => { saveServerUrl(url); setServer(url); location.reload(); }} />;
   if (checking) return <div className="center muted">loading session…</div>;
   if (!me) return <><StatusLine workspace="" channel="not connected" status="offline" theme={theme} onToggle={toggleTheme} /><SignIn onSignedIn={setMe} /></>;
   return <Chat key={me} me={me} theme={theme} toggleTheme={toggleTheme} onSignOut={async () => { await session.logout(); setMe(null); }} />;
+}
+
+function ConnectScreen({ onConnect }: { onConnect: (url: string) => void }) {
+  const [url, setUrl] = useState(DEFAULT_SERVER);
+  const [error, setError] = useState("");
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = url.trim();
+    if (!validServerUrl(trimmed)) {
+      setError("Use an https URL (or http for localhost / 127.0.0.1)");
+      return;
+    }
+    onConnect(trimmed);
+  };
+  return (
+    <div className="terminal-app">
+      <StatusLine workspace="" channel="not connected" status="offline" theme="dark" onToggle={() => undefined} />
+      <div className="center">
+        <form className="modal-form connect-screen" onSubmit={submit}>
+          <h1>xmsg · connect</h1>
+          <p className="muted">server URL</p>
+          <label>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} autoFocus spellCheck={false} />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button type="submit">[ connect ↵ ]</button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
@@ -45,7 +77,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
   const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [passwordAgain, setPasswordAgain] = useState("");
   const [code, setCode] = useState(""); const [name, setName] = useState(""); const [error, setError] = useState(sso.error ?? ""); const [busy, setBusy] = useState(false);
   const [providers, setProviders] = useState<{ id: string; name: string; url: string }[]>([]);
-  useEffect(() => { api.ssoProviders().then((items) => setProviders(items.map((item) => ({ ...item, url: api.ssoStartUrl(item.id, location.pathname) })))).catch(() => setProviders([])); }, []);
+  useEffect(() => { if (!isDesktop) api.ssoProviders().then((items) => setProviders(items.map((item) => ({ ...item, url: api.ssoStartUrl(item.id, location.pathname) })))).catch(() => setProviders([])); }, []);
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setBusy(true); setError("");
     try {
@@ -74,7 +106,7 @@ function ChatView({ me, initial, theme, toggleTheme, onSignOut }: { me: string; 
   const [query, setQuery] = useState(""); const [hits, setHits] = useState<SearchHit[] | null>(null); const [searchNote, setSearchNote] = useState("");
   const [threadOf, setThreadOf] = useState<number | null>(null); const [inCall, setInCall] = useState<string | null>(null); const [declined, setDeclined] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(() => new URLSearchParams(location.search).get("channel"));
-  const [modal, setModal] = useState<"none" | "channel" | "dm" | "workspaces" | "profile">("none");
+  const [modal, setModal] = useState<"none" | "channel" | "dm" | "workspaces" | "profile" | "server">("none");
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const searchInput = useRef<HTMLInputElement>(null);
   const leaveCall = useCallback(() => setInCall(null), []);
@@ -119,7 +151,7 @@ function ChatView({ me, initial, theme, toggleTheme, onSignOut }: { me: string; 
   const closePanels = () => { setThreadOf(null); setInCall(null); };
 
   return <div className="terminal-app"><StatusLine workspace={workspaces[0]?.slug ?? "default"} channel={currentTitle} status={status} theme={theme} onToggle={toggleTheme} /><div className={`workspace-grid ${currentRoot || inCall ? "with-panel" : ""}`}>
-    <Sidebar rooms={rooms.map((channel) => ({ channel, title: channelTitle(channel, me, names) }))} dms={dms.map((channel) => { const other = channel.kind === "dm" ? channel.members.find((m) => m !== me) : undefined; return { channel, title: channelTitle(channel, me, names), presence: other && presenceKnown(other) ? presenceOf(other) : undefined }; })} calls={calls.map((channel) => ({ channel, title: channel.call?.huddle ? `huddle-${channel.id.slice(-4)}` : channelTitle(channel, me, names) }))} selected={selected} onSelect={(id) => { setSelected(id); setThreadOf(null); setHits(null); }} onNewChannel={() => setModal("channel")} onNewDm={() => setModal("dm")} onWorkspaces={() => setModal("workspaces")} onProfile={() => setModal("profile")} onSignOut={onSignOut} />
+    <Sidebar rooms={rooms.map((channel) => ({ channel, title: channelTitle(channel, me, names) }))} dms={dms.map((channel) => { const other = channel.kind === "dm" ? channel.members.find((m) => m !== me) : undefined; return { channel, title: channelTitle(channel, me, names), presence: other && presenceKnown(other) ? presenceOf(other) : undefined }; })} calls={calls.map((channel) => ({ channel, title: channel.call?.huddle ? `huddle-${channel.id.slice(-4)}` : channelTitle(channel, me, names) }))} selected={selected} onSelect={(id) => { setSelected(id); setThreadOf(null); setHits(null); }} onNewChannel={() => setModal("channel")} onNewDm={() => setModal("dm")} onWorkspaces={() => setModal("workspaces")} onProfile={() => setModal("profile")} onServer={isDesktop ? () => setModal("server") : undefined} onSignOut={onSignOut} />
     <main className="main-terminal"><SearchBar query={query} setQuery={setQuery} inputRef={searchInput} onSubmit={() => void runSearch()} /><div id="screen-share-slot" />{syncError && <p className="note-text">couldn't load history</p>}{Object.values(state.channels).filter((c) => c.id !== inCall && c.call && ringing(c, me) && !declined.has(c.call.callId)).map((c) => <div key={c.id} className="call-ring" role="alert"><span>{names.label(c.call!.participants[0]!)} is calling</span><button onClick={() => { setSelected(c.id); setInCall(c.id); }}>join</button><button onClick={() => setDeclined((d) => new Set(d).add(c.call!.callId))}>decline</button></div>)}
       {hits !== null ? <SearchResults hits={hits} note={searchNote} me={me} names={names} channelName={(id) => state.channels[id] ? channelTitle(state.channels[id]!, me, names) : "unknown"} onPick={(hit) => { setHits(null); setSelected(hit.channelId); setThreadOf(hit.reply ? hit.rootMsgSeq : null); const root = hit.reply ? (state.messages[hit.channelId] ?? []).find((m) => m.msgSeq === hit.rootMsgSeq) : undefined; if (root?.messageId) openThread(hit.channelId, { msgSeq: root.msgSeq, messageId: root.messageId }); }} onClose={() => setHits(null)} /> : current ? <section className="conversation"><ConversationHeader channel={current} title={currentTitle} me={me} names={names} onCall={() => { setInCall(current.id); setThreadOf(null); }} onMute={() => setMuted(current.id, !current.muted)} onInvite={current.kind !== "dm" ? () => { const user = prompt("User ID to invite")?.trim(); if (user) void session.accessToken().then((token) => api.join(token, current.id, user)).catch((e) => alert(errorText(e))); } : undefined} onLeave={current.kind !== "dm" ? () => { void session.accessToken().then((token) => api.remove(token, current.id, me)).catch((e) => alert(errorText(e))); } : undefined} /><ol className="message-list">{(state.messages[current.id] ?? []).map((m) => <MessageRow key={m.key} message={m} me={me} names={names} presence={presenceKnown(m.authorId) ? presenceOf(m.authorId) : undefined} onOpenThread={() => openThreadFor(m)} onReact={(emoji, add) => react(current.id, m.msgSeq, emoji, add)} onRetry={() => retry(m.key)} onEdit={m.authorId === me ? async (body) => { await api.editMessage(await session.accessToken(), current.id, m.msgSeq, body, crypto.randomUUID()); } : undefined} onDelete={m.authorId === me ? () => { if (confirm("Delete this message for everyone?")) void session.accessToken().then((token) => api.deleteMessage(token, current.id, m.msgSeq)).catch((e) => alert(errorText(e))); } : undefined} />)}</ol><div className="typing">{typingIn(current.id).length > 0 && `${typingIn(current.id).map((id) => names.label(id)).join(", ")} typing…`}</div><Prompt channel={currentTitle} members={current.members} me={me} names={names} onSend={(body, files) => send(current.id, body, undefined, files)} onUpload={(file) => upload(current.id, file)} onTyping={() => notifyTyping(current.id)} onCommand={(command) => { if (command === "/huddle") { setInCall(current.id); setThreadOf(null); } }} readOnly={!canPost(current, me)} /></section> : <div className="center muted">{channels.length ? "select a conversation" : "create a channel or start a DM"}</div>}
     </main>
@@ -128,8 +160,37 @@ function ChatView({ me, initial, theme, toggleTheme, onSignOut }: { me: string; 
   </div><KeyHints inCall={Boolean(inCall)} />
   {modal === "channel" || modal === "dm" ? <CreatePanel kind={modal} onClose={() => setModal("none")} onCreated={(id, name) => { if (name) nameChannel(id, name); setSelected(id); setModal("none"); }} /> : null}
   {modal === "profile" && <ProfilePanel me={me} names={names} onSave={async (name, avatar) => names.remember(await api.updateMe(await session.accessToken(), { name, avatar_url: avatar || null }))} onClose={() => setModal("none")} />}
+  {modal === "server" && <ServerPanel onClose={() => setModal("none")} />}
   {modal === "workspaces" && <WorkspacesPanel workspaces={workspaces} onCreate={async (name, slug) => { await api.createWorkspace(await session.accessToken(), name, slug); await refreshWorkspaces(); }} onInvite={async (id) => (await api.createInvite(await session.accessToken(), id)).code} onAccept={async (code) => { await api.acceptInvite(await session.accessToken(), code); await refreshWorkspaces(); }} onClose={() => setModal("none")} />}
   </div>;
+}
+
+function ServerPanel({ onClose }: { onClose: () => void }) {
+  const [url, setUrl] = useState(serverUrl());
+  const [error, setError] = useState("");
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = url.trim();
+    if (!validServerUrl(trimmed)) {
+      setError("Use an https URL (or http for localhost / 127.0.0.1)");
+      return;
+    }
+    saveServerUrl(trimmed);
+    location.reload();
+  };
+  return (
+    <Modal title="SERVER" onClose={onClose}>
+      <form className="modal-form" onSubmit={submit}>
+        <label>
+          server URL
+          <input value={url} onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoFocus />
+        </label>
+        {error && <p className="error">{error}</p>}
+        <p className="muted small">Changing the server reloads the app.</p>
+        <button type="submit">[ save ↵ ]</button>
+      </form>
+    </Modal>
+  );
 }
 
 function CreatePanel({ kind, onClose, onCreated }: { kind: "channel" | "dm"; onClose: () => void; onCreated: (id: string, name?: string) => void }) {
