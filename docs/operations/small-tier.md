@@ -6,6 +6,7 @@ The Small tier is xmsg on one Linux machine with Docker Compose, for up to about
 - [What runs](#what-runs)
 - [Sizing](#sizing)
 - [Install](#install)
+- [One user on a small VM](#one-user-on-a-small-vm)
 - [Day to day](#day-to-day)
 - [Backups](#backups)
 - [Upgrades](#upgrades)
@@ -66,6 +67,15 @@ These are starting points from the memory caps above, **not load-test results**:
 - **Search** (`--search`) needs another 1.5 GB of memory. It stays on once enabled.
 - **Calls** (`--calls`, [ADR-0025](../adr/0025-voice-and-video-calls.md)): voice and video in DMs, channel huddles and screen sharing, through LiveKit and coturn (about 1.25 GB more memory). Open UDP 7882 and TCP 7881 (LiveKit's media), and 3478 UDP/TCP plus UDP 49160–49200 (TURN, for people whose networks block the others). LiveKit finds the machine's public address over STUN; where it can't (air-gapped, or behind NAT with a known address), set `XMSG_LIVEKIT_NODE_IP` (and `XMSG_LIVEKIT_EXTERNAL_IP=false`) in `.env`. Calls stay on once enabled.
 - Re-running `install.sh` keeps the secrets, so it's also how you change the domain or TLS settings.
+
+## One user on a small VM
+For one user on an 8 GB VM with 4 GB of swap, install with `--tiny --search --calls`:
+
+```bash
+./install.sh --tiny --search --calls --domain chat.example.com --tls acme --email ops@example.com --yes
+```
+
+This uses `docker-compose.tiny.yml` and defaults to 4 Kafka partitions instead of 16. An explicit `--partitions N` still wins. Container caps may add up to more than 6 GB, but usage for one user stays below that; swap is required. If `docker-compose.local.yml` already exists, the installer warns and keeps it instead of applying the tiny limits.
 
 ## Day to day
 

@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# One user on an 8 GB VM with 4 GB swap. Caps exceed 6 GB; actual one-user usage stays below that.
+services:
+  kafka:
+    mem_limit: 640m
+    environment:
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx256m
+  cassandra:
+    mem_limit: 1200m
+    environment:
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+  sequencer:
+    mem_limit: 384m
+    environment:
+      JAVA_OPTS: -Xms128m -Xmx192m
+  postgres:
+    mem_limit: 256m
+  gateway:
+    mem_limit: 256m
+  media:
+    mem_limit: 256m
+  valkey:
+    mem_limit: 128m
+  nats:
+    mem_limit: 128m
+  garage:
+    mem_limit: 128m
+  auth:
+    mem_limit: 128m
+  users:
+    mem_limit: 128m
+  channels:
+    mem_limit: 128m
+  messages:
+    mem_limit: 128m
+  readstate:
+    mem_limit: 128m
+  persister:
+    mem_limit: 128m
+  fanout:
+    mem_limit: 128m
+  outbox-relay:
+    mem_limit: 128m
+  meta-relay:
+    mem_limit: 128m
+  reaction-batcher:
+    mem_limit: 128m
+  presence:
+    mem_limit: 128m
+  push:
+    mem_limit: 128m
+  opensearch:
+    mem_limit: 640m
+    environment:
+      OPENSEARCH_JAVA_OPTS: -Xms256m -Xmx256m
+  debezium:
+    mem_limit: 512m
+    environment:
+      HEAP_OPTS: -Xms128m -Xmx256m
+  livekit:
+    mem_limit: 256m
+  coturn:
+    mem_limit: 64m
+  calls:
+    mem_limit: 128m
+  search-indexer:
+    mem_limit: 128m
