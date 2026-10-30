@@ -26,6 +26,8 @@ const proxy = backend
 
 export default defineConfig({
   plugins: [react()],
+  // The desktop build (VITE_XMSG_DESKTOP=1) ships no service worker: web push stays web-only.
+  publicDir: process.env.VITE_XMSG_DESKTOP === "1" ? false : "public",
   server: {
     port: 5173,
     proxy,

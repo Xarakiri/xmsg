@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "xmsg-desktop"
+version = "0.0.0"
+description = "xmsg desktop app (Tauri 2), bundling the @xmsg/web build"
+edition = "2021"
+rust-version = "1.77"
+license = "Apache-2.0"
+publish = false
+
+# Standalone crate: not a member of the repository's root Cargo workspace.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-http = "2"

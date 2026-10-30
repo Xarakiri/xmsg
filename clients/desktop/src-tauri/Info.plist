@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>xmsg uses the microphone for voice and video calls.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>xmsg uses the camera for video calls.</string>
+</dict>
+</plist>
