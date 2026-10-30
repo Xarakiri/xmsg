@@ -373,10 +373,25 @@ impl Store for Postgres {
                 .bind(name)
                 .execute(&mut *tx)
                 .await?;
-                sqlx::query("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (1, $1, 'member')")
-                    .bind(new_id)
+                // The first account owns the default workspace (ADR-0026); same lock
+                // and rule as `create_user`.
+                sqlx::query("SELECT pg_advisory_xact_lock(726026)")
                     .execute(&mut *tx)
                     .await?;
+                let has_owner: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM workspace_members \
+                     WHERE workspace_id = 1 AND role = 'owner')",
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+                let role = if has_owner { "member" } else { "owner" };
+                sqlx::query(
+                    "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (1, $1, $2)",
+                )
+                .bind(new_id)
+                .bind(role)
+                .execute(&mut *tx)
+                .await?;
                 new_id
             }
         };
@@ -400,8 +415,19 @@ impl Store for Postgres {
         name: &str,
     ) -> Result<(), StoreError> {
         // Joining the default workspace commits with the user, so no account exists
-        // outside every workspace (where nobody could see or message it).
+        // outside every workspace (where nobody could see or message it). The first
+        // account owns the workspace (ADR-0026): the transaction-scoped advisory lock
+        // serializes concurrent first sign-ups, so exactly one of them sees no owner.
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(726026)")
+            .execute(&mut *tx)
+            .await?;
+        let has_owner: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM workspace_members \
+             WHERE workspace_id = 1 AND role = 'owner')",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
         sqlx::query("INSERT INTO users (id, email, password_hash, name) VALUES ($1, $2, $3, $4)")
             .bind(id)
             .bind(email)
@@ -409,10 +435,12 @@ impl Store for Postgres {
             .bind(name)
             .execute(&mut *tx)
             .await?;
+        let role = if has_owner { "member" } else { "owner" };
         sqlx::query(
-            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (1, $1, 'member')",
+            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (1, $1, $2)",
         )
         .bind(id)
+        .bind(role)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;

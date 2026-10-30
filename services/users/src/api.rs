@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use chrono::{Duration, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer};
@@ -39,6 +39,7 @@ pub fn router<S: Store>(app: Arc<App<S>>) -> Router {
         .route("/v1/me", get(me::<S>).patch(update_me::<S>))
         .route("/v1/users", get(users::<S>))
         .route("/v1/workspaces", post(create_workspace::<S>))
+        .route("/v1/workspaces/{id}", patch(update_workspace::<S>))
         .route("/v1/me/workspaces", get(my_workspaces::<S>))
         .route("/v1/workspaces/{id}/members", get(members::<S>))
         .route("/v1/workspaces/{id}/invites", post(create_invite::<S>))
@@ -273,7 +274,13 @@ async fn my_workspaces<S: Store>(
         .await?
         .iter()
         .map(|w| {
-            json!({ "workspace_id": w.id.to_string(), "name": w.name, "slug": w.slug, "role": w.role })
+            json!({
+                "workspace_id": w.id.to_string(),
+                "name": w.name,
+                "slug": w.slug,
+                "role": w.role,
+                "setup_completed": w.setup_completed,
+            })
         })
         .collect();
     Ok(Json(json!({ "workspaces": list })))
@@ -289,6 +296,52 @@ async fn require_member<S: Store>(
         .role(workspace_id, user_id)
         .await?
         .ok_or(ApiError::NotFound("unknown workspace"))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateWorkspace {
+    name: Option<String>,
+    setup_completed: Option<bool>,
+}
+
+/// First-run setup and renaming (ADR-0026): owners and admins. `setup_completed` only
+/// ever turns true; completing it again is a no-op.
+async fn update_workspace<S: Store>(
+    State(app): State<Arc<App<S>>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateWorkspace>,
+) -> Result<Json<Value>, ApiError> {
+    let me = caller(&app, &headers).await?;
+    let workspace_id = parse_id(&id)?;
+    let role = require_member(&app, workspace_id, me).await?;
+    if role != "owner" && role != "admin" {
+        return Err(ApiError::Forbidden(
+            "only owners and admins change the workspace",
+        ));
+    }
+    if req.setup_completed == Some(false) {
+        return Err(ApiError::BadRequest(
+            "setup_completed can only be set to true",
+        ));
+    }
+    let name = req.name.as_deref().map(valid_name).transpose()?;
+    let Some((name, setup_completed)) = app
+        .store
+        .update_workspace(workspace_id, name.as_deref(), req.setup_completed.is_some())
+        .await?
+    else {
+        return Err(ApiError::NotFound("unknown workspace"));
+    };
+    tracing::info!(
+        workspace_id,
+        user_id = me,
+        setup_completed,
+        "workspace updated"
+    );
+    Ok(Json(
+        json!({ "workspace_id": workspace_id.to_string(), "name": name, "setup_completed": setup_completed }),
+    ))
 }
 
 #[derive(Deserialize)]

@@ -10,6 +10,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use xmsg_authn::{Error as AuthError, Verifier};
@@ -50,6 +51,18 @@ pub fn router<S: Store, L: EventLog, M: Memberships>(app: Arc<App<S, L, M>>) -> 
             axum::routing::put(put_settings::<S, L, M>),
         )
         .route("/v1/dms", post(create_dm::<S, L, M>))
+        .route(
+            "/v1/workspaces/{id}/default-channels",
+            get(list_default_channels::<S, L, M>).post(add_default_channel::<S, L, M>),
+        )
+        .route(
+            "/v1/workspaces/{id}/default-channels/{channel_id}",
+            delete(remove_default_channel::<S, L, M>),
+        )
+        .route(
+            "/v1/me/default-channels/join",
+            post(join_default_channels::<S, L, M>),
+        )
         .route("/v1/channels/{channel_id}/members", post(join::<S, L, M>))
         .route(
             "/v1/channels/{channel_id}/members/{user_id}",
@@ -59,6 +72,7 @@ pub fn router<S: Store, L: EventLog, M: Memberships>(app: Arc<App<S, L, M>>) -> 
         .with_state(app)
 }
 
+#[derive(Debug)]
 pub enum ApiError {
     BadRequest(&'static str),
     Unauthorized,
@@ -490,6 +504,205 @@ async fn join<S: Store, L: EventLog, M: Memberships>(
     .await
 }
 
+/// Default channels of a workspace (ADR-0026): any member may list them.
+async fn list_default_channels<S: Store, L, M>(
+    State(app): State<Arc<App<S, L, M>>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let me = caller(&app, &headers).await?;
+    let workspace_id = parse_id(&id)?;
+    if app.store.workspace_role(workspace_id, me).await?.is_none() {
+        return Err(ApiError::NotFound("unknown workspace"));
+    }
+    let channels: Vec<Value> = app
+        .store
+        .default_channels(workspace_id)
+        .await?
+        .iter()
+        .map(|(channel_id, name)| {
+            json!({ "channel_id": channel_id.to_string(), "name": name.clone().unwrap_or_default() })
+        })
+        .collect();
+    Ok(Json(json!({ "channels": channels })))
+}
+
+/// The caller's role, or 404 for non-members so outsiders can't probe workspaces.
+async fn require_workspace_admin<S: Store, L, M>(
+    app: &App<S, L, M>,
+    workspace_id: i64,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    match app.store.workspace_role(workspace_id, user_id).await? {
+        None => Err(ApiError::NotFound("unknown workspace")),
+        Some(role) if role == "owner" || role == "admin" => Ok(()),
+        Some(_) => Err(ApiError::Forbidden(
+            "only owners and admins manage default channels",
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AddDefaultChannel {
+    channel_id: String,
+    /// Also join the members who already onboarded (in the background).
+    #[serde(default)]
+    add_existing_members: bool,
+}
+
+/// Makes a public channel a default (ADR-0026). 204 on its own; 202 when the
+/// existing members are being added in the background.
+async fn add_default_channel<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<AddDefaultChannel>,
+) -> Result<StatusCode, ApiError> {
+    let me = caller(&app, &headers).await?;
+    let workspace_id = parse_id(&id)?;
+    require_workspace_admin(&app, workspace_id, me).await?;
+    let channel_id = parse_id(&req.channel_id)?;
+    let Some((channel_ws, kind)) = app.store.channel_info(channel_id).await? else {
+        return Err(ApiError::NotFound("unknown channel"));
+    };
+    if channel_ws != workspace_id {
+        return Err(ApiError::BadRequest("channel is in another workspace"));
+    }
+    if kind != "public" {
+        return Err(ApiError::BadRequest(
+            "only public channels can be default channels",
+        ));
+    }
+    app.store
+        .add_default_channel(workspace_id, channel_id, me)
+        .await?;
+    tracing::info!(
+        workspace_id,
+        channel_id,
+        user_id = me,
+        "default channel added"
+    );
+    if req.add_existing_members {
+        tokio::spawn(async move { add_existing_members(&app, workspace_id, channel_id).await });
+        return Ok(StatusCode::ACCEPTED);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Joins everyone who already onboarded onto the defaults (they'd otherwise miss the
+/// new channel), skipping current members — someone who left stays out. Bounded
+/// concurrency; a failed command is logged and doesn't stop the rest.
+async fn add_existing_members<S: Store, L: EventLog, M: Memberships>(
+    app: &App<S, L, M>,
+    workspace_id: i64,
+    channel_id: i64,
+) {
+    let members = match app.store.onboarded_members(workspace_id).await {
+        Ok(members) => members,
+        Err(e) => {
+            tracing::error!(workspace_id, channel_id, error = %e, "listing members for a default channel failed");
+            return;
+        }
+    };
+    futures_util::stream::iter(members)
+        .for_each_concurrent(8, |user_id| async move {
+            let already = app
+                .memberships
+                .channels_of(user_id)
+                .await
+                .map(|channels| channels.iter().any(|c| c.channel_id == channel_id))
+                .unwrap_or(false);
+            if already {
+                return;
+            }
+            let request_id = request_id();
+            if let Err(e) = send_command(
+                app,
+                channel_id,
+                user_id,
+                inbound_event::Payload::MemberJoinRequested(MemberJoinRequested { user_id }),
+                &request_id,
+            )
+            .await
+            {
+                tracing::warn!(workspace_id, channel_id, user_id, error = ?e, "adding an existing member to a default channel failed");
+            }
+        })
+        .await;
+}
+
+/// Removing a default channel never removes members. Idempotent: 204 either way.
+async fn remove_default_channel<S: Store, L, M>(
+    State(app): State<Arc<App<S, L, M>>>,
+    headers: HeaderMap,
+    Path((id, channel_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let me = caller(&app, &headers).await?;
+    let (workspace_id, channel_id) = (parse_id(&id)?, parse_id(&channel_id)?);
+    require_workspace_admin(&app, workspace_id, me).await?;
+    app.store
+        .remove_default_channel(workspace_id, channel_id)
+        .await?;
+    tracing::info!(
+        workspace_id,
+        channel_id,
+        user_id = me,
+        "default channel removed"
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct JoinDefaultChannels {
+    workspace_id: String,
+}
+
+/// First sign-in join onto the workspace's default channels (ADR-0026): idempotent,
+/// and never rejoins someone who onboarded before and later left a default channel.
+async fn join_default_channels<S: Store, L: EventLog, M: Memberships>(
+    State(app): State<Arc<App<S, L, M>>>,
+    headers: HeaderMap,
+    Json(req): Json<JoinDefaultChannels>,
+) -> Result<Json<Value>, ApiError> {
+    let me = caller(&app, &headers).await?;
+    let workspace_id = parse_id(&req.workspace_id)?;
+    if app.store.workspace_role(workspace_id, me).await?.is_none() {
+        return Err(ApiError::NotFound("unknown workspace"));
+    }
+    if app.store.defaults_joined(workspace_id, me).await? {
+        return Ok(Json(json!({ "joined": Vec::<String>::new() })));
+    }
+    let mine: std::collections::HashSet<i64> = app
+        .memberships
+        .channels_of(me)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "membership read failed");
+            ApiError::Unavailable
+        })?
+        .iter()
+        .map(|c| c.channel_id)
+        .collect();
+    let mut joined = Vec::new();
+    for (channel_id, _) in app.store.default_channels(workspace_id).await? {
+        if mine.contains(&channel_id) {
+            continue;
+        }
+        let request_id = request_id();
+        send_command(
+            &app,
+            channel_id,
+            me,
+            inbound_event::Payload::MemberJoinRequested(MemberJoinRequested { user_id: me }),
+            &request_id,
+        )
+        .await?;
+        joined.push(channel_id.to_string());
+    }
+    app.store.mark_defaults_joined(workspace_id, me).await?;
+    Ok(Json(json!({ "joined": joined })))
+}
+
 /// Removes `user_id` (admins), or leaves when it's the caller.
 async fn kick<S: Store, L: EventLog, M: Memberships>(
     State(app): State<Arc<App<S, L, M>>>,
@@ -540,6 +753,32 @@ async fn set_role<S: Store, L: EventLog, M: Memberships>(
     .await
 }
 
+/// Sends a membership command without waiting for the sequencer's verdict: what the
+/// default-channel flows use, so sequencer and fan-out see ordinary joins.
+async fn send_command<S, L: EventLog, M>(
+    app: &App<S, L, M>,
+    channel_id: i64,
+    actor: i64,
+    payload: inbound_event::Payload,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    let event = InboundEvent {
+        channel_id,
+        // The sequencer takes the workspace from the channel's head.
+        workspace_id: 0,
+        actor_id: actor,
+        // A retried produce of the same command is dropped by the sequencer.
+        dedupe_id: format!("cmd:{request_id}"),
+        request_id: request_id.to_string(),
+        payload: Some(payload),
+    };
+    app.log.append(&event).await.map_err(|e| {
+        tracing::warn!(channel_id, error = %e, "membership command not sent");
+        ApiError::Unavailable
+    })?;
+    Ok(())
+}
+
 /// Sends a membership command and waits for the sequencer's verdict (ADR-0006).
 async fn command<S, L: EventLog, M>(
     app: &App<S, L, M>,
@@ -548,21 +787,8 @@ async fn command<S, L: EventLog, M>(
     payload: inbound_event::Payload,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let request_id = request_id();
-    let event = InboundEvent {
-        channel_id,
-        // The sequencer takes the workspace from the channel's head.
-        workspace_id: 0,
-        actor_id: actor,
-        // A retried produce of the same command is dropped by the sequencer.
-        dedupe_id: format!("cmd:{request_id}"),
-        request_id: request_id.clone(),
-        payload: Some(payload),
-    };
     let waiter = app.pending.register(&request_id);
-    app.log.append(&event).await.map_err(|e| {
-        tracing::warn!(channel_id, error = %e, "membership command not sent");
-        ApiError::Unavailable
-    })?;
+    send_command(app, channel_id, actor, payload, &request_id).await?;
     let Some(result) = waiter.wait(app.command_timeout).await else {
         // Sent but not yet decided: the client learns the outcome from the channel's events.
         return Ok((

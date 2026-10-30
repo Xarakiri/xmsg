@@ -416,6 +416,19 @@ mod tests {
         codes: Mutex<HashMap<String, (i64, i64, bool)>>,
     }
 
+    impl Memory {
+        /// Joins the default workspace as `owner` when it has none, else `member`
+        /// (ADR-0026), mirroring the Postgres store's advisory-lock rule.
+        fn join_default(&self, user_id: i64) {
+            let mut members = self.members.lock().unwrap();
+            let has_owner = members.values().any(|r| r == "owner");
+            members.insert(
+                (1, user_id),
+                if has_owner { "member" } else { "owner" }.into(),
+            );
+        }
+    }
+
     impl Store for Memory {
         async fn sso_required(&self, user_id: i64) -> Result<bool, StoreError> {
             let enforced = self.enforced.lock().unwrap();
@@ -494,13 +507,19 @@ mod tests {
             }
             let id = {
                 let mut users = self.users.lock().unwrap();
-                users
-                    .entry(email.into())
-                    .or_insert(Credentials {
-                        user_id: new_id,
-                        password_hash: None,
-                    })
-                    .user_id
+                if let Some(c) = users.get(email) {
+                    c.user_id
+                } else {
+                    users.insert(
+                        email.into(),
+                        Credentials {
+                            user_id: new_id,
+                            password_hash: None,
+                        },
+                    );
+                    self.join_default(new_id);
+                    new_id
+                }
             };
             self.links.lock().unwrap().insert(key, id);
             Ok(id)
@@ -523,6 +542,8 @@ mod tests {
                     password_hash: Some(hash.into()),
                 },
             );
+            drop(users);
+            self.join_default(id);
             Ok(())
         }
         async fn credentials(&self, email: &str) -> Result<Option<Credentials>, StoreError> {
@@ -898,6 +919,59 @@ mod tests {
         )
         .await;
         assert_eq!(email.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn the_first_account_owns_the_default_workspace_the_rest_are_members() {
+        let (app, auth) = app();
+        signed_up(&app).await;
+        let ada = auth
+            .store
+            .users
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .user_id;
+        assert_eq!(
+            auth.store.role(1, ada).await.unwrap().as_deref(),
+            Some("owner")
+        );
+        let (status, _) = call(
+            &app,
+            "/v1/signup",
+            serde_json::json!({"email": "bob@example.org", "password": "analytical engine", "name": "Bob"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let bob = auth.store.users.lock().unwrap()["bob@example.org"].user_id;
+        assert_eq!(
+            auth.store.role(1, bob).await.unwrap().as_deref(),
+            Some("member")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_first_signup_by_sso_owns_the_workspace_too() {
+        let (app, auth) = with_sso(true);
+        let (_, to_idp) = get(&app, "/v1/sso/fake/start").await;
+        let (status, back) = get(
+            &app,
+            &format!(
+                "/v1/sso/fake/callback?code=sub-owner&state={}",
+                query_param(&to_idp, "state")
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert!(back.contains("#access_token="), "{back}");
+        let id: i64 = query_param(&back, "user_id").parse().unwrap();
+        assert_eq!(
+            auth.store.role(1, id).await.unwrap().as_deref(),
+            Some("owner"),
+            "the first account, however it signs up, owns the workspace"
+        );
     }
 
     #[tokio::test]

@@ -36,6 +36,8 @@ pub struct Workspace {
     pub slug: String,
     /// The caller's role in it: `owner`, `admin` or `member`.
     pub role: String,
+    /// The owner finished first-run setup (ADR-0026).
+    pub setup_completed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -118,6 +120,21 @@ pub trait Store: Send + Sync + 'static {
         &self,
         user_id: i64,
     ) -> impl Future<Output = Result<Vec<Workspace>, StoreError>> + Send;
+
+    /// Renames the workspace and/or marks first-run setup completed (ADR-0026).
+    /// `None`: no such workspace.
+    fn update_workspace(
+        &self,
+        _id: i64,
+        _name: Option<&str>,
+        _complete_setup: bool,
+    ) -> impl Future<Output = Result<Option<(String, bool)>, StoreError>> + Send {
+        async {
+            Err(StoreError::Db(
+                "workspace updates aren't supported by this store".into(),
+            ))
+        }
+    }
 
     /// The user's role in the workspace, if they belong to it.
     fn role(
@@ -427,12 +444,31 @@ impl Store for Postgres {
 
     async fn workspaces_of(&self, user_id: i64) -> Result<Vec<Workspace>, StoreError> {
         Ok(sqlx::query_as(
-            "SELECT w.id, w.name, w.slug, m.role FROM workspace_members m \
+            "SELECT w.id, w.name, w.slug, m.role, (w.setup_completed_at IS NOT NULL) AS setup_completed \
+             FROM workspace_members m \
              JOIN workspaces w ON w.id = m.workspace_id \
              WHERE m.user_id = $1 ORDER BY w.id",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn update_workspace(
+        &self,
+        id: i64,
+        name: Option<&str>,
+        complete_setup: bool,
+    ) -> Result<Option<(String, bool)>, StoreError> {
+        Ok(sqlx::query_as(
+            "UPDATE workspaces SET name = COALESCE($2, name), \
+             setup_completed_at = CASE WHEN $3 THEN now() ELSE setup_completed_at END \
+             WHERE id = $1 RETURNING name, (setup_completed_at IS NOT NULL) AS setup_completed",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(complete_setup)
+        .fetch_optional(&self.pool)
         .await?)
     }
 

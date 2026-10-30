@@ -280,6 +280,65 @@ async fn ending_a_session_writes_one_revocation_to_the_outbox() {
 
 #[tokio::test]
 #[ignore]
+async fn concurrent_first_signups_give_one_owner_and_the_rest_members() {
+    let store = store().await;
+    let pool = sqlx::PgPool::connect(&std::env::var("XMSG_IT_PG").unwrap())
+        .await
+        .unwrap();
+    // Start from an ownerless default workspace, whatever earlier tests left behind.
+    sqlx::query("DELETE FROM workspace_members WHERE workspace_id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let store = std::sync::Arc::new(store);
+    let tasks: Vec<_> = (0..4)
+        .map(|i| {
+            let store = store.clone();
+            tokio::spawn(async move {
+                let id = new_id();
+                store
+                    .create_user(
+                        id,
+                        &format!("first-{i}-{id}@example.org"),
+                        &password::hash("integration test"),
+                        "IT",
+                    )
+                    .await
+                    .map(|_| id)
+            })
+        })
+        .collect();
+    let mut ids = Vec::new();
+    for task in tasks {
+        ids.push(task.await.unwrap().unwrap());
+    }
+
+    let roles: Vec<String> = sqlx::query_scalar(
+        "SELECT role FROM workspace_members WHERE workspace_id = 1 AND user_id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(roles.len(), 4);
+    assert_eq!(
+        roles.iter().filter(|r| *r == "owner").count(),
+        1,
+        "exactly one owner: {roles:?}"
+    );
+    assert!(roles.iter().all(|r| r == "owner" || r == "member"));
+
+    // The next account is a plain member.
+    let (late, _, _) = session(&store, Duration::hours(1)).await;
+    assert_eq!(
+        store.role(1, late).await.unwrap().as_deref(),
+        Some("member")
+    );
+}
+
+#[tokio::test]
+#[ignore]
 async fn enforced_sso_and_recovery_codes_follow_membership() {
     let store = store().await;
     let pool = sqlx::PgPool::connect(&std::env::var("XMSG_IT_PG").unwrap())

@@ -253,7 +253,9 @@ async fn run() -> Result<(), String> {
             .await?;
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
-            let (workspace, ws_channel) = check_workspaces(&users_url, url, &users, run_id).await?;
+            let first_is_owner = std::env::var("XMSG_AUTH_URL").is_ok();
+            let (workspace, ws_channel) =
+                check_workspaces(&users_url, url, &users, run_id, first_is_owner).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
                 let messages_url = std::env::var("XMSG_MESSAGES_URL")
                     .map_err(|_| "XMSG_EXPECT_WORKSPACE_REMOVAL needs XMSG_MESSAGES_URL")?;
@@ -328,6 +330,9 @@ async fn check_workspaces(
     channels_url: &str,
     users: &[(i64, String)],
     run_id: i64,
+    // Whether the first sign-up owns the default workspace: only with real auth
+    // (ADR-0026); with development tokens there is no owner.
+    first_is_owner: bool,
 ) -> Result<(String, String), String> {
     let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
     let fail =
@@ -358,6 +363,90 @@ async fn check_workspaces(
         .unwrap_or_default();
     if seen.0 != 200 || !names.contains(&name.as_str()) {
         return Err(fail("bob reading alice's profile", &seen));
+    }
+
+    // Default channels (ADR-0026): with real auth alice signed up first, so she owns
+    // the default workspace and runs setup; bob joins the defaults on first sign-in.
+    if first_is_owner {
+        let listed = call(
+            "GET",
+            &format!("{users_url}/v1/me/workspaces"),
+            &alice.1,
+            None,
+        )
+        .await?;
+        let default_ws = listed.1["workspaces"]
+            .as_array()
+            .and_then(|ws| {
+                ws.iter()
+                    .find(|w| w["role"] == "owner" && w["setup_completed"] == false)
+            })
+            .and_then(|w| w["workspace_id"].as_str().map(str::to_string));
+        let Some(default_ws) = default_ws.filter(|_| listed.0 == 200) else {
+            return Err(fail(
+                "finding alice's owner workspace awaiting setup",
+                &listed,
+            ));
+        };
+        let completed = call(
+            "PATCH",
+            &format!("{users_url}/v1/workspaces/{default_ws}"),
+            &alice.1,
+            Some(serde_json::json!({"name": "Home", "setup_completed": true})),
+        )
+        .await?;
+        if completed.0 != 200 || completed.1["setup_completed"] != true {
+            return Err(fail("alice completing setup", &completed));
+        }
+
+        let general = call(
+            "POST",
+            &format!("{channels_url}/v1/channels"),
+            &alice.1,
+            Some(serde_json::json!({"type": "public", "name": format!("general-{run_id}")})),
+        )
+        .await?;
+        let Some(general_id) = general.1["channel_id"]
+            .as_str()
+            .filter(|_| general.0 == 201)
+            .map(str::to_string)
+        else {
+            return Err(fail("creating the general channel", &general));
+        };
+        let defaults = format!("{channels_url}/v1/workspaces/{default_ws}/default-channels");
+        let added = call(
+            "POST",
+            &defaults,
+            &alice.1,
+            Some(serde_json::json!({"channel_id": general_id})),
+        )
+        .await?;
+        if added.0 != 204 {
+            return Err(fail("alice making general a default channel", &added));
+        }
+        let join = call(
+            "POST",
+            &format!("{channels_url}/v1/me/default-channels/join"),
+            &bob.1,
+            Some(serde_json::json!({"workspace_id": default_ws})),
+        )
+        .await?;
+        if join.0 != 200 || join.1["joined"] != serde_json::json!([general_id]) {
+            return Err(fail("bob joining the defaults on first sign-in", &join));
+        }
+        let again = call(
+            "POST",
+            &format!("{channels_url}/v1/me/default-channels/join"),
+            &bob.1,
+            Some(serde_json::json!({"workspace_id": default_ws})),
+        )
+        .await?;
+        if again.0 != 200 || again.1["joined"] != serde_json::json!([]) {
+            return Err(fail("bob's default-channel join being idempotent", &again));
+        }
+        println!(
+            "users: the first account owns the workspace, completes setup, and a member joins the default channel once"
+        );
     }
 
     // A new workspace holds only alice: nobody else can be put into its channels.

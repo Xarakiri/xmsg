@@ -21,8 +21,8 @@ use xmsg_users::store::{
 struct Memory {
     /// user → (email, profile)
     users: Mutex<HashMap<i64, (String, Profile)>>,
-    /// id → (name, slug)
-    workspaces: Mutex<HashMap<i64, (String, String)>>,
+    /// id → (name, slug, setup_completed)
+    workspaces: Mutex<HashMap<i64, (String, String, bool)>>,
     /// (workspace, user) → role
     members: Mutex<HashMap<(i64, i64), String>>,
     invites: Mutex<Vec<NewInvite>>,
@@ -152,15 +152,31 @@ impl Store for Memory {
         owner: i64,
     ) -> Result<(), StoreError> {
         let mut workspaces = self.workspaces.lock().unwrap();
-        if workspaces.values().any(|(_, s)| s == slug) {
+        if workspaces.values().any(|(_, s, _)| s == slug) {
             return Err(StoreError::SlugTaken);
         }
-        workspaces.insert(id, (name.into(), slug.into()));
+        workspaces.insert(id, (name.into(), slug.into(), false));
         self.members
             .lock()
             .unwrap()
             .insert((id, owner), "owner".into());
         Ok(())
+    }
+    async fn update_workspace(
+        &self,
+        id: i64,
+        name: Option<&str>,
+        complete_setup: bool,
+    ) -> Result<Option<(String, bool)>, StoreError> {
+        let mut workspaces = self.workspaces.lock().unwrap();
+        let Some(w) = workspaces.get_mut(&id) else {
+            return Ok(None);
+        };
+        if let Some(name) = name {
+            w.0 = name.into();
+        }
+        w.2 |= complete_setup;
+        Ok(Some((w.0.clone(), w.2)))
     }
     async fn workspaces_of(&self, user_id: i64) -> Result<Vec<Workspace>, StoreError> {
         let workspaces = self.workspaces.lock().unwrap();
@@ -175,6 +191,7 @@ impl Store for Memory {
                 name: workspaces[w].0.clone(),
                 slug: workspaces[w].1.clone(),
                 role: role.clone(),
+                setup_completed: workspaces[w].2,
             })
             .collect();
         list.sort_by_key(|w| w.id);
@@ -327,7 +344,7 @@ async fn harness() -> Harness {
         .workspaces
         .lock()
         .unwrap()
-        .insert(1, ("Default".into(), "default".into()));
+        .insert(1, ("Default".into(), "default".into(), false));
     for user in [ALICE, BOB, CAROL] {
         store
             .members
@@ -504,8 +521,8 @@ async fn workspaces_are_created_listed_and_closed_to_outsiders() {
     assert_eq!(
         mine["workspaces"],
         json!([
-            {"workspace_id": "1", "name": "Default", "slug": "default", "role": "member"},
-            {"workspace_id": id, "name": "Acme", "slug": "acme-labs", "role": "owner"},
+            {"workspace_id": "1", "name": "Default", "slug": "default", "role": "member", "setup_completed": false},
+            {"workspace_id": id, "name": "Acme", "slug": "acme-labs", "role": "owner", "setup_completed": false},
         ])
     );
 
@@ -539,6 +556,96 @@ async fn workspaces_are_created_listed_and_closed_to_outsiders() {
     );
     let (status, _) = h.call("GET", &members, Some(BOB), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "members only");
+}
+
+#[tokio::test]
+async fn owners_and_admins_run_setup_and_rename_the_workspace() {
+    let h = harness().await;
+    let id = h.workspace(ALICE, "setup-ws").await;
+    let path = format!("/v1/workspaces/{id}");
+    // Bob joins as a plain member.
+    h.state
+        .store
+        .members
+        .lock()
+        .unwrap()
+        .insert((id.parse::<i64>().unwrap(), BOB), "member".into());
+
+    // Members can't change anything; outsiders can't see it.
+    let (status, reply) = h
+        .call("PATCH", &path, Some(BOB), Some(json!({"name": "Nope"})))
+        .await;
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (
+            StatusCode::FORBIDDEN,
+            Some("only owners and admins change the workspace")
+        )
+    );
+    assert_eq!(
+        h.call("PATCH", &path, Some(OSCAR), Some(json!({"name": "Nope"})))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        h.call(
+            "PATCH",
+            "/v1/workspaces/9999999",
+            Some(ALICE),
+            Some(json!({"name": "Nope"}))
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND,
+        "unknown workspace"
+    );
+
+    // setup_completed only turns true.
+    let (status, reply) = h
+        .call(
+            "PATCH",
+            &path,
+            Some(ALICE),
+            Some(json!({"name": " Acme ", "setup_completed": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(
+        reply,
+        json!({"workspace_id": id, "name": "Acme", "setup_completed": true})
+    );
+    let (status, _) = h
+        .call(
+            "PATCH",
+            &path,
+            Some(ALICE),
+            Some(json!({"setup_completed": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Admins may update as well, and the listing carries the flag.
+    h.state
+        .store
+        .members
+        .lock()
+        .unwrap()
+        .insert((id.parse::<i64>().unwrap(), BOB), "admin".into());
+    let (status, reply) = h
+        .call("PATCH", &path, Some(BOB), Some(json!({"name": "By Admin"})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["name"], "By Admin");
+    let (_, mine) = h.call("GET", "/v1/me/workspaces", Some(ALICE), None).await;
+    let listed = mine["workspaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["workspace_id"] == id)
+        .unwrap()
+        .clone();
+    assert_eq!(listed["setup_completed"], true);
 }
 
 #[tokio::test]

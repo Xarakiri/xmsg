@@ -29,5 +29,8 @@ All ADRs below are **Accepted** as of 2026-10-21. To change one, add a new ADR t
 | [0021](0021-partition-count-per-installation.md) | Partition count fixed per installation, chosen by tier (amends 0004) | Self-hosting |
 | [0022](0022-open-core-licensing.md) | Open core: AGPL-3.0 core, Apache-2.0 clients, commercial Enterprise Edition; per-feature licence expiry | User decision, review #10 |
 | [0023](0023-osi-bundled-backends-and-wide-column-choice.md) | Bundle only open-source backends (Kafka, Cassandra 5, Valkey); Large-tier store by benchmark | Review #10 |
+| [0024](0024-media-and-object-storage.md) | Media in object storage with Postgres metadata and per-workspace quotas | Review #10 |
+| [0025](0025-voice-and-video-calls.md) | Voice and video calls through LiveKit and coturn | Review #11 |
+| [0026](0026-first-run-and-default-channels.md) | First account owns the workspace; owner-run setup; per-workspace default channels | Review #11 |
 
 The review history that produced these is in [../architecture-review.md](../architecture-review.md) through [../architecture-review-10.md](../architecture-review-10.md). The plan as it stood before the rewrite is in [../archive/architecture-plan-v1.md](../archive/architecture-plan-v1.md).
