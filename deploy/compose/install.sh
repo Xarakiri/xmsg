@@ -227,7 +227,7 @@ if [[ $bundle -eq 1 ]]; then
   fi
 elif [[ -n "$registry" ]]; then
   say "Pulling images from $registry (version ${version:-dev})"
-  if ! docker compose pull --quiet --ignore-buildable; then
+  if ! docker compose pull --quiet; then
     # Images loaded by hand (an offline bundle, CI) are fine as they are.
     docker image inspect "$registry/services:${version:-dev}" >/dev/null 2>&1 ||
       fail "can't pull $registry images and they aren't on this machine"

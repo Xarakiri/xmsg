@@ -12,7 +12,8 @@
 //! - bob can still post without rejoining (`members`);
 //! - bob's reaction makes the count 2, not 1 (`reaction-counts`).
 //!
-//! Env: XMSG_AUTH_URL, XMSG_CHANNELS_URL, XMSG_MESSAGES_URL, XMSG_GATEWAY_URL.
+//! Env: XMSG_AUTH_URL, XMSG_CHANNELS_URL, XMSG_MESSAGES_URL, XMSG_GATEWAY_URL, and
+//! XMSG_USERS_URL when version N is invite-only.
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -49,8 +50,27 @@ pub async fn seed(file: &str) -> Result<(), String> {
         .as_millis();
     let emails = ["alice", "bob"].map(|name| format!("upgrade-{name}-{run_id}@example.org"));
     let alice = sign_up_and_log_in(&urls.auth, &emails[0], None).await?;
-    // Version N predates the invite-only policy, so no invite is needed.
-    let bob = sign_up_and_log_in(&urls.auth, &emails[1], None).await?;
+    // Versions before ADR-0026 have no sign-up policy; later ones need an owner's invite.
+    let invite_only = call("GET", &format!("{}/v1/signup-policy", urls.auth), "", None)
+        .await
+        .is_ok_and(|(_, policy)| policy["invite_only"] == true);
+    let invite = if invite_only {
+        let users = std::env::var("XMSG_USERS_URL").map_err(|_| "XMSG_USERS_URL is not set")?;
+        let (_, reply) = call(
+            "POST",
+            &format!("{users}/v1/workspaces/1/invites"),
+            &alice.1,
+            None,
+        )
+        .await?;
+        let code = reply["code"]
+            .as_str()
+            .ok_or("creating an invite: no code")?;
+        Some(code.to_string())
+    } else {
+        None
+    };
+    let bob = sign_up_and_log_in(&urls.auth, &emails[1], invite.as_deref()).await?;
     let (status, reply) = call(
         "POST",
         &format!("{}/v1/channels", urls.channels),
