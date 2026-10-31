@@ -5,10 +5,14 @@
 use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 
+use crate::token_hash;
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("email already registered")]
     EmailTaken,
+    #[error("sign-up is not allowed")]
+    SignupForbidden,
     #[error("database: {0}")]
     Db(String),
 }
@@ -58,7 +62,34 @@ pub trait Store: Send + Sync + 'static {
         email: &str,
         password_hash: &str,
         name: &str,
+        // An invite code, when the workspace's sign-up policy demands one (ADR-0026).
+        invite: Option<&str>,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Whether any user exists yet, and whether workspace 1's sign-up policy is
+    /// `invite_only` (the default; `settings_json.signup` may say `open`).
+    fn signup_policy(&self) -> impl Future<Output = Result<(bool, bool), StoreError>> + Send;
+
+    /// Replaces any earlier code: one live reset code per user (ADR-0026).
+    fn save_password_reset(
+        &self,
+        user_id: i64,
+        code_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Applies a reset code: checks it (in one transaction with the password change),
+    /// consumes it and revokes every live session of the user, writing `revoked(user,
+    /// device)` to the outbox per device. `Invalid` is the one answer for an unknown
+    /// email, a wrong code or an expired code.
+    fn reset_password(
+        &self,
+        email: &str,
+        code_hash: &str,
+        password_hash: &str,
+        now: DateTime<Utc>,
+        revoked: &Revoked<'_>,
+    ) -> impl Future<Output = Result<PasswordReset, StoreError>> + Send;
 
     fn credentials(
         &self,
@@ -166,6 +197,14 @@ pub trait Store: Send + Sync + 'static {
         user_id: i64,
         code_hash: &str,
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+}
+
+#[derive(Debug, PartialEq)]
+pub enum PasswordReset {
+    /// The password changed; these device IDs had live sessions, now revoked.
+    Applied { user_id: i64, devices: Vec<i64> },
+    /// Unknown email, wrong code or expired code: indistinguishable on purpose.
+    Invalid,
 }
 
 /// A sign-in in progress with an external identity provider (see `sso`).
@@ -413,15 +452,45 @@ impl Store for Postgres {
         email: &str,
         password_hash: &str,
         name: &str,
+        invite: Option<&str>,
     ) -> Result<(), StoreError> {
         // Joining the default workspace commits with the user, so no account exists
         // outside every workspace (where nobody could see or message it). The first
         // account owns the workspace (ADR-0026): the transaction-scoped advisory lock
         // serializes concurrent first sign-ups, so exactly one of them sees no owner.
+        // The same lock covers the sign-up policy: the first account always gets in,
+        // later ones need an `open` policy or a valid invite code, checked here so an
+        // invite can't race a racing sign-up. The code is verified, not consumed.
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(726026)")
             .execute(&mut *tx)
             .await?;
+        let first: bool = sqlx::query_scalar("SELECT count(*) = 0 FROM users")
+            .fetch_one(&mut *tx)
+            .await?;
+        if !first {
+            let policy: Option<String> =
+                sqlx::query_scalar("SELECT settings_json->>'signup' FROM workspaces WHERE id = 1")
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            if policy.as_deref() != Some("open") {
+                let invited = match invite {
+                    None => false,
+                    Some(code) => {
+                        sqlx::query_scalar(
+                            "SELECT EXISTS (SELECT 1 FROM workspace_invites \
+                         WHERE code_hash = $1 AND expires_at > now())",
+                        )
+                        .bind(token_hash(code))
+                        .fetch_one(&mut *tx)
+                        .await?
+                    }
+                };
+                if !invited {
+                    return Err(StoreError::SignupForbidden);
+                }
+            }
+        }
         let has_owner: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM workspace_members \
              WHERE workspace_id = 1 AND role = 'owner')",
@@ -445,6 +514,93 @@ impl Store for Postgres {
         .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn signup_policy(&self) -> Result<(bool, bool), StoreError> {
+        let row: (bool, Option<String>) = sqlx::query_as(
+            "SELECT (SELECT count(*) = 0 FROM users), \
+             (SELECT settings_json->>'signup' FROM workspaces WHERE id = 1)",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((row.0, row.1.as_deref() != Some("open")))
+    }
+
+    async fn save_password_reset(
+        &self,
+        user_id: i64,
+        code_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO password_reset_codes (user_id, code_hash, expires_at) VALUES ($1, $2, $3) \
+             ON CONFLICT (user_id) DO UPDATE \
+             SET code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, created_at = now()",
+        )
+        .bind(user_id)
+        .bind(code_hash)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn reset_password(
+        &self,
+        email: &str,
+        code_hash: &str,
+        password_hash: &str,
+        now: DateTime<Utc>,
+        revoked: &Revoked<'_>,
+    ) -> Result<PasswordReset, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let user: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
+            .bind(email)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(user_id) = user else {
+            return Ok(PasswordReset::Invalid);
+        };
+        let code_ok: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM password_reset_codes \
+             WHERE user_id = $1 AND code_hash = $2 AND expires_at > $3)",
+        )
+        .bind(user_id)
+        .bind(code_hash)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !code_ok {
+            return Ok(PasswordReset::Invalid);
+        }
+        sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+            .bind(user_id)
+            .bind(password_hash)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM password_reset_codes WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        let devices: Vec<i64> = sqlx::query_scalar(
+            "SELECT DISTINCT device_id FROM refresh_tokens \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+        for device_id in &devices {
+            outbox_revocation(&mut tx, *device_id, revoked(user_id, *device_id)).await?;
+        }
+        tx.commit().await?;
+        Ok(PasswordReset::Applied { user_id, devices })
     }
 
     async fn credentials(&self, email: &str) -> Result<Option<Credentials>, StoreError> {

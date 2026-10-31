@@ -21,8 +21,8 @@ use xmsg_users::store::{
 struct Memory {
     /// user → (email, profile)
     users: Mutex<HashMap<i64, (String, Profile)>>,
-    /// id → (name, slug, setup_completed)
-    workspaces: Mutex<HashMap<i64, (String, String, bool)>>,
+    /// id → (name, slug, setup_completed, signup)
+    workspaces: Mutex<HashMap<i64, (String, String, bool, String)>>,
     /// (workspace, user) → role
     members: Mutex<HashMap<(i64, i64), String>>,
     invites: Mutex<Vec<NewInvite>>,
@@ -152,10 +152,10 @@ impl Store for Memory {
         owner: i64,
     ) -> Result<(), StoreError> {
         let mut workspaces = self.workspaces.lock().unwrap();
-        if workspaces.values().any(|(_, s, _)| s == slug) {
+        if workspaces.values().any(|(_, s, _, _)| s == slug) {
             return Err(StoreError::SlugTaken);
         }
-        workspaces.insert(id, (name.into(), slug.into(), false));
+        workspaces.insert(id, (name.into(), slug.into(), false, "invite_only".into()));
         self.members
             .lock()
             .unwrap()
@@ -167,7 +167,8 @@ impl Store for Memory {
         id: i64,
         name: Option<&str>,
         complete_setup: bool,
-    ) -> Result<Option<(String, bool)>, StoreError> {
+        signup: Option<&str>,
+    ) -> Result<Option<(String, bool, String)>, StoreError> {
         let mut workspaces = self.workspaces.lock().unwrap();
         let Some(w) = workspaces.get_mut(&id) else {
             return Ok(None);
@@ -176,7 +177,10 @@ impl Store for Memory {
             w.0 = name.into();
         }
         w.2 |= complete_setup;
-        Ok(Some((w.0.clone(), w.2)))
+        if let Some(signup) = signup {
+            w.3 = signup.into();
+        }
+        Ok(Some((w.0.clone(), w.2, w.3.clone())))
     }
     async fn workspaces_of(&self, user_id: i64) -> Result<Vec<Workspace>, StoreError> {
         let workspaces = self.workspaces.lock().unwrap();
@@ -340,11 +344,15 @@ async fn harness() -> Harness {
             ),
         );
     }
-    store
-        .workspaces
-        .lock()
-        .unwrap()
-        .insert(1, ("Default".into(), "default".into(), false));
+    store.workspaces.lock().unwrap().insert(
+        1,
+        (
+            "Default".into(),
+            "default".into(),
+            false,
+            "invite_only".into(),
+        ),
+    );
     for user in [ALICE, BOB, CAROL] {
         store
             .members
@@ -613,7 +621,7 @@ async fn owners_and_admins_run_setup_and_rename_the_workspace() {
     assert_eq!(status, StatusCode::OK, "{reply}");
     assert_eq!(
         reply,
-        json!({"workspace_id": id, "name": "Acme", "setup_completed": true})
+        json!({"workspace_id": id, "name": "Acme", "setup_completed": true, "signup": "invite_only"})
     );
     let (status, _) = h
         .call(
@@ -646,6 +654,62 @@ async fn owners_and_admins_run_setup_and_rename_the_workspace() {
         .unwrap()
         .clone();
     assert_eq!(listed["setup_completed"], true);
+}
+
+#[tokio::test]
+async fn owners_and_admins_set_the_signup_policy() {
+    let h = harness().await;
+    let id = h.workspace(ALICE, "signup-ws").await;
+    let path = format!("/v1/workspaces/{id}");
+
+    let (status, reply) = h
+        .call("PATCH", &path, Some(ALICE), Some(json!({"signup": "open"})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(
+        reply,
+        json!({"workspace_id": id, "name": "Acme", "setup_completed": false, "signup": "open"}),
+        "the reply carries the new policy"
+    );
+
+    // Only the two names exist.
+    let (status, _) = h
+        .call(
+            "PATCH",
+            &path,
+            Some(ALICE),
+            Some(json!({"signup": "yesplease"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Members can't change it.
+    h.state
+        .store
+        .members
+        .lock()
+        .unwrap()
+        .insert((1, ALICE), "member".into());
+    let (status, _) = h
+        .call(
+            "PATCH",
+            "/v1/workspaces/1",
+            Some(ALICE),
+            Some(json!({"signup": "open"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Back to invite-only.
+    let (_, reply) = h
+        .call(
+            "PATCH",
+            &path,
+            Some(ALICE),
+            Some(json!({"signup": "invite_only"})),
+        )
+        .await;
+    assert_eq!(reply["signup"], "invite_only");
 }
 
 #[tokio::test]

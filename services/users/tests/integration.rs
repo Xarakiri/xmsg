@@ -166,17 +166,38 @@ async fn workspaces_roles_members_and_unique_slugs() {
         [(w, "owner")]
     );
     assert!(!mine[0].setup_completed);
-    let (name, done) = store
-        .update_workspace(w, Some("Renamed"), true)
+    let (name, done, signup) = store
+        .update_workspace(w, Some("Renamed"), true, Some("open"))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!((name.as_str(), done), ("Renamed", true));
     assert_eq!(
-        store.update_workspace(new_id(), None, false).await.unwrap(),
+        (name.as_str(), done, signup.as_str()),
+        ("Renamed", true, "open")
+    );
+    assert_eq!(
+        store
+            .update_workspace(new_id(), None, false, None)
+            .await
+            .unwrap(),
         None
     );
     assert!(store.workspaces_of(alice).await.unwrap()[0].setup_completed);
+    // The policy persists in settings_json and defaults to invite_only.
+    let stored: String =
+        sqlx::query_scalar("SELECT settings_json->>'signup' FROM workspaces WHERE id = $1")
+            .bind(w)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, "open");
+    let default: String = sqlx::query_scalar(
+        "SELECT COALESCE(settings_json->>'signup', 'invite_only') FROM workspaces WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(default, "invite_only");
 
     let code = invite(&store, w, alice, Duration::hours(1)).await;
     store

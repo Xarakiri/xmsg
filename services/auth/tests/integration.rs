@@ -54,7 +54,13 @@ async fn session(store: &Postgres, ttl: Duration) -> (i64, i64, String) {
     let user_id = new_id();
     let email = format!("it-{user_id}@example.org");
     store
-        .create_user(user_id, &email, &password::hash("integration test"), "IT")
+        .create_user(
+            user_id,
+            &email,
+            &password::hash("integration test"),
+            "IT",
+            None,
+        )
         .await
         .unwrap();
     let device_id = new_id();
@@ -82,9 +88,12 @@ async fn duplicate_emails_are_refused_and_credentials_are_found() {
     let store = store().await;
     let id = new_id();
     let email = format!("dup-{id}@example.org");
-    store.create_user(id, &email, "hash", "A").await.unwrap();
+    store
+        .create_user(id, &email, "hash", "A", None)
+        .await
+        .unwrap();
     assert!(matches!(
-        store.create_user(new_id(), &email, "hash", "B").await,
+        store.create_user(new_id(), &email, "hash", "B", None).await,
         Err(StoreError::EmailTaken)
     ));
     let found = store.credentials(&email).await.unwrap().unwrap();
@@ -282,12 +291,19 @@ async fn ending_a_session_writes_one_revocation_to_the_outbox() {
 #[ignore]
 async fn concurrent_first_signups_give_one_owner_and_the_rest_members() {
     let store = store().await;
-    let pool = sqlx::PgPool::connect(&std::env::var("XMSG_IT_PG").unwrap())
+    let url = std::env::var("XMSG_IT_PG").unwrap();
+    // Tests share one database, so an owner usually exists already. Every create_user
+    // takes the same advisory key (726026), so holding it at session level serializes
+    // every sign-up in every test for the duration of this one: the ownerless window
+    // below can't race another test's create_user. Sign-ups queue on the key instead
+    // of row locks, so nothing deadlocks; the lock frees when the pool drops.
+    let gate = sqlx::PgPool::connect(&url).await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock(726026)")
+        .execute(&gate)
         .await
         .unwrap();
-    // Start from an ownerless default workspace, whatever earlier tests left behind.
     sqlx::query("DELETE FROM workspace_members WHERE workspace_id = 1")
-        .execute(&pool)
+        .execute(&gate)
         .await
         .unwrap();
 
@@ -303,6 +319,7 @@ async fn concurrent_first_signups_give_one_owner_and_the_rest_members() {
                         &format!("first-{i}-{id}@example.org"),
                         &password::hash("integration test"),
                         "IT",
+                        None,
                     )
                     .await
                     .map(|_| id)
@@ -318,7 +335,7 @@ async fn concurrent_first_signups_give_one_owner_and_the_rest_members() {
         "SELECT role FROM workspace_members WHERE workspace_id = 1 AND user_id = ANY($1)",
     )
     .bind(&ids)
-    .fetch_all(&pool)
+    .fetch_all(&gate)
     .await
     .unwrap();
     assert_eq!(roles.len(), 4);
@@ -329,7 +346,8 @@ async fn concurrent_first_signups_give_one_owner_and_the_rest_members() {
     );
     assert!(roles.iter().all(|r| r == "owner" || r == "member"));
 
-    // The next account is a plain member.
+    // The next account is a plain member (after the gate is out, like production).
+    drop(gate);
     let (late, _, _) = session(&store, Duration::hours(1)).await;
     assert_eq!(
         store.role(1, late).await.unwrap().as_deref(),

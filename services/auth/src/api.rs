@@ -38,6 +38,7 @@ pub struct Auth<S> {
 pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
     Router::new()
         .route("/v1/signup", post(signup::<S>))
+        .route("/v1/signup-policy", get(signup_policy::<S>))
         .route("/v1/login", post(login::<S>))
         .route("/v1/token/refresh", post(refresh::<S>))
         .route("/v1/logout", post(logout::<S>))
@@ -45,6 +46,7 @@ pub fn router<S: Store>(auth: Arc<Auth<S>>) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .merge(crate::sso::routes::<S>())
         .merge(crate::sso_policy::routes::<S>())
+        .merge(crate::reset::routes::<S>())
         .layer(axum::middleware::from_fn_with_state(
             auth.clone(),
             crate::limits::client_ip::<S>,
@@ -88,6 +90,7 @@ impl From<StoreError> for ApiError {
     fn from(e: StoreError) -> Self {
         match e {
             StoreError::EmailTaken => ApiError::Conflict("email already registered"),
+            StoreError::SignupForbidden => ApiError::Forbidden("this workspace is invite only"),
             StoreError::Db(e) => {
                 tracing::error!(error = %e, "store failed");
                 ApiError::Internal
@@ -101,6 +104,8 @@ pub struct Signup {
     email: String,
     password: String,
     name: String,
+    /// Invited sign-ups carry their code (ADR-0026); checked, not consumed.
+    invite: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -168,7 +173,9 @@ async fn signup<S: Store>(
     }
     let hash = blocking(move || password::hash(&req.password)).await?;
     let user_id = new_id();
-    auth.store.create_user(user_id, &email, &hash, name).await?;
+    auth.store
+        .create_user(user_id, &email, &hash, name, req.invite.as_deref())
+        .await?;
     tracing::info!(user_id, "signed up");
     Ok((
         StatusCode::CREATED,
@@ -176,6 +183,18 @@ async fn signup<S: Store>(
             user_id: user_id.to_string(),
         }),
     ))
+}
+
+/// The sign-up screen's facts (ADR-0026): is this the first account, and does the
+/// workspace 1 policy demand an invite. Unauthenticated, like sign-up itself.
+async fn signup_policy<S: Store>(
+    State(auth): State<Arc<Auth<S>>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (first_account, invite_only) = auth.store.signup_policy().await?;
+    Ok(Json(serde_json::json!({
+        "first_account": first_account,
+        "invite_only": invite_only,
+    })))
 }
 
 async fn login<S: Store>(
@@ -373,7 +392,7 @@ impl<S> Auth<S> {
 }
 
 /// Argon2 is deliberately slow: keep it off the async workers.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, ApiError> {
     tokio::task::spawn_blocking(f)
@@ -384,7 +403,7 @@ async fn blocking<T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::Credentials;
+    use crate::store::{Credentials, PasswordReset};
     use axum::body::Body;
     use axum::http::Request;
     use http_body_util::BodyExt;
@@ -414,6 +433,12 @@ mod tests {
         enforced: Mutex<HashMap<i64, bool>>,
         /// code hash → (workspace, user, used).
         codes: Mutex<HashMap<String, (i64, i64, bool)>>,
+        /// workspace 1's sign-up policy is `open` (default invite-only, ADR-0026).
+        signup_open: Mutex<bool>,
+        /// invite code hash → expiry.
+        invites: Mutex<HashMap<String, DateTime<Utc>>>,
+        /// user → (code hash, expiry).
+        password_resets: Mutex<HashMap<i64, (String, DateTime<Utc>)>>,
     }
 
     impl Memory {
@@ -530,10 +555,26 @@ mod tests {
             email: &str,
             hash: &str,
             _name: &str,
+            invite: Option<&str>,
         ) -> Result<(), StoreError> {
             let mut users = self.users.lock().unwrap();
             if users.contains_key(email) {
                 return Err(StoreError::EmailTaken);
+            }
+            // Sign-up policy (ADR-0026): the first account always gets in; after
+            // that the workspace is invite-only unless the policy is `open`, and an
+            // invite code — checked, not consumed — admits one sign-up.
+            if !users.is_empty() && !*self.signup_open.lock().unwrap() {
+                let invited = invite.is_some_and(|code| {
+                    self.invites
+                        .lock()
+                        .unwrap()
+                        .get(&token_hash(code))
+                        .is_some_and(|exp| *exp > Utc::now())
+                });
+                if !invited {
+                    return Err(StoreError::SignupForbidden);
+                }
             }
             users.insert(
                 email.into(),
@@ -545,6 +586,66 @@ mod tests {
             drop(users);
             self.join_default(id);
             Ok(())
+        }
+        async fn signup_policy(&self) -> Result<(bool, bool), StoreError> {
+            let first = self.users.lock().unwrap().is_empty();
+            Ok((first, !*self.signup_open.lock().unwrap()))
+        }
+        async fn save_password_reset(
+            &self,
+            user_id: i64,
+            code_hash: &str,
+            expires_at: DateTime<Utc>,
+        ) -> Result<(), StoreError> {
+            self.password_resets
+                .lock()
+                .unwrap()
+                .insert(user_id, (code_hash.into(), expires_at));
+            Ok(())
+        }
+        async fn reset_password(
+            &self,
+            email: &str,
+            code_hash: &str,
+            password_hash: &str,
+            now: DateTime<Utc>,
+            revoked: &crate::store::Revoked<'_>,
+        ) -> Result<PasswordReset, StoreError> {
+            let mut users = self.users.lock().unwrap();
+            let Some(credentials) = users.get_mut(email) else {
+                return Ok(PasswordReset::Invalid);
+            };
+            let valid = self
+                .password_resets
+                .lock()
+                .unwrap()
+                .get(&credentials.user_id)
+                .is_some_and(|(hash, exp)| hash == code_hash && *exp > now);
+            if !valid {
+                return Ok(PasswordReset::Invalid);
+            }
+            let user_id = credentials.user_id;
+            credentials.password_hash = Some(password_hash.into());
+            self.password_resets.lock().unwrap().remove(&user_id);
+            drop(users);
+            // Every live session of the user is revoked, logged for the outbox.
+            let mut tokens = self.tokens.lock().unwrap();
+            let devices: Vec<i64> = tokens
+                .values()
+                .filter(|t| t.user_id == user_id && t.revoked_at.is_none())
+                .map(|t| t.device_id)
+                .collect();
+            for t in tokens.values_mut() {
+                if t.user_id == user_id && t.revoked_at.is_none() {
+                    t.revoked_at = Some(now);
+                }
+            }
+            drop(tokens);
+            let mut outbox = self.outbox.lock().unwrap();
+            for device_id in &devices {
+                outbox.push(revoked(user_id, *device_id));
+            }
+            Ok(PasswordReset::Applied { user_id, devices })
         }
         async fn credentials(&self, email: &str) -> Result<Option<Credentials>, StoreError> {
             Ok(self.users.lock().unwrap().get(email).cloned())
@@ -922,7 +1023,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_first_account_owns_the_default_workspace_the_rest_are_members() {
+    async fn the_first_account_owns_the_default_workspace_and_signup_is_invite_only() {
         let (app, auth) = app();
         signed_up(&app).await;
         let ada = auth
@@ -938,6 +1039,72 @@ mod tests {
             auth.store.role(1, ada).await.unwrap().as_deref(),
             Some("owner")
         );
+
+        // The next account needs an invite on an invite-only workspace.
+        let bob = serde_json::json!({"email": "bob@example.org", "password": "analytical engine", "name": "Bob"});
+        let refused = call(&app, "/v1/signup", bob).await;
+        assert_eq!(
+            (refused.0, refused.1["error"].as_str()),
+            (StatusCode::FORBIDDEN, Some("this workspace is invite only"))
+        );
+        assert_eq!(
+            auth.store.signup_policy().await.unwrap(),
+            (false, true),
+            "no longer the first account; still invite-only"
+        );
+
+        // A valid invite code admits the sign-up — checked, not consumed — a
+        // stale one doesn't.
+        auth.store
+            .invites
+            .lock()
+            .unwrap()
+            .insert(token_hash("let-me-in"), Utc::now() + Duration::hours(1));
+        let invited = serde_json::json!({"email": "bob@example.org", "password": "analytical engine", "name": "Bob", "invite": "let-me-in"});
+        assert_eq!(
+            call(&app, "/v1/signup", invited).await.0,
+            StatusCode::CREATED
+        );
+        let bob_id = auth.store.users.lock().unwrap()["bob@example.org"].user_id;
+        assert_eq!(
+            auth.store.role(1, bob_id).await.unwrap().as_deref(),
+            Some("member"),
+            "invited sign-ups are plain members"
+        );
+        auth.store
+            .invites
+            .lock()
+            .unwrap()
+            .insert(token_hash("late"), Utc::now() - Duration::hours(1));
+        let expired = serde_json::json!({"email": "cy@example.org", "password": "analytical engine", "name": "Cy", "invite": "late"});
+        assert_eq!(
+            call(&app, "/v1/signup", expired).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn an_open_policy_lets_anyone_sign_up_and_the_policy_is_public() {
+        let (app, auth) = app();
+        signed_up(&app).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/signup-policy")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let policy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            policy,
+            serde_json::json!({"first_account": false, "invite_only": true})
+        );
+
+        *auth.store.signup_open.lock().unwrap() = true;
         let (status, _) = call(
             &app,
             "/v1/signup",
@@ -945,10 +1112,192 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
-        let bob = auth.store.users.lock().unwrap()["bob@example.org"].user_id;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/v1/signup-policy")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let policy: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
-            auth.store.role(1, bob).await.unwrap().as_deref(),
-            Some("member")
+            policy,
+            serde_json::json!({"first_account": false, "invite_only": false})
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_password_reset_is_single_use_expires_and_revokes_sessions() {
+        let (app, auth) = app();
+        let (_ann, ann) = workspace_of_two(&app, &auth).await;
+        let bob = auth.store.users.lock().unwrap()["bob@example.org"].user_id;
+        let ann_id = auth.store.users.lock().unwrap()["ann@example.org"].user_id;
+        // Bob becomes an admin; even so he can't reset the owner.
+        auth.store
+            .members
+            .lock()
+            .unwrap()
+            .insert((1, bob), "admin".into());
+        let as_bob = auth.keys.issue(bob, 1, Utc::now().timestamp(), 900);
+        let refused = send(
+            &app,
+            "POST",
+            &format!("/v1/workspaces/1/members/{ann_id}/password-reset"),
+            &as_bob,
+            None,
+        )
+        .await;
+        assert_eq!(refused.0, StatusCode::FORBIDDEN, "{:?}", refused.1);
+        // Unknown target: 403, like every non-member workspace path in this service.
+        assert_eq!(
+            send(
+                &app,
+                "POST",
+                "/v1/workspaces/1/members/999/password-reset",
+                &ann,
+                None
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+
+        // The owner issues a code for bob; it's random and shown once.
+        let (status, reply) = send(
+            &app,
+            "POST",
+            &format!("/v1/workspaces/1/members/{bob}/password-reset"),
+            &ann,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let code = reply["code"].as_str().unwrap().to_string();
+        assert_eq!(code.len(), 43, "32 random bytes, base64url");
+        assert!(reply["expires_at"].is_string());
+
+        // A fresh code replaces the earlier one.
+        let (_, second) = send(
+            &app,
+            "POST",
+            &format!("/v1/workspaces/1/members/{bob}/password-reset"),
+            &ann,
+            None,
+        )
+        .await;
+        let second = second["code"].as_str().unwrap().to_string();
+        assert_ne!(code, second);
+
+        // Bob has a live session; the new password must apply and kill it.
+        let (status, tokens) = call(
+            &app,
+            "/v1/login",
+            serde_json::json!({"email": "bob@example.org", "password": "correct horse battery"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let session: Tokens = serde_json::from_value(tokens).unwrap();
+
+        // One 400 for a wrong code, an unknown email or the replaced code.
+        let apply = |email: &str, code: &str| serde_json::json!({"email": email, "code": code, "password": "a brand new password"});
+        assert_eq!(
+            call(
+                &app,
+                "/v1/password-reset",
+                apply("bob@example.org", "wrong")
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            call(
+                &app,
+                "/v1/password-reset",
+                apply("nobody@example.org", &second)
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            call(&app, "/v1/password-reset", apply("bob@example.org", &code))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST,
+            "the replaced code is dead"
+        );
+
+        let (status, _) = call(
+            &app,
+            "/v1/password-reset",
+            apply("bob@example.org", &second),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        // Single use.
+        assert_eq!(
+            call(
+                &app,
+                "/v1/password-reset",
+                apply("bob@example.org", &second)
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        // Old sessions are revoked, the old password is dead, the new one works.
+        assert_eq!(
+            refreshed(&app, &session.refresh_token).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        let (status, _) = call(
+            &app,
+            "/v1/login",
+            serde_json::json!({"email": "bob@example.org", "password": "correct horse battery"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = call(
+            &app,
+            "/v1/login",
+            serde_json::json!({"email": "bob@example.org", "password": "a brand new password"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_expired_reset_code_is_refused() {
+        let (app, auth) = app();
+        let (_ann, ann) = workspace_of_two(&app, &auth).await;
+        let bob = auth.store.users.lock().unwrap()["bob@example.org"].user_id;
+        let (_, reply) = send(
+            &app,
+            "POST",
+            &format!("/v1/workspaces/1/members/{bob}/password-reset"),
+            &ann,
+            None,
+        )
+        .await;
+        let code = reply["code"].as_str().unwrap().to_string();
+        auth.store
+            .password_resets
+            .lock()
+            .unwrap()
+            .insert(bob, (token_hash(&code), Utc::now() - Duration::minutes(1)));
+        let (status, body) = call(
+            &app,
+            "/v1/password-reset",
+            serde_json::json!({"email": "bob@example.org", "code": code, "password": "a brand new password"}),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid or expired code"))
         );
     }
 
@@ -1281,6 +1630,8 @@ mod tests {
 
     /// Ann (owner of workspace 1) and Bob (member), both with passwords; Ann's access token.
     async fn workspace_of_two(app: &Router, auth: &Auth<Memory>) -> (i64, String) {
+        // With more than one account in play the workspace must allow sign-ups.
+        *auth.store.signup_open.lock().unwrap() = true;
         for (email, name) in [("ann@example.org", "Ann"), ("bob@example.org", "Bob")] {
             let (status, _) = call(app, "/v1/signup", serde_json::json!({"email": email, "password": "correct horse battery", "name": name})).await;
             assert_eq!(status, StatusCode::CREATED);

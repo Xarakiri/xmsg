@@ -101,26 +101,80 @@ async fn run() -> Result<(), String> {
         .unwrap()
         .as_millis() as i64;
     let channels_url = std::env::var("XMSG_CHANNELS_URL").ok();
-    let users = match std::env::var("XMSG_AUTH_URL") {
+    let users_url = std::env::var("XMSG_USERS_URL").ok();
+    // Sign-up policy (ADR-0026): the first account needs no invite and owns the
+    // workspace; after that sign-up is invite-only by default. A fresh install gets
+    // its users through owner-created invites (genuinely exercising the 403 once);
+    // an existing install must be `open` for us to create accounts at all.
+    let (users, fresh_install) = match std::env::var("XMSG_AUTH_URL") {
         Ok(auth) => {
+            let (_, policy) = call("GET", &format!("{auth}/v1/signup-policy"), "", None).await?;
+            let first_account = policy["first_account"] == true;
+            let invite_only = policy["invite_only"] == true;
             let mut users = Vec::new();
-            for name in ["alice", "bob", "mallory"] {
-                users.push(
-                    sign_up_and_log_in(&auth, &format!("{name}-{run_id}@example.org")).await?,
+            users.push(
+                sign_up_and_log_in(&auth, &format!("alice-{run_id}@example.org"), None).await?,
+            );
+            if first_account {
+                let refused =
+                    sign_up(&auth, &format!("refused-{run_id}@example.org"), None).await?;
+                if refused != 403 {
+                    return Err(format!(
+                        "invite-only sign-up refusal: expected 403, got {refused}"
+                    ));
+                }
+                println!("invite-only sign-up was refused with 403, as it should be");
+                let users_url = users_url
+                    .as_deref()
+                    .ok_or("XMSG_USERS_URL is needed to invite the other users on a fresh, invite-only install")?;
+                for name in ["bob", "mallory"] {
+                    let (_, invite) = call(
+                        "POST",
+                        &format!("{users_url}/v1/workspaces/1/invites"),
+                        &users[0].1,
+                        None,
+                    )
+                    .await?;
+                    let code = invite["code"]
+                        .as_str()
+                        .ok_or("creating an invite: no code")?;
+                    users.push(
+                        sign_up_and_log_in(
+                            &auth,
+                            &format!("{name}-{run_id}@example.org"),
+                            Some(code),
+                        )
+                        .await?,
+                    );
+                }
+            } else if invite_only {
+                return Err(
+                    "the install is invite-only and not fresh: create accounts for the smoke test, or set the sign-up policy to open"
+                        .to_string(),
                 );
+            } else {
+                for name in ["bob", "mallory"] {
+                    users.push(
+                        sign_up_and_log_in(&auth, &format!("{name}-{run_id}@example.org"), None)
+                            .await?,
+                    );
+                }
             }
             expect_refused(&gateway, &forge(&users[0].1), "invalid token").await?;
             println!("signed up and logged in 3 users via {auth}; a forged token was refused");
-            users
+            (users, first_account)
         }
-        Err(_) => [1_000, 2_000, 3_000]
-            .map(|base| {
-                (
-                    base + run_id % 1_000,
-                    format!("dev:{}", base + run_id % 1_000),
-                )
-            })
-            .to_vec(),
+        Err(_) => (
+            [1_000, 2_000, 3_000]
+                .map(|base| {
+                    (
+                        base + run_id % 1_000,
+                        format!("dev:{}", base + run_id % 1_000),
+                    )
+                })
+                .to_vec(),
+            false,
+        ),
     };
     let (alice, bob) = (users[0].0, users[1].0);
 
@@ -253,9 +307,8 @@ async fn run() -> Result<(), String> {
             .await?;
         }
         if let Ok(users_url) = std::env::var("XMSG_USERS_URL") {
-            let first_is_owner = std::env::var("XMSG_AUTH_URL").is_ok();
             let (workspace, ws_channel) =
-                check_workspaces(&users_url, url, &users, run_id, first_is_owner).await?;
+                check_workspaces(&users_url, url, &users, run_id, fresh_install).await?;
             if std::env::var("XMSG_EXPECT_WORKSPACE_REMOVAL").as_deref() == Ok("true") {
                 let messages_url = std::env::var("XMSG_MESSAGES_URL")
                     .map_err(|_| "XMSG_EXPECT_WORKSPACE_REMOVAL needs XMSG_MESSAGES_URL")?;
@@ -330,9 +383,9 @@ async fn check_workspaces(
     channels_url: &str,
     users: &[(i64, String)],
     run_id: i64,
-    // Whether the first sign-up owns the default workspace: only with real auth
-    // (ADR-0026); with development tokens there is no owner.
-    first_is_owner: bool,
+    // Whether this run created the first account: only then does alice own the
+    // default workspace (ADR-0026); with development tokens there is no owner either.
+    fresh_install: bool,
 ) -> Result<(String, String), String> {
     let (alice, bob, mallory) = (&users[0], &users[1], &users[2]);
     let fail =
@@ -365,9 +418,11 @@ async fn check_workspaces(
         return Err(fail("bob reading alice's profile", &seen));
     }
 
-    // Default channels (ADR-0026): with real auth alice signed up first, so she owns
-    // the default workspace and runs setup; bob joins the defaults on first sign-in.
-    if first_is_owner {
+    // Default channels (ADR-0026): on a fresh install alice signed up first, so she
+    // owns the default workspace and runs setup; bob joins the defaults on first
+    // sign-in. On an existing install we have no owner rights, so the management
+    // steps are skipped — but a member's idempotent default-channel join always runs.
+    if fresh_install {
         let listed = call(
             "GET",
             &format!("{users_url}/v1/me/workspaces"),
@@ -447,6 +502,31 @@ async fn check_workspaces(
         println!(
             "users: the first account owns the workspace, completes setup, and a member joins the default channel once"
         );
+    } else {
+        println!("not a fresh install: skipping the first-run owner checks");
+        for token in [&alice.1, &bob.1] {
+            let join = call(
+                "POST",
+                &format!("{channels_url}/v1/me/default-channels/join"),
+                token,
+                Some(serde_json::json!({"workspace_id": "1"})),
+            )
+            .await?;
+            if join.0 != 200 {
+                return Err(fail("a member joining the default channels", &join));
+            }
+            let again = call(
+                "POST",
+                &format!("{channels_url}/v1/me/default-channels/join"),
+                token,
+                Some(serde_json::json!({"workspace_id": "1"})),
+            )
+            .await?;
+            if again.0 != 200 || again.1["joined"] != serde_json::json!([]) {
+                return Err(fail("the default-channel join being idempotent", &again));
+            }
+        }
+        println!("users: a member's default-channel join works and is idempotent");
     }
 
     // A new workspace holds only alice: nobody else can be put into its channels.
@@ -2410,30 +2490,33 @@ async fn check_store(nodes: &str, channel: i64, alice: i64, bob: i64) -> Result<
     }
 }
 
-/// Signs a user up and logs in; returns (user ID, access token).
+/// Signs a user up (with an invite code when the install demands one) and logs in;
+/// returns (user ID, access token).
 const PASSWORD: &str = "e2e smoke password";
 
-async fn sign_up_and_log_in(auth: &str, email: &str) -> Result<(i64, String), String> {
-    let http = reqwest::Client::new();
-    let post = |path: &'static str, body: serde_json::Value| {
-        let request = http.post(format!("{auth}{path}")).json(&body);
-        async move {
-            let response = request.send().await.map_err(|e| format!("{path}: {e}"))?;
-            let status = response.status();
-            let body: serde_json::Value =
-                response.json().await.map_err(|e| format!("{path}: {e}"))?;
-            if status.is_success() {
-                Ok(body)
-            } else {
-                Err(format!("{path}: {status} {body}"))
-            }
-        }
-    };
-    post(
-        "/v1/signup",
-        serde_json::json!({"email": email, "password": PASSWORD, "name": "E2E"}),
-    )
-    .await?;
+async fn sign_up(auth: &str, email: &str, invite: Option<&str>) -> Result<u16, String> {
+    let mut body = serde_json::json!({"email": email, "password": PASSWORD, "name": "E2E"});
+    if let Some(invite) = invite {
+        body["invite"] = serde_json::json!(invite);
+    }
+    let response = reqwest::Client::new()
+        .post(format!("{auth}/v1/signup"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("/v1/signup: {e}"))?;
+    Ok(response.status().as_u16())
+}
+
+async fn sign_up_and_log_in(
+    auth: &str,
+    email: &str,
+    invite: Option<&str>,
+) -> Result<(i64, String), String> {
+    let status = sign_up(auth, email, invite).await?;
+    if status != 201 {
+        return Err(format!("signing up {email}: got {status}, want 201"));
+    }
     log_in(auth, email).await
 }
 

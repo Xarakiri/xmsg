@@ -121,14 +121,16 @@ pub trait Store: Send + Sync + 'static {
         user_id: i64,
     ) -> impl Future<Output = Result<Vec<Workspace>, StoreError>> + Send;
 
-    /// Renames the workspace and/or marks first-run setup completed (ADR-0026).
+    /// Renames the workspace and/or marks first-run setup completed (ADR-0026);
+    /// `signup` sets the sign-up policy (`invite_only` or `open`).
     /// `None`: no such workspace.
     fn update_workspace(
         &self,
         _id: i64,
         _name: Option<&str>,
         _complete_setup: bool,
-    ) -> impl Future<Output = Result<Option<(String, bool)>, StoreError>> + Send {
+        _signup: Option<&str>,
+    ) -> impl Future<Output = Result<Option<(String, bool, String)>, StoreError>> + Send {
         async {
             Err(StoreError::Db(
                 "workspace updates aren't supported by this store".into(),
@@ -459,15 +461,23 @@ impl Store for Postgres {
         id: i64,
         name: Option<&str>,
         complete_setup: bool,
-    ) -> Result<Option<(String, bool)>, StoreError> {
+        signup: Option<&str>,
+    ) -> Result<Option<(String, bool, String)>, StoreError> {
         Ok(sqlx::query_as(
-            "UPDATE workspaces SET name = COALESCE($2, name), \
-             setup_completed_at = CASE WHEN $3 THEN now() ELSE setup_completed_at END \
-             WHERE id = $1 RETURNING name, (setup_completed_at IS NOT NULL) AS setup_completed",
+            "UPDATE workspaces SET \
+             name = COALESCE($2, name), \
+             setup_completed_at = CASE WHEN $3 THEN now() ELSE setup_completed_at END, \
+             settings_json = CASE WHEN $4::text IS NOT NULL \
+                 THEN jsonb_set(settings_json, '{signup}', to_jsonb($4::text)) \
+                 ELSE settings_json END \
+             WHERE id = $1 \
+             RETURNING name, (setup_completed_at IS NOT NULL) AS setup_completed, \
+                       COALESCE(settings_json->>'signup', 'invite_only') AS signup",
         )
         .bind(id)
         .bind(name)
         .bind(complete_setup)
+        .bind(signup)
         .fetch_optional(&self.pool)
         .await?)
     }

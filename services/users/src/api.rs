@@ -302,10 +302,12 @@ async fn require_member<S: Store>(
 pub struct UpdateWorkspace {
     name: Option<String>,
     setup_completed: Option<bool>,
+    /// `invite_only` (default) or `open` (ADR-0026).
+    signup: Option<String>,
 }
 
-/// First-run setup and renaming (ADR-0026): owners and admins. `setup_completed` only
-/// ever turns true; completing it again is a no-op.
+/// First-run setup, renaming and the sign-up policy (ADR-0026): owners and admins.
+/// `setup_completed` only ever turns true; completing it again is a no-op.
 async fn update_workspace<S: Store>(
     State(app): State<Arc<App<S>>>,
     headers: HeaderMap,
@@ -325,10 +327,21 @@ async fn update_workspace<S: Store>(
             "setup_completed can only be set to true",
         ));
     }
+    if let Some(signup) = &req.signup
+        && signup != "invite_only"
+        && signup != "open"
+    {
+        return Err(ApiError::BadRequest("signup must be invite_only or open"));
+    }
     let name = req.name.as_deref().map(valid_name).transpose()?;
-    let Some((name, setup_completed)) = app
+    let Some((name, setup_completed, signup)) = app
         .store
-        .update_workspace(workspace_id, name.as_deref(), req.setup_completed.is_some())
+        .update_workspace(
+            workspace_id,
+            name.as_deref(),
+            req.setup_completed.is_some(),
+            req.signup.as_deref(),
+        )
         .await?
     else {
         return Err(ApiError::NotFound("unknown workspace"));
@@ -337,10 +350,11 @@ async fn update_workspace<S: Store>(
         workspace_id,
         user_id = me,
         setup_completed,
+        signup,
         "workspace updated"
     );
     Ok(Json(
-        json!({ "workspace_id": workspace_id.to_string(), "name": name, "setup_completed": setup_completed }),
+        json!({ "workspace_id": workspace_id.to_string(), "name": name, "setup_completed": setup_completed, "signup": signup }),
     ))
 }
 
