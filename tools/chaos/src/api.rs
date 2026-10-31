@@ -11,6 +11,7 @@ pub struct Urls {
     pub auth: String,
     pub channels: String,
     pub messages: String,
+    pub users: String,
 }
 
 fn http() -> reqwest::Client {
@@ -20,15 +21,21 @@ fn http() -> reqwest::Client {
         .expect("HTTP client")
 }
 
-/// Signs a user up and logs in; returns (user ID, access token).
-pub async fn sign_up(auth: &str, email: &str) -> Result<(i64, String), String> {
+/// Signs a user up (with an invite code when the install demands one) and logs in;
+/// returns (user ID, access token).
+pub async fn sign_up(
+    auth: &str,
+    email: &str,
+    invite: Option<&str>,
+) -> Result<(i64, String), String> {
     let http = http();
     let password = "chaos test password";
+    let mut signup = serde_json::json!({"email": email, "password": password, "name": "Chaos"});
+    if let Some(invite) = invite {
+        signup["invite"] = serde_json::json!(invite);
+    }
     for (path, body) in [
-        (
-            "/v1/signup",
-            serde_json::json!({"email": email, "password": password, "name": "Chaos"}),
-        ),
+        ("/v1/signup", signup),
         (
             "/v1/login",
             serde_json::json!({"email": email, "password": password}),
@@ -57,6 +64,19 @@ pub async fn sign_up(auth: &str, email: &str) -> Result<(i64, String), String> {
         }
     }
     unreachable!()
+}
+
+/// The sign-up policy (ADR-0026): `(first_account, invite_only)`.
+pub async fn signup_policy(auth: &str) -> Result<(bool, bool), String> {
+    let reply: serde_json::Value = http()
+        .get(format!("{auth}/v1/signup-policy"))
+        .send()
+        .await
+        .map_err(|e| format!("/v1/signup-policy: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("/v1/signup-policy: {e}"))?;
+    Ok((reply["first_account"] == true, reply["invite_only"] == true))
 }
 
 /// An authenticated JSON call; returns the status and body (Null if not JSON).

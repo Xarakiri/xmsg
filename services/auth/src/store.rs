@@ -234,6 +234,11 @@ impl Postgres {
             .await?;
         Ok(Postgres { pool })
     }
+
+    /// The connection pool, for integration tests that read the database directly.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
 }
 
 impl Store for Postgres {
@@ -469,11 +474,13 @@ impl Store for Postgres {
             .fetch_one(&mut *tx)
             .await?;
         if !first {
-            let policy: Option<String> =
+            // `fetch_optional`'s outer Option is row presence; the value itself is
+            // NULL when the policy was never set, which then means `invite_only`.
+            let policy: Option<Option<String>> =
                 sqlx::query_scalar("SELECT settings_json->>'signup' FROM workspaces WHERE id = 1")
                     .fetch_optional(&mut *tx)
                     .await?;
-            if policy.as_deref() != Some("open") {
+            if policy.flatten().as_deref() != Some("open") {
                 let invited = match invite {
                     None => false,
                     Some(code) => {

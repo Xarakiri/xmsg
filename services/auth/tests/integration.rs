@@ -36,7 +36,64 @@ async fn revocations(device_id: i64) -> Vec<Vec<u8>> {
 
 async fn store() -> Postgres {
     let url = std::env::var("XMSG_IT_PG").expect("XMSG_IT_PG must be set for integration tests");
+    // Sign-up is invite-only by default (ADR-0026); these tests share one database
+    // and sign users up freely, so the shared database's policy is opened here.
+    // The policy behavior itself is covered by unit tests and, against real
+    // PostgreSQL, by `signup_policy_*` on a throwaway database.
+    let pool = sqlx::PgPool::connect(&url)
+        .await
+        .expect("connect to Postgres");
+    sqlx::query(
+        "UPDATE workspaces SET settings_json = jsonb_set(settings_json, '{signup}', '\"open\"') \
+         WHERE id = 1",
+    )
+    .execute(&pool)
+    .await
+    .expect("open the sign-up policy for the shared test database");
+    drop(pool);
     Postgres::connect(&url).await.expect("connect to Postgres")
+}
+
+/// A throwaway database with the Small-tier schema applied, for tests that need a
+/// state the shared database can't have (no owner, a closed policy). The xmsg role
+/// is the bootstrap superuser in every environment (CI's container sets
+/// POSTGRES_USER=xmsg), so CREATE DATABASE works anywhere XMSG_IT_PG does.
+/// Returns the store and the admin pool to drop the database with.
+async fn throwaway_store(name: &str) -> (Postgres, sqlx::PgPool) {
+    let url = std::env::var("XMSG_IT_PG").unwrap();
+    let admin_url = format!("{}/postgres", url.rsplit_once('/').unwrap().0);
+    let test_url = format!("{}/{name}", url.rsplit_once('/').unwrap().0);
+    let admin = sqlx::PgPool::connect(&admin_url).await.unwrap();
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let fresh = sqlx::PgPool::connect(&test_url).await.unwrap();
+    for file in [
+        include_str!("../../../deploy/compose/init/postgres/001_schema.sql"),
+        include_str!("../../../deploy/compose/init/postgres/002_push.sql"),
+        include_str!("../../../deploy/compose/init/postgres/003_sso.sql"),
+        include_str!("../../../deploy/compose/init/postgres/004_sso_policy.sql"),
+        include_str!("../../../deploy/compose/init/postgres/005_storage_quota.sql"),
+        include_str!("../../../deploy/compose/init/postgres/006_workspace_setup.sql"),
+        include_str!("../../../deploy/compose/init/postgres/007_password_reset.sql"),
+    ] {
+        sqlx::raw_sql(file).execute(&fresh).await.unwrap();
+    }
+    drop(fresh);
+    (Postgres::connect(&test_url).await.unwrap(), admin)
+}
+
+/// Best-effort cleanup of a `throwaway_store` database.
+async fn drop_throwaway(admin: &sqlx::PgPool, name: &str) {
+    sqlx::query(&format!("DROP DATABASE IF EXISTS {name}"))
+        .execute(admin)
+        .await
+        .unwrap();
 }
 
 fn refresh(ttl: Duration) -> (String, NewRefresh) {
@@ -290,24 +347,20 @@ async fn ending_a_session_writes_one_revocation_to_the_outbox() {
 #[tokio::test]
 #[ignore]
 async fn concurrent_first_signups_give_one_owner_and_the_rest_members() {
-    let store = store().await;
-    let url = std::env::var("XMSG_IT_PG").unwrap();
-    // Tests share one database, so an owner usually exists already. Every create_user
-    // takes the same advisory key (726026), so holding it at session level serializes
-    // every sign-up in every test for the duration of this one: the ownerless window
-    // below can't race another test's create_user. Sign-ups queue on the key instead
-    // of row locks, so nothing deadlocks; the lock frees when the pool drops.
-    let gate = sqlx::PgPool::connect(&url).await.unwrap();
-    sqlx::query("SELECT pg_advisory_lock(726026)")
-        .execute(&gate)
-        .await
-        .unwrap();
-    sqlx::query("DELETE FROM workspace_members WHERE workspace_id = 1")
-        .execute(&gate)
-        .await
-        .unwrap();
-
+    // Tests share one database, so workspace 1 usually has an owner already; this
+    // test needs a genuinely ownerless workspace, in isolation.
+    let (store, admin) = throwaway_store("xmsg_owner_election").await;
+    // This test exercises the owner election, not the invite policy: open it, like
+    // `store()` does for the shared database.
+    sqlx::query(
+        "UPDATE workspaces SET settings_json = jsonb_set(settings_json, '{signup}', '\"open\"') \
+         WHERE id = 1",
+    )
+    .execute(store.pool())
+    .await
+    .unwrap();
     let store = std::sync::Arc::new(store);
+
     let tasks: Vec<_> = (0..4)
         .map(|i| {
             let store = store.clone();
@@ -335,7 +388,7 @@ async fn concurrent_first_signups_give_one_owner_and_the_rest_members() {
         "SELECT role FROM workspace_members WHERE workspace_id = 1 AND user_id = ANY($1)",
     )
     .bind(&ids)
-    .fetch_all(&gate)
+    .fetch_all(store.pool())
     .await
     .unwrap();
     assert_eq!(roles.len(), 4);
@@ -346,13 +399,91 @@ async fn concurrent_first_signups_give_one_owner_and_the_rest_members() {
     );
     assert!(roles.iter().all(|r| r == "owner" || r == "member"));
 
-    // The next account is a plain member (after the gate is out, like production).
-    drop(gate);
+    // The next account is a plain member.
     let (late, _, _) = session(&store, Duration::hours(1)).await;
     assert_eq!(
         store.role(1, late).await.unwrap().as_deref(),
         Some("member")
     );
+
+    // Best-effort cleanup; the next run drops the database first anyway.
+    drop(store);
+    drop_throwaway(&admin, "xmsg_owner_election").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn signup_policy_is_invite_only_by_default_and_invites_admit() {
+    let (store, admin) = throwaway_store("xmsg_signup_policy").await;
+    let hash = &password::hash("integration test");
+
+    // A fresh install: the first account needs no invite and owns the workspace.
+    assert_eq!(store.signup_policy().await.unwrap(), (true, true));
+    let first = new_id();
+    store
+        .create_user(first, "first@example.org", hash, "First", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.role(1, first).await.unwrap().as_deref(),
+        Some("owner")
+    );
+
+    // After that the workspace is invite-only: no invite, no account. (A missing
+    // `settings_json.signup` must read as invite-only, not as a store error.)
+    assert_eq!(store.signup_policy().await.unwrap(), (false, true));
+    let refused = store
+        .create_user(new_id(), "second@example.org", hash, "Second", None)
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::SignupForbidden)),
+        "{refused:?}"
+    );
+
+    // A valid unexpired invite code admits the sign-up; an expired one doesn't.
+    // The code is checked, not consumed, and sign-ups with it are plain members.
+    let pool = store.pool();
+    sqlx::query(
+        "INSERT INTO workspace_invites (code_hash, workspace_id, created_by, expires_at) \
+         VALUES ($2, 1, $1, now() + interval '1 hour')",
+    )
+    .bind(first)
+    .bind(token_hash("valid"))
+    .execute(pool)
+    .await
+    .unwrap();
+    let invited = new_id();
+    store
+        .create_user(
+            invited,
+            "invited@example.org",
+            hash,
+            "Invited",
+            Some("valid"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.role(1, invited).await.unwrap().as_deref(),
+        Some("member")
+    );
+
+    // The owner opens the policy; now anyone signs up.
+    sqlx::query(
+        "UPDATE workspaces SET settings_json = jsonb_set(settings_json, '{signup}', '\"open\"') \
+         WHERE id = 1",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(store.signup_policy().await.unwrap(), (false, false));
+    store
+        .create_user(new_id(), "open@example.org", hash, "Open", None)
+        .await
+        .unwrap();
+
+    drop(store);
+    drop_throwaway(&admin, "xmsg_signup_policy").await;
 }
 
 #[tokio::test]
@@ -401,13 +532,23 @@ async fn enforced_sso_and_recovery_codes_follow_membership() {
     assert!(!store.sso_required(member).await.unwrap());
     assert!(!store.has_external_identity(admin).await.unwrap());
 
-    let hashes = vec![token_hash("code-a"), token_hash("code-b")];
+    // Unique per run: code_hash is a global primary key, and the shared database
+    // outlives this test.
+    let nonce = new_id();
+    let hashes = vec![
+        token_hash(&format!("code-a-{nonce}")),
+        token_hash(&format!("code-b-{nonce}")),
+    ];
     store
         .replace_recovery_codes(workspace_id, admin, &hashes)
         .await
         .unwrap();
     store
-        .replace_recovery_codes(workspace_id, member, &[token_hash("code-m")])
+        .replace_recovery_codes(
+            workspace_id,
+            member,
+            &[token_hash(&format!("code-m-{nonce}"))],
+        )
         .await
         .unwrap();
     // Once each, only by the holder, only while an owner or admin.
@@ -416,19 +557,23 @@ async fn enforced_sso_and_recovery_codes_follow_membership() {
     assert!(!store.use_recovery_code(member, &hashes[1]).await.unwrap());
     assert!(
         !store
-            .use_recovery_code(member, &token_hash("code-m"))
+            .use_recovery_code(member, &token_hash(&format!("code-m-{nonce}")))
             .await
             .unwrap()
     );
     // Replacing drops the old ones.
     store
-        .replace_recovery_codes(workspace_id, admin, &[token_hash("code-c")])
+        .replace_recovery_codes(
+            workspace_id,
+            admin,
+            &[token_hash(&format!("code-c-{nonce}"))],
+        )
         .await
         .unwrap();
     assert!(!store.use_recovery_code(admin, &hashes[1]).await.unwrap());
     assert!(
         store
-            .use_recovery_code(admin, &token_hash("code-c"))
+            .use_recovery_code(admin, &token_hash(&format!("code-c-{nonce}")))
             .await
             .unwrap()
     );

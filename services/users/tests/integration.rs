@@ -191,9 +191,19 @@ async fn workspaces_roles_members_and_unique_slugs() {
             .await
             .unwrap();
     assert_eq!(stored, "open");
+    // A workspace that never set the policy reads as invite_only. (A fresh row, so
+    // this holds no matter what other tests did to workspace 1 in a shared database.)
+    let untouched = new_id();
+    sqlx::query("INSERT INTO workspaces (id, name, slug) VALUES ($1, 'Untouched', $2)")
+        .bind(untouched)
+        .bind(format!("untouched-{untouched}"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let default: String = sqlx::query_scalar(
-        "SELECT COALESCE(settings_json->>'signup', 'invite_only') FROM workspaces WHERE id = 1",
+        "SELECT COALESCE(settings_json->>'signup', 'invite_only') FROM workspaces WHERE id = $1",
     )
+    .bind(untouched)
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -343,7 +353,7 @@ async fn workspace_setup_backfills_an_owner_and_onboarding() {
         )
         .bind(ws)
         .bind(id)
-        .bind((3 - i) as f64)
+        .bind((3 - i) as i32)
         .execute(&pool)
         .await
         .unwrap();

@@ -165,6 +165,7 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
         auth: env("XMSG_AUTH_URL", "http://127.0.0.1:8081"),
         channels: env("XMSG_CHANNELS_URL", "http://127.0.0.1:8082"),
         messages: env("XMSG_MESSAGES_URL", "http://127.0.0.1:8083"),
+        users: env("XMSG_USERS_URL", "http://127.0.0.1:8084"),
     };
     let gateway = env("XMSG_GATEWAY_URL", "ws://127.0.0.1:4000/ws");
     let bootstrap = env("XMSG_KAFKA_BOOTSTRAP", "127.0.0.1:9092");
@@ -183,10 +184,34 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
         retry_after: Duration::from_millis(args.retry_after_ms),
         stop: stop_rx.clone(),
     };
-    let mut users = Vec::new();
+    let mut users: Vec<User> = Vec::new();
+    // Sign-up policy (ADR-0026): the first account needs no invite and owns the
+    // workspace; the rest need the policy opened (the owner does that) or an
+    // already-open install.
+    let (first_account, invite_only) = api::signup_policy(&urls.auth).await?;
     for i in 0..args.users {
+        if i > 0 && first_account {
+            let opened = api::call(
+                "PATCH",
+                &format!("{}/v1/workspaces/1", urls.users),
+                &users[0].token,
+                Some(serde_json::json!({"signup": "open"})),
+            )
+            .await?;
+            if opened.0 != 200 {
+                return Err(format!(
+                    "opening the sign-up policy for the chaos users: {} {}",
+                    opened.0, opened.1
+                ));
+            }
+        } else if i > 0 && invite_only {
+            return Err(
+                "the install is invite-only and not fresh: create accounts for the chaos users, or set the sign-up policy to open"
+                    .to_string(),
+            );
+        }
         let (id, token) =
-            api::sign_up(&urls.auth, &format!("chaos-{run_id}-{i}@example.org")).await?;
+            api::sign_up(&urls.auth, &format!("chaos-{run_id}-{i}@example.org"), None).await?;
         users.push(User::spawn(gateway.clone(), id, token, &shared));
     }
     let users = Arc::new(users);
