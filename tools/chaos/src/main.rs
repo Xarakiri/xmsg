@@ -165,7 +165,6 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
         auth: env("XMSG_AUTH_URL", "http://127.0.0.1:8081"),
         channels: env("XMSG_CHANNELS_URL", "http://127.0.0.1:8082"),
         messages: env("XMSG_MESSAGES_URL", "http://127.0.0.1:8083"),
-        users: env("XMSG_USERS_URL", "http://127.0.0.1:8084"),
     };
     let gateway = env("XMSG_GATEWAY_URL", "ws://127.0.0.1:4000/ws");
     let bootstrap = env("XMSG_KAFKA_BOOTSTRAP", "127.0.0.1:9092");
@@ -185,33 +184,19 @@ async fn run(args: Args, stack: Arc<tokio::sync::Mutex<Stack>>) -> Result<(), St
         stop: stop_rx.clone(),
     };
     let mut users: Vec<User> = Vec::new();
-    // Sign-up policy (ADR-0026): the first account needs no invite and owns the
-    // workspace; the rest need the policy opened (the owner does that) or an
-    // already-open install.
-    let (first_account, invite_only) = api::signup_policy(&urls.auth).await?;
+    // Chaos needs to sign users up freely: the workspace's policy must be `open`.
+    // The CI job opens it in its setup; standalone runs do it with the same UPDATE
+    // as the database owner (or an owner PATCHes /v1/workspaces/1, ADR-0026).
+    if api::signup_policy(&urls.auth).await?.1 {
+        return Err(
+            "the workspace is invite-only: chaos needs the sign-up policy open \
+             (UPDATE workspaces SET settings_json = jsonb_set(settings_json, '{signup}', '\"open\"') WHERE id = 1)"
+                .to_string(),
+        );
+    }
     for i in 0..args.users {
-        if i > 0 && first_account {
-            let opened = api::call(
-                "PATCH",
-                &format!("{}/v1/workspaces/1", urls.users),
-                &users[0].token,
-                Some(serde_json::json!({"signup": "open"})),
-            )
-            .await?;
-            if opened.0 != 200 {
-                return Err(format!(
-                    "opening the sign-up policy for the chaos users: {} {}",
-                    opened.0, opened.1
-                ));
-            }
-        } else if i > 0 && invite_only {
-            return Err(
-                "the install is invite-only and not fresh: create accounts for the chaos users, or set the sign-up policy to open"
-                    .to_string(),
-            );
-        }
         let (id, token) =
-            api::sign_up(&urls.auth, &format!("chaos-{run_id}-{i}@example.org"), None).await?;
+            api::sign_up(&urls.auth, &format!("chaos-{run_id}-{i}@example.org")).await?;
         users.push(User::spawn(gateway.clone(), id, token, &shared));
     }
     let users = Arc::new(users);

@@ -330,7 +330,7 @@ async fn run() -> Result<(), String> {
     if let Ok(auth) = std::env::var("XMSG_AUTH_URL")
         && std::env::var("XMSG_EXPECT_REVOCATION").as_deref() == Ok("true")
     {
-        check_revocation(&auth, &gateway, run_id).await?;
+        check_revocation(&auth, &gateway, run_id, users.first(), users_url.as_deref()).await?;
     }
     Ok(())
 }
@@ -1022,18 +1022,19 @@ async fn check_search(
             })
             .unwrap_or_default())
     };
-    // Indexing is asynchronous (the indexer flushes every second, OpenSearch refreshes every second).
+    // Indexing is asynchronous (the indexer flushes every second, OpenSearch refreshes
+    // every second), and the search backend can still be starting: retry every
+    // answer that isn't one hit, 200 included, until the deadline.
     let started = Instant::now();
     let deadline = started + Duration::from_secs(30);
     loop {
-        let hits = found(&bob.1).await?;
-        if hits.len() == 1 && hits[0].contains(&word) {
-            break;
-        }
+        let last = match found(&bob.1).await {
+            Ok(hits) if hits.len() == 1 && hits[0].contains(&word) => break,
+            Ok(hits) => format!("bob expected 1 hit for {word}, got {hits:?}"),
+            Err(e) => e,
+        };
         if Instant::now() > deadline {
-            return Err(format!(
-                "search: bob expected 1 hit for {word}, got {hits:?}"
-            ));
+            return Err(format!("search: {last}"));
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
@@ -2585,10 +2586,42 @@ async fn expect_refused(url: &str, token: &str, reason: &str) -> Result<(), Stri
 
 /// Revocation (plan §6.4): logging out closes the session's open socket within seconds,
 /// and its access token, still cryptographically valid for ~15 minutes, is refused.
-async fn check_revocation(auth: &str, gateway: &str, run_id: i64) -> Result<(), String> {
+/// `owner` is an authenticated workspace owner (the smoke run's first account), used
+/// to open the sign-up policy when the install is invite-only (ADR-0026).
+async fn check_revocation(
+    auth: &str,
+    gateway: &str,
+    run_id: i64,
+    owner: Option<&(i64, String)>,
+    users_url: Option<&str>,
+) -> Result<(), String> {
     let http = reqwest::Client::new();
     let email = format!("dora-{run_id}@example.org");
     let password = "e2e smoke password";
+    // Dora signs up after the run's other accounts: on an invite-only install that
+    // takes the owner opening the policy (or an invite) first.
+    let (_, policy) = call("GET", &format!("{auth}/v1/signup-policy"), "", None).await?;
+    if policy["invite_only"] == true {
+        let (Some((_, owner_token)), Some(users_url)) = (owner, users_url) else {
+            return Err(
+                "sign-up is invite-only and no workspace owner is at hand for dora's account"
+                    .to_string(),
+            );
+        };
+        let opened = call(
+            "PATCH",
+            &format!("{users_url}/v1/workspaces/1"),
+            owner_token,
+            Some(serde_json::json!({"signup": "open"})),
+        )
+        .await?;
+        if opened.0 != 200 {
+            return Err(format!(
+                "opening the sign-up policy for dora's account: {} {}",
+                opened.0, opened.1
+            ));
+        }
+    }
     let post = async |path: &str, body: serde_json::Value| -> Result<serde_json::Value, String> {
         let response = http
             .post(format!("{auth}{path}"))
