@@ -171,7 +171,14 @@ h1, h2, h3, p { margin: 0; }
 .admin-tabs .link.active { color: var(--green); }
 .admin-panel .modal-form { overflow-y: auto; }
 .admin-panel .checkbox { display: flex; gap: 8px; align-items: center; }
-.member-rows { display: grid; gap: 10px; } .member-rows li { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.member-rows { display: grid; gap: 10px; } .member-rows li { display: grid; gap: 4px; } .member-row { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.reset-code { color: var(--cyan); overflow-wrap: anywhere; font-size: 11px; }
+.signup-policy { display: flex; gap: 20px; align-items: center; border: 0; padding: 0; margin: 0; } .signup-policy legend { float: left; margin-right: 20px; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 0; }
+.signup-policy label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.signup-policy input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.signup-policy input:focus-visible + .radio-dot { outline: 1px solid var(--green); outline-offset: 2px; }
+.radio-dot { color: var(--green); }
+.picker-footer { display: flex; gap: 16px; padding: 10px; border-top: 1px solid var(--border); color: var(--muted); }
 .member-actions { display: flex; gap: 10px; align-items: center; }
 .invite-code { color: var(--cyan); overflow-wrap: anywhere; }
 .admin-note { padding: 18px 22px; }

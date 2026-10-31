@@ -8,7 +8,7 @@ import { useNames } from "./useNames.ts";
 import { notify, setBadge } from "./notify.ts";
 import { draftKey, unreadTotal } from "./chatlog.ts";
 import { MessageList } from "./MessageList.tsx";
-import { ShortcutsPanel, Switcher } from "./Switcher.tsx";
+import { ShortcutsPanel, Switcher, MemberPicker } from "./Switcher.tsx";
 import { AdminPanel, AuthScreen, ChannelInfoPanel, ConversationHeader, InviteLinkAction, KeyHints, Modal, Prompt, SearchResults, SettingsPanel, SetupScreen, Sidebar, StatusLine, ThreadPanel, WaitingScreen, channelTitle, errorText, messageIdOf, type AdminMember, type Theme } from "./components.tsx";
 
 const CallPanel = lazy(() => import("./calls.tsx").then((m) => ({ default: m.CallPanel })));
@@ -93,24 +93,41 @@ function ConnectScreen({ onConnect }: { onConnect: (url: string) => void }) {
 }
 
 function SignIn({ onSignedIn }: { onSignedIn: (userId: string) => void }) {
-  const [mode, setMode] = useState<"in" | "up" | "code">("in");
+  const [mode, setMode] = useState<"in" | "up" | "code" | "reset">("in");
   const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [passwordAgain, setPasswordAgain] = useState("");
   const [code, setCode] = useState(""); const [name, setName] = useState(""); const [error, setError] = useState(sso.error ?? ""); const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const [policy, setPolicy] = useState<{ first_account: boolean; invite_only: boolean } | null>(null);
   const [providers, setProviders] = useState<{ id: string; name: string; url: string }[]>([]);
+  useEffect(() => { void api.signupPolicy().then(setPolicy).catch(() => undefined); }, []);
   useEffect(() => { if (!isDesktop) api.ssoProviders().then((items) => setProviders(items.map((item) => ({ ...item, url: api.ssoStartUrl(item.id, location.pathname) })))).catch(() => setProviders([])); }, []);
+  const canRegister = !policy || policy.first_account || !policy.invite_only || Boolean(joinCode);
+  const inviteOnlyLocked = Boolean(policy?.invite_only && !policy.first_account && !joinCode);
   const submit = async (e: FormEvent) => {
-    e.preventDefault(); setBusy(true); setError("");
+    e.preventDefault(); setBusy(true); setError(""); setNote("");
     try {
+      if (mode === "reset") {
+        if (password !== passwordAgain) throw new Error("Passwords do not match");
+        await api.resetPassword(email, code, password);
+        setPassword(""); setPasswordAgain(""); setCode("");
+        setMode("in");
+        setNote("password changed · log in");
+        setBusy(false);
+        return;
+      }
       if (mode === "up") {
         if (password !== passwordAgain) throw new Error("Passwords do not match");
-        await api.signup(email, password, name);
+        await api.signup(email, password, name, joinCode ?? undefined);
       }
       session.adopt(mode === "code" ? await api.loginWithRecoveryCode(email, code) : await api.login(email, password));
       onSignedIn(session.userId);
-    } catch (err) { setError(err instanceof ApiError ? errorText(err) : err instanceof Error ? err.message : errorText(err)); }
+    } catch (err) {
+      setError(mode === "reset" ? "that didn't work · ask an admin for a new code" : err instanceof ApiError ? errorText(err) : err instanceof Error ? err.message : errorText(err));
+    }
     finally { setBusy(false); }
   };
-  return <AuthScreen mode={mode} setMode={setMode} name={name} setName={setName} email={email} setEmail={setEmail} password={password} setPassword={setPassword} passwordAgain={passwordAgain} setPasswordAgain={setPasswordAgain} code={code} setCode={setCode} error={error} busy={busy} providers={providers} joining={joinCode ? (joinWorkspace ?? "workspace") : undefined} onSubmit={(e) => void submit(e)} />;
+  const noteLine = mode === "up" ? (policy?.first_account ? "you'll own this workspace" : inviteOnlyLocked ? "this workspace is invite only · ask an admin for a link" : note || undefined) : note || undefined;
+  return <AuthScreen mode={mode} setMode={(m) => { setMode(m); setError(""); setNote(""); }} name={name} setName={setName} email={email} setEmail={setEmail} password={password} setPassword={setPassword} passwordAgain={passwordAgain} setPasswordAgain={setPasswordAgain} code={code} setCode={setCode} error={error} busy={busy} providers={providers} joining={joinCode ? (joinWorkspace ?? "workspace") : undefined} note={noteLine} title={policy?.first_account ? "create first account" : undefined} canRegister={canRegister} locked={mode === "up" && inviteOnlyLocked} onSubmit={(e) => void submit(e)} />;
 }
 
 type Gate =
@@ -286,10 +303,22 @@ function ChatView({ me, initial, initialChannel, workspace, workspaces, fresh, t
   const openThreadFor = useCallback((message: Message) => {
     if (!current) return; setThreadOf(message.msgSeq); openThread(current.id, { msgSeq: message.msgSeq, messageId: messageIdOf(message) });
   }, [current, openThread]); // eslint-disable-line react-hooks/exhaustive-deps
-  const inviteTo = useCallback((channel: Channel) => {
-    const user = prompt("User ID to invite")?.trim();
-    if (user) void session.accessToken().then((token) => api.join(token, channel.id, user)).catch((e) => alert(errorText(e)));
-  }, []);
+  const [picker, setPicker] = useState<Channel | null>(null);
+  const [inviting, setInviting] = useState(false);
+  const inviteTo = useCallback((channel: Channel) => setPicker(channel), []);
+  const invitePeople = (ids: string[]) => {
+    if (!picker) return;
+    setInviting(true);
+    const channel = picker;
+    void (async () => {
+      try {
+        const token = await session.accessToken();
+        for (const id of ids) await api.join(token, channel.id, id);
+        setPicker(null);
+      } catch (e) { alert(errorText(e)); }
+      finally { setInviting(false); }
+    })();
+  };
   const createInviteLink = useCallback(async () => {
     if (!workspace) throw new Error("no workspace");
     const { code } = await api.createInvite(await session.accessToken(), workspace.workspace_id);
@@ -437,6 +466,7 @@ function ChatView({ me, initial, initialChannel, workspace, workspaces, fresh, t
   {modal === "channel" || modal === "dm" ? <CreatePanel kind={modal} onClose={() => setModal("none")} onCreated={(id, name) => { if (name) nameChannel(id, name); selectChannel(id); setModal("none"); }} /> : null}
   {modal === "settings" && <SettingsPanel me={me} names={names} theme={theme} onToggleTheme={toggleTheme} workspaces={workspaces} currentWorkspaceId={workspace?.workspace_id ?? ""} serverInitial={isDesktop ? serverUrl() : undefined} onSaveProfile={async (name, avatar) => names.remember(await api.updateMe(await session.accessToken(), { name, avatar_url: avatar || null }))} onSaveServer={isDesktop ? (url) => { if (!validServerUrl(url)) return alert("Use an https URL (or http for localhost / 127.0.0.1)"); saveServerUrl(url); location.reload(); } : undefined} onAcceptInvite={async (code) => { await api.acceptInvite(await session.accessToken(), code); }} onSignOut={onSignOut} onClose={() => setModal("none")} />}
   {modal === "info" && current && <ChannelInfoPanel channel={current} title={currentTitle} me={me} names={names} onMute={() => setMuted(current.id, !current.muted)} onInvite={current.kind !== "dm" ? () => inviteTo(current) : undefined} onLeave={current.kind !== "dm" ? () => { void session.accessToken().then((token) => api.remove(token, current.id, me)).catch((e) => alert(errorText(e))); } : undefined} onClose={() => setModal("none")} />}
+  {picker && <MemberPicker people={people} exclude={picker.members} busy={inviting} onInvite={invitePeople} onClose={() => setPicker(null)} />}
   </div>;
 }
 
@@ -444,6 +474,7 @@ function ChatView({ me, initial, initialChannel, workspace, workspaces, fresh, t
 function AdminScreen({ workspace, myRole, me, rooms, onClose }: { workspace: Workspace; myRole: "owner" | "admin" | "member"; me: string; rooms: Channel[]; onClose: () => void }) {
   const [members, setMembers] = useState<AdminMember[]>([]);
   const [defaults, setDefaults] = useState<{ channelId: string; name: string }[]>([]);
+  const [signup, setSignup] = useState<"invite_only" | "open">("invite_only");
   const [denied, setDenied] = useState(false);
   const token = () => session.accessToken();
   const load = useCallback(async () => {
@@ -459,6 +490,8 @@ function AdminScreen({ workspace, myRole, me, rooms, onClose }: { workspace: Wor
       }
       setMembers(all);
       setDefaults(await api.defaultChannels(t, workspace.workspace_id));
+      const policy = await api.signupPolicy().catch(() => null);
+      if (policy) setSignup(policy.invite_only ? "invite_only" : "open");
     } catch (e) {
       if (e instanceof ApiError && e.status === 403) setDenied(true);
     }
@@ -468,7 +501,7 @@ function AdminScreen({ workspace, myRole, me, rooms, onClose }: { workspace: Wor
   if (denied) return <section className="admin-panel"><header className="panel-title">ADMIN<button className="link" onClick={onClose}>×</button></header><p className="muted admin-note">not allowed</p></section>;
   const publicChannels = rooms.filter((c) => c.kind === "public" && c.name).map((c) => ({ channelId: c.id, name: c.name }));
   const withToken = (f: (t: string) => Promise<unknown>) => act(token().then(f));
-  return <AdminPanel workspace={workspace} myRole={myRole} me={me} members={members} defaults={defaults} publicChannels={publicChannels} onRename={(name) => withToken((t) => api.updateWorkspace(t, workspace.workspace_id, { name }))} onAddDefault={(channelId, addExistingMembers) => withToken((t) => api.addDefaultChannel(t, workspace.workspace_id, channelId, addExistingMembers))} onRemoveDefault={(channelId) => withToken((t) => api.removeDefaultChannel(t, workspace.workspace_id, channelId))} onSetRole={(userId, role) => withToken((t) => api.updateWorkspaceMemberRole(t, workspace.workspace_id, userId, role))} onRemoveMember={(userId) => withToken((t) => api.removeWorkspaceMember(t, workspace.workspace_id, userId))} onCreateInvite={async () => (await api.createInvite(await token(), workspace.workspace_id)).code} onClose={onClose} />;
+  return <AdminPanel workspace={workspace} myRole={myRole} me={me} members={members} defaults={defaults} publicChannels={publicChannels} signup={signup} onRename={(name) => withToken((t) => api.updateWorkspace(t, workspace.workspace_id, { name }))} onSetSignup={(next) => withToken((t) => api.updateWorkspace(t, workspace.workspace_id, { signup: next })).then(() => setSignup(next))} onAddDefault={(channelId, addExistingMembers) => withToken((t) => api.addDefaultChannel(t, workspace.workspace_id, channelId, addExistingMembers))} onRemoveDefault={(channelId) => withToken((t) => api.removeDefaultChannel(t, workspace.workspace_id, channelId))} onSetRole={(userId, role) => withToken((t) => api.updateWorkspaceMemberRole(t, workspace.workspace_id, userId, role))} onRemoveMember={(userId) => withToken((t) => api.removeWorkspaceMember(t, workspace.workspace_id, userId))} onResetPassword={async (userId) => api.passwordResetCode(await token(), workspace.workspace_id, userId)} onCreateInvite={async () => (await api.createInvite(await token(), workspace.workspace_id)).code} onClose={onClose} />;
 }
 
 function CreatePanel({ kind, onClose, onCreated }: { kind: "channel" | "dm"; onClose: () => void; onCreated: (id: string, name?: string) => void }) {

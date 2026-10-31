@@ -133,8 +133,13 @@ export class Api {
     if (opts.fetch) setFetch(opts.fetch);
   }
 
-  signup(email: string, password: string, name: string): Promise<{ user_id: string }> {
-    return call(`${this.endpoints.auth}/v1/signup`, { method: "POST", body: json({ email, password, name }) });
+  signup(email: string, password: string, name: string, invite?: string): Promise<{ user_id: string }> {
+    return call(`${this.endpoints.auth}/v1/signup`, { method: "POST", body: json({ email, password, name, ...(invite ? { invite } : {}) }) });
+  }
+
+  /** Who may register: the first account always, or anyone when sign-up is open (ADR-0026). */
+  signupPolicy(): Promise<{ first_account: boolean; invite_only: boolean }> {
+    return call(`${this.endpoints.auth}/v1/signup-policy`, { method: "GET" });
   }
 
   login(email: string, password: string, platform = "web"): Promise<Tokens> {
@@ -418,9 +423,19 @@ export class Api {
     return (await call<{ workspaces: Workspace[] }>(`${this.endpoints.users}/v1/me/workspaces`, { method: "GET", token })).workspaces;
   }
 
-  /** Owner/admin: rename the workspace and/or mark first-run setup done (ADR-0026). */
-  updateWorkspace(token: string, workspaceId: string, change: { name?: string; setup_completed?: true }): Promise<Workspace> {
+  /** Owner/admin: rename the workspace, mark first-run setup done, set the sign-up policy (ADR-0026). */
+  updateWorkspace(token: string, workspaceId: string, change: { name?: string; setup_completed?: true; signup?: "invite_only" | "open" }): Promise<Workspace> {
     return call(`${this.endpoints.users}/v1/workspaces/${workspaceId}`, { method: "PATCH", token, body: json(change) });
+  }
+
+  /** Owner/admin (not an admin resetting an owner): a single-use password-reset code, shown once. */
+  passwordResetCode(token: string, workspaceId: string, userId: string): Promise<{ code: string; expires_at: string }> {
+    return call(`${this.endpoints.users}/v1/workspaces/${workspaceId}/members/${userId}/password-reset`, { method: "POST", token });
+  }
+
+  /** Applying a reset code: one indistinguishable 400 for unknown email, wrong code or expiry. */
+  async resetPassword(email: string, code: string, password: string): Promise<void> {
+    await call(`${this.endpoints.auth}/v1/password-reset`, { method: "POST", body: json({ email, code, password }) });
   }
 
   /** One page of members by user ID; pass `next` back as `after` for the following page. */

@@ -96,3 +96,36 @@ test("workspace member role change and removal", async () => {
   assert.equal(calls[1]!.method, "DELETE");
   assert.equal(calls[1]!.url, "/users/v1/workspaces/1/members/42");
 });
+
+test("signup-policy, invite code and password reset", async () => {
+  const { calls, impl } = fakeFetch((req) => {
+    if (req.url.endsWith("/signup-policy")) return { json: { first_account: false, invite_only: true } };
+    if (req.url.endsWith("/password-reset") && !req.url.includes("/members/")) return { status: 204 };
+    return { json: { code: "reset-code-xyz", expires_at: "2026-10-31T13:00:00Z" } };
+  });
+  const api = new Api(endpoints, { fetch: impl });
+
+  assert.deepEqual(await api.signupPolicy(), { first_account: false, invite_only: true });
+  assert.equal(calls[0]!.url, "/auth/v1/signup-policy");
+
+  await api.resetPassword("a@b.dev", "some-code", "new-password-123");
+  assert.equal(calls[1]!.url, "/auth/v1/password-reset");
+  assert.deepEqual(JSON.parse(calls[1]!.body), { email: "a@b.dev", code: "some-code", password: "new-password-123" });
+
+  const reply = await api.passwordResetCode("tok", "1", "42");
+  assert.equal(reply.code, "reset-code-xyz");
+  assert.equal(calls[2]!.url, "/users/v1/workspaces/1/members/42/password-reset");
+
+  const { impl: impl400 } = fakeFetch(() => ({ status: 400, json: { error: "invalid code" } }));
+  const api400 = new Api(endpoints, { fetch: impl400 });
+  await assert.rejects(() => api400.resetPassword("a@b.dev", "x", "y"), (e: unknown) => e instanceof ApiError && e.status === 400);
+});
+
+test("signup carries the invite code", async () => {
+  const { calls, impl } = fakeFetch(() => ({ json: { user_id: "5" } }));
+  const api = new Api(endpoints, { fetch: impl });
+  await api.signup("a@b.dev", "password-123", "Aiko", "invite-7f3d");
+  assert.deepEqual(JSON.parse(calls[0]!.body), { email: "a@b.dev", password: "password-123", name: "Aiko", invite: "invite-7f3d" });
+  await api.signup("c@d.dev", "password-123", "Bo");
+  assert.deepEqual(JSON.parse(calls[1]!.body), { email: "c@d.dev", password: "password-123", name: "Bo" }, "no invite key without a code");
+});

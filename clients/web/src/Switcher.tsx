@@ -94,3 +94,44 @@ export function ShortcutsPanel({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
+
+/** Invite to a channel: type a name, arrows move, ⏎ toggles, several may be picked. */
+export function MemberPicker({ people, exclude, busy = false, onInvite, onClose }: { people: { id: string; name: string }[]; exclude: string[]; busy?: boolean; onInvite: (ids: string[]) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => input.current?.focus(), []);
+  const excluded = new Set(exclude);
+  const q = query.trim().toLowerCase();
+  const items = people.filter((p) => !excluded.has(p.id) && (!q || p.name.toLowerCase().includes(q)));
+  const clamped = Math.min(active, Math.max(0, items.length - 1));
+  const toggle = (id: string) => setPicked((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const invite = () => {
+    if (picked.size === 0 || busy) return;
+    onInvite([...picked]);
+  };
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <section className="switcher" role="dialog" aria-label="Invite people">
+        <input
+          ref={input}
+          value={query}
+          placeholder="type a name…"
+          aria-label="Find people to invite"
+          onChange={(e) => { setQuery(e.target.value); setActive(0); }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.min(i + 1, items.length - 1)); }
+            if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
+            if (e.key === "Enter") { e.preventDefault(); if (items[clamped]) toggle(items[clamped].id); }
+            if (e.key === "Escape") { e.preventDefault(); onClose(); }
+          }}
+        />
+        <ul>{items.map((p, i) => (
+          <li key={p.id}><button className={i === clamped ? "active" : ""} onMouseEnter={() => setActive(i)} onClick={() => toggle(p.id)}><span className="radio-dot" aria-hidden="true">[{picked.has(p.id) ? "x" : " "}]</span>{p.name}</button></li>
+        ))}{items.length === 0 && <li className="muted switcher-empty">{q ? "no matches" : "everyone is already here"}</li>}</ul>
+        <div className="picker-footer"><button className="link" disabled={picked.size === 0 || busy} onClick={invite}>[ invite {picked.size > 0 ? `${picked.size} ⏎` : "⏎"} ]</button><button className="link" onClick={onClose}>[ esc cancel ]</button></div>
+      </section>
+    </div>
+  );
+}
