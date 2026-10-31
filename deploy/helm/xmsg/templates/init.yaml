@@ -100,6 +100,8 @@ spec:
               && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-003_sso.sql
               && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-004_sso_policy.sql
               && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-005_storage_quota.sql
+              && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-006_workspace_setup.sql
+              && psql -v ON_ERROR_STOP=1 "$XMSG_DATABASE_URL" -f /init/postgres-007_password_reset.sql
           envFrom:
             - secretRef: { name: {{ include "xmsg.secretName" . }} }
           volumeMounts: [{ name: init, mountPath: /init }]

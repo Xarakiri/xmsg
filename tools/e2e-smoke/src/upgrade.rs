@@ -48,8 +48,9 @@ pub async fn seed(file: &str) -> Result<(), String> {
         .unwrap()
         .as_millis();
     let emails = ["alice", "bob"].map(|name| format!("upgrade-{name}-{run_id}@example.org"));
-    let alice = sign_up_and_log_in(&urls.auth, &emails[0]).await?;
-    let bob = sign_up_and_log_in(&urls.auth, &emails[1]).await?;
+    let alice = sign_up_and_log_in(&urls.auth, &emails[0], None).await?;
+    // Version N predates the invite-only policy, so no invite is needed.
+    let bob = sign_up_and_log_in(&urls.auth, &emails[1], None).await?;
     let (status, reply) = call(
         "POST",
         &format!("{}/v1/channels", urls.channels),
