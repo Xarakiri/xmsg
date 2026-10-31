@@ -165,6 +165,49 @@ async fn workspaces_roles_members_and_unique_slugs() {
             .collect::<Vec<_>>(),
         [(w, "owner")]
     );
+    assert!(!mine[0].setup_completed);
+    let (name, done, signup) = store
+        .update_workspace(w, Some("Renamed"), true, Some("open"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (name.as_str(), done, signup.as_str()),
+        ("Renamed", true, "open")
+    );
+    assert_eq!(
+        store
+            .update_workspace(new_id(), None, false, None)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(store.workspaces_of(alice).await.unwrap()[0].setup_completed);
+    // The policy persists in settings_json and defaults to invite_only.
+    let stored: String =
+        sqlx::query_scalar("SELECT settings_json->>'signup' FROM workspaces WHERE id = $1")
+            .bind(w)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, "open");
+    // A workspace that never set the policy reads as invite_only. (A fresh row, so
+    // this holds no matter what other tests did to workspace 1 in a shared database.)
+    let untouched = new_id();
+    sqlx::query("INSERT INTO workspaces (id, name, slug) VALUES ($1, 'Untouched', $2)")
+        .bind(untouched)
+        .bind(format!("untouched-{untouched}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let default: String = sqlx::query_scalar(
+        "SELECT COALESCE(settings_json->>'signup', 'invite_only') FROM workspaces WHERE id = $1",
+    )
+    .bind(untouched)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(default, "invite_only");
 
     let code = invite(&store, w, alice, Duration::hours(1)).await;
     store
@@ -280,6 +323,117 @@ async fn provisioning_creates_once_and_reactivates() {
     );
     let page = store.provisioned_members(ws, 0, 100).await.unwrap();
     assert!(page.iter().any(|m| m.user_id == id) && page.iter().any(|m| m.user_id == owner));
+}
+
+#[tokio::test]
+#[ignore]
+async fn workspace_setup_backfills_an_owner_and_onboarding() {
+    let (pool, _store) = setup().await;
+    let setup_sql = include_str!("../../../deploy/compose/init/postgres/006_workspace_setup.sql");
+    let reapply = || {
+        let pool = pool.clone();
+        async move { sqlx::raw_sql(setup_sql).execute(&pool).await.unwrap() }
+    };
+    reapply().await;
+
+    let ws = new_id();
+    sqlx::query("INSERT INTO workspaces (id, name, slug) VALUES ($1, 'Ownerless', $2)")
+        .bind(ws)
+        .bind(format!("ownerless-{ws}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Everyone is a plain member; joined_at decides who becomes the owner.
+    let mut members = Vec::new();
+    for (i, name) in ["First", "Second", "Third"].iter().enumerate() {
+        let id = user(&pool, name).await;
+        sqlx::query(
+            "INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) \
+             VALUES ($1, $2, 'member', now() - make_interval(days => $3))",
+        )
+        .bind(ws)
+        .bind(id)
+        .bind((3 - i) as i32)
+        .execute(&pool)
+        .await
+        .unwrap();
+        members.push(id);
+    }
+    // A workspace that already has an owner must stay untouched.
+    let (pool2, store) = (
+        pool.clone(),
+        xmsg_users::store::Postgres::connect(&url()).await.unwrap(),
+    );
+    let _ = store;
+    let kept = user(&pool, "Kept").await;
+    let owned = new_id();
+    sqlx::query("INSERT INTO workspaces (id, name, slug) VALUES ($1, 'Owned', $2)")
+        .bind(owned)
+        .bind(format!("owned-{owned}"))
+        .execute(&pool2)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) \
+         VALUES ($1, $2, 'owner', now() - interval '1 day')",
+    )
+    .bind(owned)
+    .bind(kept)
+    .execute(&pool2)
+    .await
+    .unwrap();
+
+    reapply().await;
+
+    let role: String = sqlx::query_scalar(
+        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(ws)
+    .bind(members[0])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(role, "owner", "the earliest member inherits the workspace");
+    for late in &members[1..] {
+        let role: String = sqlx::query_scalar(
+            "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(ws)
+        .bind(late)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(role, "member");
+    }
+    let onboarded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM workspace_members WHERE workspace_id = $1 AND defaults_joined_at IS NOT NULL",
+    )
+    .bind(ws)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(onboarded, 3, "existing members count as onboarded");
+
+    // Reapplying (every start) changes nothing.
+    reapply().await;
+    let again: String = sqlx::query_scalar(
+        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(ws)
+    .bind(members[0])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(again, "owner");
+    let kept_role: String = sqlx::query_scalar(
+        "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+    )
+    .bind(owned)
+    .bind(kept)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept_role, "owner", "an existing owner is never replaced");
 }
 
 #[tokio::test]

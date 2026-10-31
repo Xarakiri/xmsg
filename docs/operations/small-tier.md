@@ -66,6 +66,7 @@ These are starting points from the memory caps above, **not load-test results**:
 - **Without registry access:** build an [air-gapped bundle](../../deploy/compose/README.md#air-gapped-install) elsewhere and install from it.
 - **Search** (`--search`) needs another 1.5 GB of memory. It stays on once enabled.
 - **Calls** (`--calls`, [ADR-0025](../adr/0025-voice-and-video-calls.md)): voice and video in DMs, channel huddles and screen sharing, through LiveKit and coturn (about 1.25 GB more memory). Open UDP 7882 and TCP 7881 (LiveKit's media), and 3478 UDP/TCP plus UDP 49160–49200 (TURN, for people whose networks block the others). LiveKit finds the machine's public address over STUN; where it can't (air-gapped, or behind NAT with a known address), set `XMSG_LIVEKIT_NODE_IP` (and `XMSG_LIVEKIT_EXTERNAL_IP=false`) in `.env`. Calls stay on once enabled.
+- **Create your account straight after install:** the first account becomes the workspace owner ([ADR-0026](../adr/0026-first-run-and-default-channels.md)), and on a publicly reachable install whoever registers first owns it.
 - Re-running `install.sh` keeps the secrets, so it's also how you change the domain or TLS settings.
 
 ## One user on a small VM

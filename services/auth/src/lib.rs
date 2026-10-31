@@ -8,6 +8,7 @@ pub mod config;
 pub mod keys;
 pub mod limits;
 pub mod password;
+pub mod reset;
 pub mod revocation;
 pub mod sso;
 pub mod sso_policy;
