@@ -26,6 +26,12 @@ struct Memory {
     users: Vec<i64>,
     /// workspace → members
     workspaces: HashMap<i64, Vec<i64>>,
+    /// (workspace, user) → role
+    roles: Mutex<HashMap<(i64, i64), String>>,
+    /// (workspace, channel, added_by) default-channel rows
+    defaults: Mutex<Vec<(i64, i64, i64)>>,
+    /// (workspace, user) who onboarded onto the defaults
+    onboarded: Mutex<std::collections::HashSet<(i64, i64)>>,
     channels: Mutex<Vec<(NewChannel, Vec<i64>)>>,
     outbox: Mutex<Vec<InboundEvent>>,
     dms: Mutex<HashMap<(i64, i64), i64>>,
@@ -33,7 +39,95 @@ struct Memory {
     workspace_events: Mutex<Vec<(i64, String, Vec<u8>)>>,
 }
 
+impl Memory {
+    /// A public channel the store knows, as if created earlier.
+    fn add_channel(&self, id: i64, workspace_id: i64, kind: &'static str, name: &str) {
+        self.channels.lock().unwrap().push((
+            NewChannel {
+                id,
+                workspace_id,
+                kind,
+                name: Some(name.into()),
+                topic: None,
+                created_by: ALICE,
+            },
+            vec![ALICE],
+        ));
+    }
+}
+
 impl Store for Memory {
+    async fn workspace_role(&self, w: i64, user_id: i64) -> Result<Option<String>, StoreError> {
+        Ok(self.roles.lock().unwrap().get(&(w, user_id)).cloned())
+    }
+    async fn channel_info(&self, channel_id: i64) -> Result<Option<(i64, String)>, StoreError> {
+        Ok(self
+            .channels
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(c, _)| c.id == channel_id)
+            .map(|(c, _)| (c.workspace_id, c.kind.to_string())))
+    }
+    async fn default_channels(&self, w: i64) -> Result<Vec<(i64, Option<String>)>, StoreError> {
+        let channels = self.channels.lock().unwrap();
+        Ok(self
+            .defaults
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(ws, _, _)| *ws == w)
+            .map(|(_, c, _)| {
+                (
+                    *c,
+                    channels
+                        .iter()
+                        .find(|(ch, _)| ch.id == *c)
+                        .and_then(|(ch, _)| ch.name.clone()),
+                )
+            })
+            .collect())
+    }
+    async fn add_default_channel(
+        &self,
+        w: i64,
+        channel_id: i64,
+        added_by: i64,
+    ) -> Result<(), StoreError> {
+        let mut defaults = self.defaults.lock().unwrap();
+        if !defaults
+            .iter()
+            .any(|(ws, c, _)| *ws == w && *c == channel_id)
+        {
+            defaults.push((w, channel_id, added_by));
+        }
+        Ok(())
+    }
+    async fn remove_default_channel(&self, w: i64, channel_id: i64) -> Result<bool, StoreError> {
+        let mut defaults = self.defaults.lock().unwrap();
+        let before = defaults.len();
+        defaults.retain(|(ws, c, _)| !(*ws == w && *c == channel_id));
+        Ok(defaults.len() < before)
+    }
+    async fn onboarded_members(&self, w: i64) -> Result<Vec<i64>, StoreError> {
+        let mut members: Vec<i64> = self
+            .onboarded
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(ws, _)| *ws == w)
+            .map(|(_, u)| *u)
+            .collect();
+        members.sort_unstable();
+        Ok(members)
+    }
+    async fn defaults_joined(&self, w: i64, user_id: i64) -> Result<bool, StoreError> {
+        Ok(self.onboarded.lock().unwrap().contains(&(w, user_id)))
+    }
+    async fn mark_defaults_joined(&self, w: i64, user_id: i64) -> Result<(), StoreError> {
+        self.onboarded.lock().unwrap().insert((w, user_id));
+        Ok(())
+    }
     async fn outside_workspace(&self, w: i64, users: &[i64]) -> Result<Vec<i64>, StoreError> {
         let members = self.workspaces.get(&w).cloned().unwrap_or_default();
         Ok(users
@@ -216,6 +310,13 @@ async fn harness() -> Harness {
         store: Memory {
             users: vec![ALICE, BOB, CAROL, DAVE],
             workspaces: HashMap::from([(1, vec![ALICE, BOB, CAROL]), (2, vec![ALICE, DAVE])]),
+            roles: Mutex::from(HashMap::from([
+                ((1, ALICE), "owner".to_string()),
+                ((1, BOB), "member".to_string()),
+                ((1, CAROL), "member".to_string()),
+                ((2, ALICE), "owner".to_string()),
+                ((2, DAVE), "member".to_string()),
+            ])),
             ..Default::default()
         },
         log: FakeLog {
@@ -988,4 +1089,204 @@ async fn settings_are_validated_published_and_listed_for_member_channels_only() 
         serde_json::json!([{"channel_id": "21", "notify_level": "mentions", "muted": true}]),
         "orphans are left out"
     );
+}
+
+#[tokio::test]
+async fn default_channels_are_managed_by_owners_and_public_only() {
+    let h = harness().await;
+    h.state.store.add_channel(31, 1, "public", "general");
+    h.state.store.add_channel(32, 1, "private", "ops");
+    h.state.store.add_channel(33, 2, "public", "elsewhere");
+    let path = "/v1/workspaces/1/default-channels";
+
+    // Any member lists them; outsiders can't tell the workspace exists.
+    let (status, reply) = h.call("GET", path, Some(BOB), None).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["channels"], serde_json::json!([]));
+    assert_eq!(
+        h.call("GET", path, Some(DAVE), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Members don't manage them; only public channels of this workspace qualify.
+    let add = |user, body: serde_json::Value| {
+        let h = &h;
+        async move { h.call("POST", path, Some(user), Some(body)).await }
+    };
+    assert_eq!(
+        add(BOB, serde_json::json!({"channel_id": "31"})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        add(ALICE, serde_json::json!({"channel_id": "32"})).await.0,
+        StatusCode::BAD_REQUEST,
+        "a private channel"
+    );
+    assert_eq!(
+        add(ALICE, serde_json::json!({"channel_id": "33"})).await.0,
+        StatusCode::BAD_REQUEST,
+        "another workspace's channel"
+    );
+    assert_eq!(
+        add(ALICE, serde_json::json!({"channel_id": "999"})).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let (status, _) = add(ALICE, serde_json::json!({"channel_id": "31"})).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        add(ALICE, serde_json::json!({"channel_id": "31"})).await.0,
+        StatusCode::NO_CONTENT,
+        "adding twice is harmless"
+    );
+    let (_, reply) = h.call("GET", path, Some(BOB), None).await;
+    assert_eq!(
+        reply["channels"],
+        serde_json::json!([{"channel_id": "31", "name": "general"}])
+    );
+
+    let del = format!("{path}/31");
+    assert_eq!(
+        h.call("DELETE", &del, Some(BOB), None).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        h.call("DELETE", &del, Some(ALICE), None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        h.call("DELETE", &del, Some(ALICE), None).await.0,
+        StatusCode::NO_CONTENT,
+        "removing is idempotent and never touches members"
+    );
+    let (_, reply) = h.call("GET", path, Some(BOB), None).await;
+    assert_eq!(reply["channels"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn joining_default_channels_is_idempotent_and_never_rejoins_leavers() {
+    let h = harness().await;
+    h.state.store.add_channel(31, 1, "public", "general");
+    h.state.store.add_channel(32, 1, "public", "random");
+    for channel in [31, 32] {
+        h.state
+            .store
+            .defaults
+            .lock()
+            .unwrap()
+            .push((1, channel, ALICE));
+    }
+
+    // Bob's first sign-in: both defaults join through the normal command path.
+    let (status, reply) = h
+        .call(
+            "POST",
+            "/v1/me/default-channels/join",
+            Some(BOB),
+            Some(serde_json::json!({"workspace_id": "1"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(reply["joined"], serde_json::json!(["31", "32"]));
+    let joins: Vec<(i64, i64, i64)> = h
+        .sent()
+        .into_iter()
+        .map(|e| match e.payload {
+            Some(Payload::MemberJoinRequested(j)) => (e.channel_id, e.actor_id, j.user_id),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(joins, vec![(31, BOB, BOB), (32, BOB, BOB)]);
+
+    // Idempotent: the second call joins nothing, even where membership is gone
+    // (bob "left" channel 31: he is never pushed back in).
+    assert!(h.state.store.onboarded.lock().unwrap().contains(&(1, BOB)));
+    let (status, reply) = h
+        .call(
+            "POST",
+            "/v1/me/default-channels/join",
+            Some(BOB),
+            Some(serde_json::json!({"workspace_id": "1"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reply["joined"], serde_json::json!([]));
+    let joins: Vec<i64> = h
+        .sent()
+        .into_iter()
+        .filter_map(|e| match e.payload {
+            Some(Payload::MemberJoinRequested(_)) => Some(e.channel_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(joins, vec![31, 32], "no new join commands");
+
+    // Members only.
+    assert_eq!(
+        h.call(
+            "POST",
+            "/v1/me/default-channels/join",
+            Some(DAVE),
+            Some(serde_json::json!({"workspace_id": "1"})),
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn adding_existing_members_reaches_onboarded_members_in_the_background() {
+    let h = harness().await;
+    h.state.store.add_channel(31, 1, "public", "general");
+    h.state.store.defaults.lock().unwrap().push((1, 31, ALICE));
+    // Carol onboarded long ago; bob did too, but he's already in the channel.
+    h.state.store.onboarded.lock().unwrap().insert((1, CAROL));
+    h.state.store.onboarded.lock().unwrap().insert((1, BOB));
+    h.state.memberships.0.lock().unwrap().insert(
+        BOB,
+        vec![MyChannel {
+            channel_id: 31,
+            workspace_id: 1,
+            kind: "public".into(),
+            event_seq: 1,
+            msg_seq: 0,
+            fanout_mode: "push".into(),
+        }],
+    );
+
+    let (status, _) = h
+        .call(
+            "POST",
+            "/v1/workspaces/1/default-channels",
+            Some(ALICE),
+            Some(serde_json::json!({"channel_id": "31", "add_existing_members": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    // The background task eventually sends carol's join, and skips bob.
+    let mut carol_joined = false;
+    for _ in 0..50 {
+        let sent = h.sent();
+        let carol = sent.iter().any(|e| {
+            matches!(&e.payload, Some(Payload::MemberJoinRequested(j)) if *j == xmsg_proto::v1::MemberJoinRequested{user_id: CAROL})
+        });
+        let bob = sent.iter().any(
+            |e| matches!(&e.payload, Some(Payload::MemberJoinRequested(j)) if j.user_id == BOB),
+        );
+        assert!(!bob, "a current member is not re-joined");
+        if carol {
+            carol_joined = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(carol_joined, "carol's join reached the event log");
+    let event = h
+        .sent()
+        .into_iter()
+        .find(|e| matches!(&e.payload, Some(Payload::MemberJoinRequested(j)) if j.user_id == CAROL))
+        .unwrap();
+    assert_eq!((event.channel_id, event.actor_id), (31, CAROL));
 }
