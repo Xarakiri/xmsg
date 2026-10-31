@@ -58,7 +58,7 @@ export function App() {
   }, [checking]);
   if (isDesktop && !server) return <ConnectScreen onConnect={(url) => { saveServerUrl(url); setServer(url); location.reload(); }} />;
   if (checking) return <DelayedLoading />;
-  if (!me) return <><StatusLine workspace="" channel="not connected" status="offline" /><SignIn onSignedIn={setMe} /></>;
+  if (!me) return <><StatusLine workspace="" channel="not connected" status="offline" signedIn={false} /><SignIn onSignedIn={setMe} /></>;
   return <Chat key={me} me={me} theme={theme} toggleTheme={toggleTheme} onSignOut={async () => { await session.logout(); setMe(null); }} />;
 }
 
@@ -76,7 +76,7 @@ function ConnectScreen({ onConnect }: { onConnect: (url: string) => void }) {
   };
   return (
     <div className="terminal-app">
-      <StatusLine workspace="" channel="not connected" status="offline" />
+      <StatusLine workspace="" channel="not connected" status="offline" signedIn={false} />
       <div className="center">
         <form className="modal-form connect-screen" onSubmit={submit}>
           <h1>xmsg · connect</h1>
@@ -427,7 +427,8 @@ function ChatView({ me, initial, initialChannel, workspace, workspaces, fresh, t
   const channelsList = rooms.filter((c) => c.name).map((c) => ({ id: c.id, name: c.name }));
   const commands = [{ name: "huddle", hint: "start a huddle" }];
 
-  return <div className="terminal-app"><StatusLine workspace={workspace?.slug ?? ""} channel={currentTitle} status={status} /><div className={`workspace-grid ${currentRoot || inCall ? "with-panel" : ""}`}>
+  const settingsOpen = modal === "settings";
+  return <div className="terminal-app"><StatusLine workspace={workspace?.slug ?? ""} channel={currentTitle} status={status} /><div className={`workspace-grid ${currentRoot || inCall || settingsOpen ? "with-panel" : ""}`}>
     <div className={`sidebar-wrap ${narrow && sidebarOpen ? "open" : ""}`}><Sidebar rooms={rooms.map((channel) => ({ channel, title: channelTitle(channel, me, names) }))} dms={dms.map((channel) => { const other = channel.kind === "dm" ? channel.members.find((m) => m !== me) : undefined; return { channel, title: channelTitle(channel, me, names), presence: other && presenceKnown(other) ? presenceOf(other) : undefined }; })} calls={calls.map((channel) => ({ channel, title: channel.call?.huddle ? `huddle-${channel.id.slice(-4)}` : channelTitle(channel, me, names) }))} selected={selected} onSelect={(id) => { selectChannel(id); setSidebarOpen(false); }} onNewChannel={() => setModal("channel")} onNewDm={() => setModal("dm")} onAdmin={isStaff ? () => setMain("admin") : undefined} meName={names.label(me)} onOpenSettings={() => setModal("settings")} /></div>
       <main className="main-terminal">{main === "admin" && workspace ? <AdminScreen workspace={workspace} myRole={myRole} me={me} rooms={rooms} onClose={() => setMain("chat")} /> : <>
         {narrow && <button className="link narrow-menu" onClick={() => setSidebarOpen((v) => !v)}>[ menu ]</button>}
@@ -464,7 +465,7 @@ function ChatView({ me, initial, initialChannel, workspace, workspaces, fresh, t
   {switcher && <Switcher channels={channels.map((c) => ({ id: c.id, title: channelTitle(c, me, names), unread: c.muted ? 0 : unread(c) }))} people={people} me={me} onPickChannel={selectChannel} onPickPerson={pickPerson} onSearch={(q) => void doSearch(q)} onClose={() => setSwitcher(false)} />}
   {shortcuts && <ShortcutsPanel onClose={() => setShortcuts(false)} />}
   {modal === "channel" || modal === "dm" ? <CreatePanel kind={modal} onClose={() => setModal("none")} onCreated={(id, name) => { if (name) nameChannel(id, name); selectChannel(id); setModal("none"); }} /> : null}
-  {modal === "settings" && <SettingsPanel me={me} names={names} theme={theme} onToggleTheme={toggleTheme} workspaces={workspaces} currentWorkspaceId={workspace?.workspace_id ?? ""} serverInitial={isDesktop ? serverUrl() : undefined} onSaveProfile={async (name, avatar) => names.remember(await api.updateMe(await session.accessToken(), { name, avatar_url: avatar || null }))} onSaveServer={isDesktop ? (url) => { if (!validServerUrl(url)) return alert("Use an https URL (or http for localhost / 127.0.0.1)"); saveServerUrl(url); location.reload(); } : undefined} onAcceptInvite={async (code) => { await api.acceptInvite(await session.accessToken(), code); }} onSignOut={onSignOut} onClose={() => setModal("none")} />}
+  {settingsOpen && <SettingsPanel me={me} names={names} theme={theme} onToggleTheme={toggleTheme} workspaces={workspaces} currentWorkspaceId={workspace?.workspace_id ?? ""} serverInitial={isDesktop ? serverUrl() : undefined} onSaveProfile={async (name, avatar) => names.remember(await api.updateMe(await session.accessToken(), { name, avatar_url: avatar || null }))} onSaveServer={isDesktop ? (url) => { if (!validServerUrl(url)) return alert("Use an https URL (or http for localhost / 127.0.0.1)"); saveServerUrl(url); location.reload(); } : undefined} onSignOut={onSignOut} onClose={() => setModal("none")} />}
   {modal === "info" && current && <ChannelInfoPanel channel={current} title={currentTitle} me={me} names={names} onMute={() => setMuted(current.id, !current.muted)} onInvite={current.kind !== "dm" ? () => inviteTo(current) : undefined} onLeave={current.kind !== "dm" ? () => { void session.accessToken().then((token) => api.remove(token, current.id, me)).catch((e) => alert(errorText(e))); } : undefined} onClose={() => setModal("none")} />}
   {picker && <MemberPicker people={people} exclude={picker.members} busy={inviting} onInvite={invitePeople} onClose={() => setPicker(null)} />}
   </div>;
