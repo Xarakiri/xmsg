@@ -33,6 +33,15 @@ export interface Endpoints {
 /** Largest upload the media service takes (its default). */
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
+/** The slice of `fetch` the Api uses; `@tauri-apps/plugin-http` matches this shape. */
+export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+
+let activeFetch: FetchLike = fetch;
+/** Overrides the fetch every Api instance uses (the desktop build passes Tauri's native fetch). */
+export function setFetch(fetchImpl: FetchLike): void {
+  activeFetch = fetchImpl;
+}
+
 /** What anyone sharing a workspace with the user sees. */
 export interface UserProfile {
   user_id: string;
@@ -98,7 +107,7 @@ export type CommandOutcome = { status: "accepted"; event_seq: string } | { statu
 async function call<T>(url: string, init: RequestInit & { token?: string; body?: string }): Promise<T> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (init.token) headers.authorization = `Bearer ${init.token}`;
-  const response = await fetch(url, { ...init, headers });
+  const response = await activeFetch(url, { ...init, headers });
   const text = await response.text();
   const body = text ? JSON.parse(text) : {};
   if (!response.ok) throw new ApiError(response.status, body.error ?? response.statusText);
@@ -109,8 +118,17 @@ const json = (value: unknown) => JSON.stringify(value);
 
 export class Api {
   private readonly endpoints: Endpoints;
-  constructor(endpoints: Endpoints) {
-    this.endpoints = endpoints;
+
+  /**
+   * `base` is prepended to root-relative endpoint paths (a desktop app's saved server);
+   * `fetch` overrides the global one for all Api calls (Tauri's native fetch on desktop).
+   */
+  constructor(endpoints: Endpoints, opts: { base?: string; fetch?: FetchLike } = {}) {
+    const base = opts.base ?? "";
+    this.endpoints = base
+      ? Object.fromEntries(Object.entries(endpoints).map(([k, v]) => [k, v?.startsWith("/") ? `${base}${v}` : v])) as Endpoints
+      : endpoints;
+    if (opts.fetch) setFetch(opts.fetch);
   }
 
   signup(email: string, password: string, name: string): Promise<{ user_id: string }> {
@@ -223,7 +241,7 @@ export class Api {
   /** A channel's events after `after` (sync, lazy step). 404: not a member (any more). */
   async events(token: string, channelId: string, after: number, limit = 200): Promise<EventPage> {
     const url = `${this.endpoints.messages}/v1/channels/${channelId}/events?after=${after}&limit=${limit}`;
-    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    const response = await activeFetch(url, { headers: { authorization: `Bearer ${token}` } });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new ApiError(response.status, (body as { error?: string }).error ?? response.statusText);
@@ -300,7 +318,7 @@ export class Api {
   /** Uploads a file to a channel (members only); send its `fileId` with a message to attach it. */
   async uploadFile(token: string, channelId: string, file: Blob, name: string): Promise<Attachment> {
     const url = `${this.endpoints.media ?? "/media"}/v1/channels/${channelId}/files?name=${encodeURIComponent(name)}`;
-    const response = await fetch(url, {
+    const response = await activeFetch(url, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": file.type || "application/octet-stream" },
       body: file,
@@ -323,7 +341,7 @@ export class Api {
    */
   async fileBlob(token: string, fileId: string, thumbnail = false): Promise<Blob> {
     const url = `${this.endpoints.media ?? "/media"}/v1/files/${fileId}${thumbnail ? "/thumbnail" : ""}`;
-    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    const response = await activeFetch(url, { headers: { authorization: `Bearer ${token}` } });
     if (!response.ok) throw new ApiError(response.status, response.statusText);
     return response.blob();
   }

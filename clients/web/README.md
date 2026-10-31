@@ -15,6 +15,9 @@ npm run dev --workspace @xmsg/web
 
 Open http://localhost:5173. The Vite dev server is the browser's single origin and proxies `/auth` → auth (`:8081`), `/channels` → channels (`:8082`), `/messages` → the messages service's reads (`:8083`), `/readstate` → read state (`:8085`) and `/ws` → the gateway (`:4000`); override with `XMSG_AUTH_ORIGIN`, `XMSG_CHANNELS_ORIGIN`, `XMSG_MESSAGES_ORIGIN`, `XMSG_GATEWAY_ORIGIN`.
 
+Set `XMSG_BACKEND=https://<host>` to forward every service path to one origin while keeping the path prefix.
+This takes precedence over the per-service `XMSG_*_ORIGIN` overrides.
+
 ## How it behaves
 
 - Signing in stores the refresh token in `localStorage`; access tokens (15 min) are refreshed a minute before they expire, and a reload resumes the session.
