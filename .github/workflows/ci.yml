@@ -271,6 +271,15 @@ jobs:
           $X health --wait 180
           test "$(count 'select count(*) from users')" = "$users"
           echo "restored $users users"
+      - name: Open sign-up for the post-restore smoke run
+        # The first smoke run left the workspace invite-only (ADR-0026), and the
+        # restored installation keeps that; the second run signs fresh accounts up
+        # and holds no owner credentials, so the job opens the policy as the
+        # database owner.
+        working-directory: deploy/compose
+        run: >
+          docker compose exec -T postgres psql -U xmsg -d xmsg
+          -c "UPDATE workspaces SET settings_json = jsonb_set(settings_json, '{signup}', '\"open\"') WHERE id = 1"
       - name: The restored installation works (smoke test again)
         env:
           XMSG_PARTITIONS: "16"
@@ -854,6 +863,13 @@ jobs:
           docker compose up -d --wait kafka cassandra postgres
           docker compose up kafka-init --exit-code-from kafka-init
           docker compose up cassandra-init --exit-code-from cassandra-init
+      - name: Open the sign-up policy for the chaos users
+        # Chaos signs 12 users up and runs no users service (ADR-0026: sign-up is
+        # invite-only by default); the database owner opens the policy directly.
+        working-directory: deploy/compose
+        run: >
+          docker compose exec -T postgres psql -U xmsg -d xmsg
+          -c "UPDATE workspaces SET settings_json = jsonb_set(settings_json, '{signup}', '\"open\"') WHERE id = 1"
       - name: Build
         run: |
           cargo build --release -p xmsg-auth -p xmsg-channels -p xmsg-messages -p xmsg-persister -p xmsg-fanout -p xmsg-chaos

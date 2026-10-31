@@ -89,6 +89,62 @@ pub trait Store: Send + Sync + 'static {
         channel_id: i64,
     ) -> impl Future<Output = Result<Option<i64>, StoreError>> + Send;
 
+    /// The user's role in the workspace (absent: not a member).
+    fn workspace_role(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> impl Future<Output = Result<Option<String>, StoreError>> + Send;
+
+    /// The channel's workspace and kind (`public`, `private`, `dm`, `group_dm`,
+    /// `broadcast`); absent: unknown channel.
+    fn channel_info(
+        &self,
+        channel_id: i64,
+    ) -> impl Future<Output = Result<Option<(i64, String)>, StoreError>> + Send;
+
+    /// The workspace's default channels with their names, by channel ID (ADR-0026).
+    fn default_channels(
+        &self,
+        workspace_id: i64,
+    ) -> impl Future<Output = Result<Vec<(i64, Option<String>)>, StoreError>> + Send;
+
+    /// Makes the channel a default (idempotent).
+    fn add_default_channel(
+        &self,
+        workspace_id: i64,
+        channel_id: i64,
+        added_by: i64,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Removes a default channel (never its members). `false`: it wasn't one.
+    fn remove_default_channel(
+        &self,
+        workspace_id: i64,
+        channel_id: i64,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Members who already onboarded onto the workspace's default channels; the
+    /// background "add existing members" only reaches them (ADR-0026).
+    fn onboarded_members(
+        &self,
+        workspace_id: i64,
+    ) -> impl Future<Output = Result<Vec<i64>, StoreError>> + Send;
+
+    /// Whether the member onboarded onto the defaults (and so is never auto-joined again).
+    fn defaults_joined(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Marks the member as onboarded onto the defaults.
+    fn mark_defaults_joined(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
     /// Like `create_channel` for a 1:1 DM, unless the pair already has one.
     fn create_dm(
         &self,
@@ -205,6 +261,114 @@ impl Store for Postgres {
                 .fetch_optional(&self.pool)
                 .await?,
         )
+    }
+
+    async fn workspace_role(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> Result<Option<String>, StoreError> {
+        Ok(sqlx::query_scalar(
+            "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(workspace_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    async fn channel_info(&self, channel_id: i64) -> Result<Option<(i64, String)>, StoreError> {
+        Ok(
+            sqlx::query_as("SELECT workspace_id, type FROM channels WHERE id = $1")
+                .bind(channel_id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
+    }
+
+    async fn default_channels(
+        &self,
+        workspace_id: i64,
+    ) -> Result<Vec<(i64, Option<String>)>, StoreError> {
+        Ok(sqlx::query_as(
+            "SELECT d.channel_id, c.name FROM workspace_default_channels d \
+             JOIN channels c ON c.id = d.channel_id \
+             WHERE d.workspace_id = $1 ORDER BY d.channel_id",
+        )
+        .bind(workspace_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn add_default_channel(
+        &self,
+        workspace_id: i64,
+        channel_id: i64,
+        added_by: i64,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO workspace_default_channels (workspace_id, channel_id, added_by) \
+             VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        )
+        .bind(workspace_id)
+        .bind(channel_id)
+        .bind(added_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn remove_default_channel(
+        &self,
+        workspace_id: i64,
+        channel_id: i64,
+    ) -> Result<bool, StoreError> {
+        let removed = sqlx::query(
+            "DELETE FROM workspace_default_channels WHERE workspace_id = $1 AND channel_id = $2",
+        )
+        .bind(workspace_id)
+        .bind(channel_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(removed.rows_affected() > 0)
+    }
+
+    async fn onboarded_members(&self, workspace_id: i64) -> Result<Vec<i64>, StoreError> {
+        Ok(sqlx::query_scalar(
+            "SELECT user_id FROM workspace_members \
+             WHERE workspace_id = $1 AND defaults_joined_at IS NOT NULL ORDER BY user_id",
+        )
+        .bind(workspace_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    async fn defaults_joined(&self, workspace_id: i64, user_id: i64) -> Result<bool, StoreError> {
+        Ok(sqlx::query_scalar(
+            "SELECT defaults_joined_at IS NOT NULL FROM workspace_members \
+             WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(workspace_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .unwrap_or(false))
+    }
+
+    async fn mark_defaults_joined(
+        &self,
+        workspace_id: i64,
+        user_id: i64,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "UPDATE workspace_members SET defaults_joined_at = now() \
+             WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(workspace_id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn names(

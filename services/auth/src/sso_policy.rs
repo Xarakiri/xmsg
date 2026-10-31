@@ -67,7 +67,7 @@ fn code_hash(code: &str) -> String {
 }
 
 /// The caller's user ID, from their access token.
-fn caller<S>(auth: &Auth<S>, headers: &HeaderMap) -> Result<i64, ApiError> {
+pub(crate) fn caller<S>(auth: &Auth<S>, headers: &HeaderMap) -> Result<i64, ApiError> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())

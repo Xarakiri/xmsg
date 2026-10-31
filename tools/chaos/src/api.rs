@@ -20,7 +20,8 @@ fn http() -> reqwest::Client {
         .expect("HTTP client")
 }
 
-/// Signs a user up and logs in; returns (user ID, access token).
+/// Signs a user up and logs in; returns (user ID, access token). The workspace's
+/// sign-up policy must be `open` (see `signup_policy`).
 pub async fn sign_up(auth: &str, email: &str) -> Result<(i64, String), String> {
     let http = http();
     let password = "chaos test password";
@@ -57,6 +58,19 @@ pub async fn sign_up(auth: &str, email: &str) -> Result<(i64, String), String> {
         }
     }
     unreachable!()
+}
+
+/// The sign-up policy (ADR-0026): `(first_account, invite_only)`.
+pub async fn signup_policy(auth: &str) -> Result<(bool, bool), String> {
+    let reply: serde_json::Value = http()
+        .get(format!("{auth}/v1/signup-policy"))
+        .send()
+        .await
+        .map_err(|e| format!("/v1/signup-policy: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("/v1/signup-policy: {e}"))?;
+    Ok((reply["first_account"] == true, reply["invite_only"] == true))
 }
 
 /// An authenticated JSON call; returns the status and body (Null if not JSON).
