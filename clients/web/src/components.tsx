@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { canPost, mentionCount, unread, type Channel, type ConnectionStatus, type Directory, type Message, type Presence, type SearchHit, type Workspace } from "@xmsg/client-core";
+import { autocomplete } from "./chatlog.ts";
 import { AttachButton, Attachments, PendingFiles, useFileDrafts } from "./files.tsx";
 import { pushState, enablePush, disablePush, type PushState } from "./push.ts";
 import { isDesktop } from "./session.ts";
@@ -8,7 +9,8 @@ import { isDesktop } from "./session.ts";
 export type Theme = "dark" | "light";
 
 export function StatusLine({ workspace, channel, status }: { workspace: string; channel: string; status: ConnectionStatus | "offline" }) {
-  return <header className="status-line"><span>xmsg v0.9 <b>·</b> workspace:{workspace || "default"} <b>·</b> {channel || "not connected"} <b>·</b> {location.host}</span><span className={`connection ${status}`}><i />{status === "online" ? "connected" : status === "offline" ? "offline" : status}</span></header>;
+  const text = status === "online" ? "connected" : status === "connecting" ? "reconnecting…" : status === "offline" ? "offline · messages will send when connected" : status;
+  return <header className="status-line"><span>xmsg v0.9 <b>·</b> {workspace ? <>workspace:{workspace} <b>·</b> </> : null}{channel || "not connected"} <b>·</b> {location.host}</span><span className={`connection ${status}`}><i />{text}</span></header>;
 }
 
 const AVATAR_COLORS = ["violet", "amber", "pink", "green", "blue", "cyan"];
@@ -56,32 +58,84 @@ export function errorText(e: unknown): string {
   return e instanceof Error && "status" in e ? (typeof e.status === "number" && e.status >= 500 ? "Service unavailable, try again" : e.status === 403 ? "not allowed" : e.message) : "Can't reach the server";
 }
 
-export function MessageRow({ message: m, me, names, presence, onOpenThread, onReact, onEdit, onDelete, onRetry, compact = false }: { message: Message; me: string; names: Directory; presence?: Presence; onOpenThread?: () => void; onReact?: (emoji: string, add: boolean) => void; onEdit?: (text: string) => Promise<void>; onDelete?: () => void; onRetry?: () => void; compact?: boolean }) {
+export function MessageRow({ message: m, me, names, presence, onOpenThread, onReact, onEdit, onDelete, onRetry, compact = false, start = true, editRequest }: { message: Message; me: string; names: Directory; presence?: Presence; onOpenThread?: () => void; onReact?: (emoji: string, add: boolean) => void; onEdit?: (text: string) => Promise<void>; onDelete?: () => void; onRetry?: () => void; compact?: boolean; start?: boolean; editRequest?: number }) {
   const [editing, setEditing] = useState(false);
   const [picking, setPicking] = useState(false);
   const [text, setText] = useState(m.body);
+  useEffect(() => { if (editRequest) setEditing(true); }, [editRequest]);
   const name = m.authorId === me ? "you" : names.label(m.authorId);
   const profile = names.profile(m.authorId);
   const color = AVATAR_COLORS[[...m.authorId].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0) % AVATAR_COLORS.length];
   const actionable = m.msgSeq > 0 && !m.deleted;
-  return <li className={`message-row ${m.status} ${compact ? "compact" : ""}`}><Avatar id={m.authorId} name={name} url={profile?.avatar_url} presence={presence} size="small" /><time>{new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time><span className={`author ${color}`} title={name}>{name}</span><div className="message-content">{actionable && <span className="message-actions">{onOpenThread && !m.replyCount && messageIdOf(m) && <button className="link" onClick={onOpenThread}>reply</button>}{onReact && <button className="link" aria-label="Add reaction" onClick={() => setPicking(!picking)}>+</button>}{onEdit && <button className="link" onClick={() => setEditing(true)}>edit</button>}{onDelete && <button className="link" onClick={onDelete}>delete</button>}</span>}{m.deleted ? <div className="muted">[deleted]</div> : editing ? <form className="edit-row" onSubmit={(e) => { e.preventDefault(); void onEdit?.(text).then(() => setEditing(false)); }}><input value={text} onChange={(e) => setText(e.target.value)} autoFocus /><button>save</button><button type="button" className="link" onClick={() => setEditing(false)}>cancel</button></form> : <>{m.body && <div className="message-body">{renderBody(m.body, me, names)}{m.status === "pending" && <span className="muted"> · sending…</span>}{m.editedAt && <span className="muted"> (edited)</span>}</div>}{m.attachments && <Attachments files={m.attachments} />}</>}{picking && onReact && <div className="reactions reaction-picker">{["👍", "❤️", "😂", "🎉", "👀"].map((emoji) => <button className="reaction" key={emoji} onClick={() => { onReact(emoji, true); setPicking(false); }}>{emoji}</button>)}</div>}{onOpenThread && m.replyCount! > 0 && actionable && messageIdOf(m) && <button className="thread-link link" onClick={onOpenThread}>└─ ▣ thread #{m.msgSeq} ({m.replyCount} {m.replyCount === 1 ? "reply" : "replies"}) → panel</button>}{onReact && actionable && <Reactions reactions={m.reactions ?? {}} onToggle={onReact} />}{m.error && <div className="error">{m.error}{onRetry && <> · <button className="link" onClick={onRetry}>retry</button></>}</div>}</div></li>;
+  const head = start ? <><Avatar id={m.authorId} name={name} url={profile?.avatar_url} presence={presence} size="small" /><time>{new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time><span className={`author ${color}`} title={name}>{name}</span></> : <><span aria-hidden="true" /><time className="quiet">{new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time><span aria-hidden="true" /></>;
+  return <li className={`message-row ${m.status} ${compact ? "compact" : ""} ${start ? "" : "grouped"}`}>{head}<div className="message-content">{actionable && <span className="message-actions">{onOpenThread && !m.replyCount && messageIdOf(m) && <button className="link" onClick={onOpenThread}>reply</button>}{onReact && <button className="link" aria-label="Add reaction" onClick={() => setPicking(!picking)}>+</button>}{onEdit && <button className="link" onClick={() => setEditing(true)}>edit</button>}{onDelete && <button className="link" onClick={onDelete}>delete</button>}</span>}{m.deleted ? <div className="muted">[deleted]</div> : editing ? <form className="edit-row" onSubmit={(e) => { e.preventDefault(); void onEdit?.(text).then(() => setEditing(false)); }}><input value={text} onChange={(e) => setText(e.target.value)} autoFocus /><button>save</button><button type="button" className="link" onClick={() => setEditing(false)}>cancel</button></form> : <>{m.body && <div className="message-body">{renderBody(m.body, me, names)}{m.status === "pending" && <span className="muted"> · sending…</span>}{m.editedAt && <span className="muted"> (edited)</span>}</div>}{m.attachments && <Attachments files={m.attachments} />}</>}{picking && onReact && <div className="reactions reaction-picker">{["👍", "❤️", "😂", "🎉", "👀"].map((emoji) => <button className="reaction" key={emoji} onClick={() => { onReact(emoji, true); setPicking(false); }}>{emoji}</button>)}</div>}{onOpenThread && m.replyCount! > 0 && actionable && messageIdOf(m) && <button className="thread-link link" onClick={onOpenThread}>└─ ▣ thread #{m.msgSeq} ({m.replyCount} {m.replyCount === 1 ? "reply" : "replies"}) → panel</button>}{onReact && actionable && <Reactions reactions={m.reactions ?? {}} onToggle={onReact} />}{m.error && <div className="error">{m.error}{onRetry && <> · <button className="link" onClick={onRetry}>retry</button></>}</div>}</div></li>;
 }
 function Reactions({ reactions, onToggle }: { reactions: Record<string, { count: number; mine: boolean }>; onToggle: (emoji: string, add: boolean) => void }) {
   return <div className="reactions">{Object.entries(reactions).map(([emoji, r]) => <button key={emoji} className={`reaction ${r.mine ? "mine" : ""}`} onClick={() => onToggle(emoji, !r.mine)}>{emoji} {r.count}</button>)}</div>;
 }
 
-export function Prompt({ channel, members, me, names, onSend, onUpload, onTyping, onCommand, readOnly = false }: { channel: string; members: string[]; me: string; names: Directory; onSend: (body: string, files: import("@xmsg/client-core").Attachment[]) => void; onUpload: (file: File) => Promise<import("@xmsg/client-core").Attachment>; onTyping?: () => void; onCommand?: (command: string) => void; readOnly?: boolean }) {
-  const [draft, setDraft] = useState("");
+export function Prompt({ channel, members, me, names, draftKey, membersList = [], channelsList = [], commands = [], onSend, onUpload, onTyping, onCommand, onEditLast, readOnly = false }: { channel: string; members: string[]; me: string; names: Directory; draftKey: string; membersList?: { id: string; name: string }[]; channelsList?: { id: string; name: string }[]; commands?: { name: string; hint: string }[]; onSend: (body: string, files: import("@xmsg/client-core").Attachment[]) => void; onUpload: (file: File) => Promise<import("@xmsg/client-core").Attachment>; onTyping?: () => void; onCommand?: (command: string) => void; onEditLast?: () => void; readOnly?: boolean }) {
+  const [draft, setDraft] = useState(() => safeGet(draftKey) ?? "");
+  const [ac, setAc] = useState<{ trigger: "@" | "#" | "/"; query: string; from: number } | null>(null);
+  const [acIndex, setAcIndex] = useState(0);
+  const area = useRef<HTMLTextAreaElement>(null);
   const drafts = useFileDrafts(onUpload, errorText);
+  useEffect(() => {
+    setDraft(safeGet(draftKey) ?? "");
+    setAc(null);
+  }, [draftKey]);
+  useEffect(() => { safeSet(draftKey, draft); }, [draftKey, draft]);
+  const items = ac ? autocomplete(ac.trigger, ac.query, { members: membersList, channels: channelsList, commands }).slice(0, 8) : [];
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     const body = draft.trim();
-    if (body.startsWith("/") && onCommand) { onCommand(body); setDraft(""); return; }
+    if (body.startsWith("/") && onCommand) { onCommand(body); setDraft(""); setAc(null); return; }
     if ((!body && drafts.ready.length === 0) || drafts.uploading) return;
-    onSend(toTokens(body, members, me, names), drafts.ready); setDraft(""); drafts.reset();
+    onSend(toTokens(body, members, me, names), drafts.ready); setDraft(""); setAc(null); drafts.reset();
   };
+  const onChange = (value: string) => {
+    setDraft(value);
+    if (value.trim()) onTyping?.();
+    const caret = area.current?.selectionStart ?? value.length;
+    const found = detectTrigger(value, caret);
+    setAc(found);
+    setAcIndex(0);
+  };
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (ac && items.length > 0) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setAcIndex((i) => (i + 1) % items.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setAcIndex((i) => (i - 1 + items.length) % items.length); return; }
+      if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); pick(items[Math.min(acIndex, items.length - 1)]!); return; }
+      if (e.key === "Escape") { e.preventDefault(); setAc(null); return; }
+    }
+    if (e.key === "Enter" && !e.shiftKey) submit(e);
+    if (e.key === "ArrowUp" && draft === "" && onEditLast) { e.preventDefault(); onEditLast(); }
+  };
+  const pick = (item: import("./chatlog.ts").AutocompleteItem) => {
+    if (!ac) return;
+    const caret = area.current?.selectionStart ?? draft.length;
+    setDraft(draft.slice(0, ac.from) + item.insert + draft.slice(caret));
+    setAc(null);
+    area.current?.focus();
+  };
+  const rows = Math.min(8, Math.max(1, draft.split("\n").length));
   if (readOnly) return <p className="composer-note">Only posters and admins post in this broadcast channel.</p>;
-  return <form className="prompt" onSubmit={submit} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); drafts.add(e.dataTransfer.files); }}><PendingFiles files={drafts.files} onRemove={drafts.remove} /><span className="prompt-label">{channel} <b>›</b></span><AttachButton onPick={drafts.add} /><textarea aria-label={`Message ${channel}`} value={draft} rows={1} placeholder="type a message or /huddle" onChange={(e) => { setDraft(e.target.value); if (e.target.value.trim()) onTyping?.(); }} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) submit(e); }} /><span className="send-hints">↵ send&nbsp;&nbsp;⇧↵ newline</span></form>;
+  return <form className="prompt" onSubmit={submit} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); drafts.add(e.dataTransfer.files); }}><PendingFiles files={drafts.files} onRemove={drafts.remove} /><span className="prompt-label">{channel} <b>›</b></span><AttachButton onPick={drafts.add} /><div className="composer-area">{ac && items.length > 0 && <ul className="autocomplete" role="listbox">{items.map((item, i) => <li key={item.label + i}><button type="button" className={i === acIndex ? "active" : ""} onMouseDown={(e) => { e.preventDefault(); pick(item); }}>{item.label}{item.hint && <span className="muted"> {item.hint}</span>}</button></li>)}</ul>}<textarea ref={area} aria-label={`Message ${channel}`} value={draft} rows={rows} placeholder="type a message or /huddle" onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} onPaste={(e) => { if (e.clipboardData.files.length > 0) { e.preventDefault(); drafts.add(e.clipboardData.files); } }} /></div><span className="send-hints">↵ send&nbsp;&nbsp;⇧↵ newline</span></form>;
+}
+
+/** The trigger token being typed at the caret: `@`, `#` or `/` plus the partial word. */
+export function detectTrigger(value: string, caret: number): { trigger: "@" | "#" | "/"; query: string; from: number } | null {
+  const before = value.slice(0, caret);
+  const m = /(^|\s)([@#/])([^\s@#/]*)$/.exec(before);
+  if (!m) return null;
+  return { trigger: m[2] as "@" | "#" | "/", query: m[3]!, from: caret - m[3]!.length - 1 };
+}
+
+function safeGet(key: string): string | undefined {
+  try { return localStorage.getItem(key) ?? undefined; } catch { return undefined; }
+}
+function safeSet(key: string, value: string): void {
+  try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch { /* storage unavailable: drafts stay in memory */ }
 }
 
 export function ConversationHeader({ title, onCall, onOpenInfo }: { title: string; onCall: () => void; onOpenInfo: () => void }) {
@@ -93,19 +147,27 @@ export function ChannelInfoPanel({ channel, title, me, names, onMute, onInvite, 
   return <Modal title={title.toUpperCase()} onClose={onClose}><div className="modal-form channel-info"><p className="muted">{channel.members.length} members</p><ul className="member-list">{channel.members.map((id) => <li key={id}><Avatar id={id} name={id === me ? "you" : names.label(id)} url={names.profile(id)?.avatar_url} size="small" />{id === me ? "you" : names.label(id)}</li>)}</ul><div className="info-actions"><button className="link" onClick={() => { onMute(); onClose(); }}>{channel.muted ? "unmute" : "mute"}</button>{onInvite && <button className="link" onClick={() => { onInvite(); onClose(); }}>invite people</button>}{onLeave && <button className="link" onClick={() => { onLeave(); onClose(); }}>leave channel</button>}</div></div></Modal>;
 }
 
-export function ThreadPanel({ root, replies, me, names, channel, onSend, onUpload, onRetry, onClose }: { root: Message; replies: Message[]; me: string; names: Directory; channel: string; onSend: (body: string, files: import("@xmsg/client-core").Attachment[]) => void; onUpload: (file: File) => Promise<import("@xmsg/client-core").Attachment>; onRetry: (key: string) => void; onClose: () => void }) {
-  return <aside className="right-panel thread-panel"><header className="panel-title">THREAD #{root.msgSeq} · {channel.toUpperCase()}<button className="link" onClick={onClose}>×</button></header><ol className="message-list"><MessageRow message={root} me={me} names={names} compact />{replies.length > 0 && <li className="reply-divider">— {replies.length} replies —</li>}{replies.map((reply) => <MessageRow key={reply.key} message={reply} me={me} names={names} onRetry={() => onRetry(reply.key)} compact />)}</ol><Prompt channel={`#t${root.msgSeq}`} members={[]} me={me} names={names} onSend={onSend} onUpload={onUpload} /></aside>;
+export function ThreadPanel({ root, replies, me, names, channel, draftKey, membersList, channelsList, commands, onSend, onUpload, onRetry, onClose }: { root: Message; replies: Message[]; me: string; names: Directory; channel: string; draftKey: string; membersList?: { id: string; name: string }[]; channelsList?: { id: string; name: string }[]; commands?: { name: string; hint: string }[]; onSend: (body: string, files: import("@xmsg/client-core").Attachment[]) => void; onUpload: (file: File) => Promise<import("@xmsg/client-core").Attachment>; onRetry: (key: string) => void; onClose: () => void }) {
+  return <aside className="right-panel thread-panel"><header className="panel-title">THREAD #{root.msgSeq} · {channel.toUpperCase()}<button className="link" onClick={onClose}>×</button></header><ol className="message-list"><MessageRow message={root} me={me} names={names} compact />{replies.length > 0 && <li className="reply-divider">— {replies.length} replies —</li>}{replies.map((reply) => <MessageRow key={reply.key} message={reply} me={me} names={names} onRetry={() => onRetry(reply.key)} compact />)}</ol><Prompt channel={`#t${root.msgSeq}`} members={[]} me={me} names={names} draftKey={draftKey} membersList={membersList} channelsList={channelsList} commands={commands} onSend={onSend} onUpload={onUpload} /></aside>;
 }
 
-export function SearchBar({ query, setQuery, inputRef, onSubmit }: { query: string; setQuery: (q: string) => void; inputRef: React.RefObject<HTMLInputElement | null>; onSubmit: () => void }) {
-  return <form className="search-bar" onSubmit={(e) => { e.preventDefault(); onSubmit(); }}><span>/search ›</span><input ref={inputRef} type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="search messages" aria-label="Search messages" /><button>run</button></form>;
-}
 export function SearchResults({ hits, note, me, names, channelName, onPick, onClose }: { hits: SearchHit[]; note: string; me: string; names: Directory; channelName: (id: string) => string; onPick: (hit: SearchHit) => void; onClose: () => void }) {
   return <section className="search-results"><header className="panel-title">SEARCH · {hits.length} RESULTS<button className="link" onClick={onClose}>×</button></header>{note && <p className="error">{note}</p>}<ol className="message-list">{hits.map((hit) => <li className="search-hit" key={hit.messageId}><button className="link" onClick={() => onPick(hit)}><span className="author">{hit.authorId === me ? "you" : names.label(hit.authorId)}</span><span className="muted"> {channelName(hit.channelId)}{hit.reply ? " · reply" : ""}</span><div>{renderBody(hit.body, me, names)}</div></button></li>)}</ol></section>;
 }
 
-export function AuthScreen({ mode, setMode, name, setName, email, setEmail, password, setPassword, passwordAgain, setPasswordAgain, code, setCode, error, busy, providers, onSubmit }: { mode: "in" | "up" | "code"; setMode: (mode: "in" | "up" | "code") => void; name: string; setName: (v: string) => void; email: string; setEmail: (v: string) => void; password: string; setPassword: (v: string) => void; passwordAgain: string; setPasswordAgain: (v: string) => void; code: string; setCode: (v: string) => void; error: string; busy: boolean; providers: { id: string; name: string; url: string }[]; onSubmit: (e: FormEvent) => void }) {
-  return <main className="auth-shell"><section className="auth-terminal"><header><strong>xmsg · {mode === "up" ? "create account" : mode === "code" ? "recovery login" : "log in"}</strong><span>{location.host}</span></header><form onSubmit={onSubmit}>{mode === "up" && <label>name<input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} autoComplete="name" autoFocus /></label>}<label>email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" /></label>{mode === "code" ? <label>recovery code<input value={code} onChange={(e) => setCode(e.target.value)} required autoComplete="one-time-code" placeholder="xxxx-xxxx-xxxx-xxxx" /></label> : <><label>password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === "up" ? 10 : undefined} maxLength={mode === "up" ? 256 : undefined} autoComplete={mode === "up" ? "new-password" : "current-password"} /></label>{mode === "up" && <><label>password again<input type="password" value={passwordAgain} onChange={(e) => setPasswordAgain(e.target.value)} required minLength={10} maxLength={256} autoComplete="new-password" /></label><p className="password-rule">10–256 characters</p></>}</>}{error && <p className="error" role="alert">{error}</p>}<button className="auth-submit" disabled={busy}>[ {busy ? "working…" : mode === "up" ? "create account" : "connect"} ↵ ]</button></form><footer>{mode === "up" ? <button className="link" onClick={() => setMode("in")}>have an account? [l] log in</button> : <><button className="link" onClick={() => setMode("up")}>no account? [r] register</button><button className="link" onClick={() => setMode(mode === "code" ? "in" : "code")}>{mode === "code" ? "use password" : "use recovery code"}</button></>}</footer>{providers.length > 0 && <div className="sso-links">{providers.map((p) => <a key={p.id} href={p.url}>[ sso: {p.name} ]</a>)}</div>}</section><div className="auth-hints">tab next field · ↵ submit · esc cancel</div></main>;
+export function AuthScreen({ mode, setMode, name, setName, email, setEmail, password, setPassword, passwordAgain, setPasswordAgain, code, setCode, error, busy, providers, joining, onSubmit }: { mode: "in" | "up" | "code"; setMode: (mode: "in" | "up" | "code") => void; name: string; setName: (v: string) => void; email: string; setEmail: (v: string) => void; password: string; setPassword: (v: string) => void; passwordAgain: string; setPasswordAgain: (v: string) => void; code: string; setCode: (v: string) => void; error: string; busy: boolean; providers: { id: string; name: string; url: string }[]; joining?: string; onSubmit: (e: FormEvent) => void }) {
+  return <main className="auth-shell"><section className="auth-terminal"><header><strong>xmsg · {mode === "up" ? "create account" : mode === "code" ? "recovery login" : "log in"}</strong><span>{location.host}</span></header>{joining && <p className="joining-note">joining {joining}</p>}<form onSubmit={onSubmit}>{mode === "up" && <label>name<input value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} autoComplete="name" autoFocus /></label>}<label>email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" autoFocus={mode !== "up"} /></label>{mode === "code" ? <label>recovery code<input value={code} onChange={(e) => setCode(e.target.value)} required autoComplete="one-time-code" placeholder="xxxx-xxxx-xxxx-xxxx" /></label> : <><label>password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === "up" ? 10 : undefined} maxLength={mode === "up" ? 256 : undefined} autoComplete={mode === "up" ? "new-password" : "current-password"} /></label>{mode === "up" && <><label>password again<input type="password" value={passwordAgain} onChange={(e) => setPasswordAgain(e.target.value)} required minLength={10} maxLength={256} autoComplete="new-password" /></label><p className="password-rule">10–256 characters</p></>}</>}{error && <p className="error" role="alert">{error}</p>}<button className="auth-submit" disabled={busy}>[ {busy ? "working…" : mode === "up" ? "create account" : "connect"} ↵ ]</button></form><footer>{mode === "up" ? <button className="link" onClick={() => setMode("in")}>have an account? log in</button> : <><button className="link" onClick={() => setMode("up")}>no account? register</button><button className="link" onClick={() => setMode(mode === "code" ? "in" : "code")}>{mode === "code" ? "use password" : "use recovery code"}</button></>}</footer>{providers.length > 0 && <div className="sso-links">{providers.map((p) => <a key={p.id} href={p.url}>[ sso: {p.name} ]</a>)}</div>}</section><div className="auth-hints">tab next field · ↵ submit</div></main>;
+}
+
+/** Ready-made invite link with copy; used after setup and in empty channels. */
+export function InviteLinkAction({ onCreate, onLater }: { onCreate: () => Promise<string>; onLater?: () => void }) {
+  const [link, setLink] = useState(""); const [copied, setCopied] = useState(false); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  const create = () => {
+    setBusy(true); setError("");
+    onCreate().then((value) => { setLink(value); setCopied(false); }).catch((err) => setError(errorText(err))).finally(() => setBusy(false));
+  };
+  if (!link) return <span className="invite-link-action"><button className="link" disabled={busy} onClick={create}>[ invite link ]</button>{onLater && <button className="link" onClick={onLater}>[ later ]</button>}{error && <span className="error"> {error}</span>}</span>;
+  return <span className="invite-link-action">{link} <button className="link" onClick={() => { void navigator.clipboard?.writeText(link).then(() => setCopied(true)); }}>[ copy ]</button>{copied && <span className="muted"> copied</span>}{onLater && <button className="link" onClick={onLater}>[ later ]</button>}</span>;
 }
 
 /** First run, owner/admin only (ADR-0026): name the workspace, create its first channel. Not skippable. */
