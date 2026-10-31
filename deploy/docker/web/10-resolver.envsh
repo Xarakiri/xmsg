@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Sourced by the nginx entrypoint before it renders the config template. Point nginx's
+# resolver at this container's DNS server, read from /etc/resolv.conf at start:
+# 127.0.0.11 under Docker Compose, the cluster DNS in Kubernetes. Upstreams are then
+# resolved per request, so web starts before its upstreams exist and finds them again
+# after a recreate, without a restart of its own.
+if [ -z "${XMSG_RESOLVER:-}" ]; then
+  # Prefer an IPv4 nameserver: the template sets ipv6=off.
+  XMSG_RESOLVER=$(awk '/^[[:space:]]*nameserver/ && $2 ~ /\./ { print $2; exit }' /etc/resolv.conf 2>/dev/null)
+  export XMSG_RESOLVER="${XMSG_RESOLVER:-127.0.0.11}"
+fi

@@ -13,6 +13,7 @@ RUN npm run build --workspace @xmsg/web
 
 FROM nginx:1.29-alpine
 COPY deploy/docker/web/default.conf.template /etc/nginx/templates/default.conf.template
+COPY deploy/docker/web/10-resolver.envsh /docker-entrypoint.d/10-resolver.envsh
 COPY --from=build /src/clients/web/dist /usr/share/nginx/html
 # Upstreams (service:port), set by the Helm chart.
 ENV XMSG_AUTH_UPSTREAM=auth:8081 XMSG_CHANNELS_UPSTREAM=channels:8082 XMSG_MESSAGES_UPSTREAM=messages:8083 \
