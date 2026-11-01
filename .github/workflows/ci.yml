@@ -376,6 +376,7 @@ jobs:
         env: &upgrade-env
           XMSG_AUTH_URL: http://localhost:8080/auth
           XMSG_CHANNELS_URL: http://localhost:8080/channels
+          XMSG_USERS_URL: http://localhost:8080/users
           XMSG_MESSAGES_URL: http://localhost:8080/messages
           XMSG_GATEWAY_URL: ws://localhost:8080/ws
           XMSG_MEDIA_URL: http://localhost:8080/media
