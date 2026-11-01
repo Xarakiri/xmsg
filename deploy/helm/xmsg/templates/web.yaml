@@ -22,7 +22,7 @@ spec:
           image: {{ include "xmsg.image" (list . "web") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            {{- /* nginx resolves upstreams at start: without push, its path goes to auth (404). */}}
+            {{- /* Without push/media/calls, that path points at auth (404), as the compose image does. */}}
             {{- $push := ternary "push:8086" "auth:8081" .Values.push.enabled }}
             {{- $media := ternary "media:8087" "auth:8081" .Values.media.enabled }}
             {{- $calls := ternary "calls:8088" "auth:8081" .Values.calls.enabled }}

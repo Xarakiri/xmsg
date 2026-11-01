@@ -239,6 +239,21 @@ jobs:
           # The push service runs in a container: it reaches the stand-in endpoint this way.
           XMSG_PUSH_MOCK_HOST: host.docker.internal
         run: ./target/release/xmsg-e2e-smoke
+      - name: The web proxy survives an upstream restart
+        working-directory: deploy/compose
+        run: |
+          # Recreate auth under a new IP; web resolves upstreams per request and must
+          # recover on its own, without a restart.
+          docker compose up -d --force-recreate --no-deps --wait auth
+          for _ in $(seq 1 60); do
+            if curl -sf http://localhost:8080/auth/.well-known/jwks.json | grep -q '"keys"'; then
+              echo "web serves auth again without a restart"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs --no-color --tail 100 web
+          exit 1
       - name: xmsgctl health, backup, wipe, restore
         working-directory: deploy/compose
         run: |
@@ -361,6 +376,7 @@ jobs:
         env: &upgrade-env
           XMSG_AUTH_URL: http://localhost:8080/auth
           XMSG_CHANNELS_URL: http://localhost:8080/channels
+          XMSG_USERS_URL: http://localhost:8080/users
           XMSG_MESSAGES_URL: http://localhost:8080/messages
           XMSG_GATEWAY_URL: ws://localhost:8080/ws
           XMSG_MEDIA_URL: http://localhost:8080/media

@@ -227,7 +227,7 @@ if [[ $bundle -eq 1 ]]; then
   fi
 elif [[ -n "$registry" ]]; then
   say "Pulling images from $registry (version ${version:-dev})"
-  if ! docker compose pull --quiet --ignore-buildable; then
+  if ! docker compose pull --quiet; then
     # Images loaded by hand (an offline bundle, CI) are fine as they are.
     docker image inspect "$registry/services:${version:-dev}" >/dev/null 2>&1 ||
       fail "can't pull $registry images and they aren't on this machine"
@@ -243,9 +243,10 @@ docker compose up -d --wait --wait-timeout 600 || {
   fail "some services didn't become healthy; see 'docker compose logs'"
 }
 
-# The whole path, as a browser takes it: Caddy (HTTPS) -> web -> auth.
+# The whole path, as a browser takes it: Caddy (HTTPS) -> web -> auth. Small VMs can
+# take a few minutes to get every service healthy, so keep checking for up to 3 minutes.
 say "Checking https://$domain/"
-for _ in $(seq 1 60); do
+for _ in $(seq 1 90); do
   if curl -sfk --resolve "$domain:${XMSG_HTTPS_PORT:-443}:127.0.0.1" \
       "https://$domain:${XMSG_HTTPS_PORT:-443}/auth/.well-known/jwks.json" | grep -q '"keys"'; then
     say "xmsg is running at https://$domain/"

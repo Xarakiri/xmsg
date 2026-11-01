@@ -15,6 +15,7 @@ import {
   unsent,
   type Action,
   type Attachment,
+  type Channel,
   type ChatState,
   type ConnectionStatus,
   type Message,
@@ -28,7 +29,7 @@ import { saveState } from "./storage.ts";
 const IDLE_AFTER_MS = 5 * 60_000;
 
 /** `initial`: the state loaded from the local database (see storage.ts). */
-export function useChat(me: string, initial: ChatState) {
+export function useChat(me: string, initial: ChatState, hooks: { onIncoming?: (channel: import("@xmsg/client-core").Channel, msgSeq: number, mentioned: boolean) => void } = {}) {
   const [state, dispatch] = useReducer((s: ChatState, a: Action) => reduce(s, a), initial);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [syncError, setSyncError] = useState(false);
@@ -41,6 +42,8 @@ export function useChat(me: string, initial: ChatState) {
   const [presence, setPresence] = useState<Record<string, Presence>>({});
   const latest = useRef(state);
   latest.current = state;
+  const hooksRef = useRef(hooks);
+  hooksRef.current = hooks;
 
   useEffect(() => {
     // Catching up (plan §6.6): on reconnect, on a gateway Resync (one partition or all),
@@ -62,6 +65,9 @@ export function useChat(me: string, initial: ChatState) {
         if (event.payload.case === "messageCreated") {
           typing.current.stop(event.channelId.toString(), event.actorId.toString());
           setTypingTick((n) => n + 1);
+          const value = event.payload.value;
+          const mentioned = value.mentionsChannel || value.mentionedUserIds.some((u) => u.toString() === me);
+          hooksRef.current.onIncoming?.(latest.current.channels[event.channelId.toString()] ?? { id: event.channelId.toString() }, Number(event.msgSeq), mentioned);
         }
         dispatch({ type: "event", event, at: Date.now() });
       },
@@ -226,7 +232,27 @@ export function useChat(me: string, initial: ChatState) {
   };
 
   const presenceKnown = (userId: string) => userId in presence;
-  return { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, presenceKnown, view };
+
+  // Edits (shown at once, rolled back with one quiet line on failure).
+  const editMessage = (channelId: string, msgSeq: number, body: string) => {
+    const list = latest.current.messages[channelId] ?? [];
+    const original = list.find((m) => m.msgSeq === msgSeq)?.body ?? "";
+    dispatch({ type: "editLocal", channelId, msgSeq, body, at: Date.now() });
+    void session
+      .accessToken()
+      .then((token) => api.editMessage(token, channelId, msgSeq, body, crypto.randomUUID()))
+      .catch(() => dispatch({ type: "editFailed", channelId, msgSeq, body: original }));
+  };
+
+  // Preload the most recent channels after sign-in: fetch what they missed while away.
+  const preloaded = useRef(false);
+  const preloadRecent = (ids: string[]) => {
+    if (preloaded.current || ids.length === 0) return;
+    preloaded.current = true;
+    syncs.current?.request((id) => ids.includes(id));
+  };
+
+  return { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, presenceKnown, view, editMessage, preloadRecent };
 }
 
 const fileIds = (m: Message) => (m.attachments ?? []).map((a) => a.fileId);

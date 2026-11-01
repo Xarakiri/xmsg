@@ -163,6 +163,9 @@ export type Action =
   | { type: "ack"; clientMsgId: string }
   | { type: "sendRejected"; clientMsgId: string; reason: RejectReason; detail: string }
   | { type: "channelNamed"; channelId: string; name: string }
+  /** My edit, shown at once; `editFailed` puts the old body back (one quiet line). */
+  | { type: "editLocal"; channelId: string; msgSeq: number; body: string; at: number }
+  | { type: "editFailed"; channelId: string; msgSeq: number; body: string }
   /** The server's list of my channels (sync, cheap step). */
   | { type: "channelList"; channels: ListedChannel[] }
   /** Read positions from the server (sync); merged with max, like heads (plan §6.6). */
@@ -308,6 +311,14 @@ export function reduce(state: ChatState, action: Action): ChatState {
       if (!channel || channel.name) return state;
       return withChannel(state, { ...channel, name: action.name });
     }
+    case "editLocal":
+      return withMessages(state, action.channelId, (list) =>
+        list.map((m) => (m.msgSeq === action.msgSeq && !m.deleted ? { ...m, body: action.body, editedAt: action.at, editSeq: -1 } : m)),
+      );
+    case "editFailed":
+      return withMessages(state, action.channelId, (list) =>
+        list.map((m) => (m.msgSeq === action.msgSeq ? { ...m, body: action.body, error: m.error ?? "not sent", editedAt: undefined, editSeq: undefined } : m)),
+      );
     case "event":
       return applyEvent(state, action.event, action.at);
     case "channelList": {

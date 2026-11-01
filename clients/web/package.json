@@ -11,13 +11,16 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p . && vite build",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "test": "node --test 'test/**/*.test.ts'"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-http": "^2",
+    "@tauri-apps/plugin-notification": "^2.8.0",
     "@xmsg/client-core": "*",
     "livekit-client": "2.22.4",
     "react": "19.3.1",
