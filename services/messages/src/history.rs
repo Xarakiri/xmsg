@@ -91,6 +91,14 @@ pub trait Store: Send + Sync + 'static {
         after: i64,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<EventRow>, String>> + Send;
+    /// Up to `limit` rows of one bucket with `event_seq < before`, descending.
+    fn events_before(
+        &self,
+        channel_id: i64,
+        bucket: i32,
+        before: i64,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<EventRow>, String>> + Send;
     /// The messages of one bucket with `from <= msg_seq <= to`.
     fn messages(
         &self,
@@ -139,6 +147,66 @@ pub async fn page(
     // The log keeps 30 days: if the first event after `after` is gone, there's a gap.
     let truncated = after < head.event_seq && rows.first().is_none_or(|r| r.event_seq > after + 1);
 
+    let events = rebuild(store, channel_id, head, &rows).await?;
+    let has_more = rows.last().is_some_and(|r| r.event_seq < head.event_seq);
+    Ok(EventPage {
+        events,
+        has_more,
+        head_event_seq: head.event_seq,
+        truncated,
+    })
+}
+
+/// Reads up to `limit` events before `before` (older pages, scroll-up) and rebuilds
+/// them, oldest first in the answer. `has_more` stays true while older events may
+/// exist; a page short of `limit` reached the retained log's oldest row, so when that
+/// row isn't event 1 the true beginning is gone (`truncated`).
+pub async fn page_before(
+    store: &impl Store,
+    channel_id: i64,
+    before: i64,
+    limit: usize,
+) -> Result<EventPage, String> {
+    let Some(head) = store.head(channel_id).await? else {
+        return Ok(EventPage::default());
+    };
+    let mut rows: Vec<EventRow> = Vec::new();
+    let mut b = bucket(before - 1);
+    while rows.len() < limit && b >= 0 {
+        let up_to = rows.last().map_or(before, |r: &EventRow| r.event_seq);
+        rows.extend(
+            store
+                .events_before(channel_id, b, up_to, limit - rows.len())
+                .await?,
+        );
+        b -= 1;
+    }
+    rows.reverse(); // collected newest-first across descending buckets
+
+    let oldest = rows.last().map(|r| r.event_seq);
+    let has_more = rows.len() == limit && oldest.is_some_and(|seq| seq > 1);
+    let truncated = if rows.is_empty() {
+        before > 1
+    } else {
+        !has_more && oldest.is_some_and(|seq| seq > 1)
+    };
+
+    let events = rebuild(store, channel_id, head, &rows).await?;
+    Ok(EventPage {
+        events,
+        has_more,
+        head_event_seq: head.event_seq,
+        truncated,
+    })
+}
+
+/// Fills in pointer rows from `messages` and rebuilds the sequenced events, in row order.
+async fn rebuild(
+    store: &impl Store,
+    channel_id: i64,
+    head: Head,
+    rows: &[EventRow],
+) -> Result<Vec<SequencedEvent>, String> {
     let pointers: Vec<i64> = rows
         .iter()
         .filter(|r| is_pointer(&r.kind))
@@ -157,18 +225,12 @@ pub async fn page(
     }
 
     let mut events = Vec::with_capacity(rows.len());
-    for row in &rows {
-        if let Some(event) = rebuild(channel_id, head, row, &bodies) {
+    for row in rows {
+        if let Some(event) = rebuild_row(channel_id, head, row, &bodies) {
             events.push(event);
         }
     }
-    let has_more = rows.last().is_some_and(|r| r.event_seq < head.event_seq);
-    Ok(EventPage {
-        events,
-        has_more,
-        head_event_seq: head.event_seq,
-        truncated,
-    })
+    Ok(events)
 }
 
 fn is_pointer(kind: &str) -> bool {
@@ -181,7 +243,7 @@ fn pointer(row: &EventRow) -> Option<i64> {
         .map(i64::from_be_bytes)
 }
 
-fn rebuild(
+fn rebuild_row(
     channel_id: i64,
     head: Head,
     row: &EventRow,
@@ -266,6 +328,9 @@ pub fn router<S: Store, L: EventLog + Send + Sync + 'static>(app: Arc<App<S, L>>
 pub struct EventsQuery {
     #[serde(default)]
     after: i64,
+    /// When set, page backward instead: up to `limit` events with `event_seq < before`,
+    /// oldest first in the answer (scrolling up toward older history).
+    before: Option<i64>,
     limit: Option<usize>,
 }
 
@@ -306,6 +371,11 @@ async fn events<S: Store, L>(
     if q.after < 0 {
         return error(StatusCode::BAD_REQUEST, "after must be >= 0");
     }
+    if let Some(before) = q.before
+        && before < 1
+    {
+        return error(StatusCode::BAD_REQUEST, "before must be >= 1");
+    }
     // Same answer for "no such channel" and "not a member": channel IDs don't leak.
     match app.store.is_member(channel_id, user).await {
         Ok(true) => {}
@@ -316,7 +386,11 @@ async fn events<S: Store, L>(
         }
     }
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    match page(&app.store, channel_id, q.after, limit).await {
+    let read = match q.before {
+        Some(before) => page_before(&app.store, channel_id, before, limit).await,
+        None => page(&app.store, channel_id, q.after, limit).await,
+    };
+    match read {
         Ok(page) => (
             [(header::CONTENT_TYPE, "application/x-protobuf")],
             page.encode_to_vec(),
@@ -362,6 +436,23 @@ mod tests {
                 .take(limit)
                 .cloned()
                 .collect())
+        }
+        async fn events_before(
+            &self,
+            _: i64,
+            b: i32,
+            before: i64,
+            limit: usize,
+        ) -> Result<Vec<EventRow>, String> {
+            let mut rows: Vec<EventRow> = self
+                .events
+                .iter()
+                .filter(|r| bucket(r.event_seq) == b && r.event_seq < before)
+                .cloned()
+                .collect();
+            rows.reverse(); // descending, per the trait contract
+            rows.truncate(limit);
+            Ok(rows)
         }
         async fn messages(
             &self,
@@ -579,5 +670,77 @@ mod tests {
             page(&Fake::default(), 7, 0, 10).await.unwrap(),
             EventPage::default()
         );
+    }
+
+    #[tokio::test]
+    async fn before_pages_walk_back_oldest_first_with_has_more() {
+        let fake = channel(10); // events 1 (join) ..= 11
+        let page = page_before(&fake, 7, 12, 5).await.unwrap();
+        assert_eq!(
+            page.events.iter().map(|e| e.event_seq).collect::<Vec<_>>(),
+            [7, 8, 9, 10, 11]
+        );
+        assert!(page.has_more, "event 1 still exists below");
+        assert!(!page.truncated);
+        assert_eq!(page.head_event_seq, 11);
+
+        let next = page_before(&fake, 7, 7, 5).await.unwrap();
+        assert_eq!(
+            next.events.iter().map(|e| e.event_seq).collect::<Vec<_>>(),
+            [2, 3, 4, 5, 6]
+        );
+        assert!(next.has_more);
+
+        let start = page_before(&fake, 7, 2, 5).await.unwrap();
+        assert_eq!(
+            start.events.iter().map(|e| e.event_seq).collect::<Vec<_>>(),
+            [1]
+        );
+        assert!(
+            !start.has_more && !start.truncated,
+            "reached the real start"
+        );
+    }
+
+    #[tokio::test]
+    async fn before_pages_continue_across_buckets_and_rebuild_bodies() {
+        let fake = channel(BUCKET_SIZE + 5); // events 1 ..= BUCKET_SIZE + 6
+        let page = page_before(&fake, 7, BUCKET_SIZE + 4, 5).await.unwrap();
+        let seqs: Vec<i64> = page.events.iter().map(|e| e.event_seq).collect();
+        assert_eq!(
+            seqs,
+            (BUCKET_SIZE - 1..=BUCKET_SIZE + 3).collect::<Vec<_>>()
+        );
+        assert!(page.has_more);
+        let m = page.events.last().unwrap();
+        assert!(
+            matches!(&m.payload, Some(Payload::MessageCreated(c)) if c.body == format!("body {}", BUCKET_SIZE + 2))
+        );
+        let earlier = page_before(&fake, 7, BUCKET_SIZE, 5).await.unwrap();
+        assert_eq!(
+            earlier.events.first().unwrap().event_seq,
+            BUCKET_SIZE - 5,
+            "the previous bucket picks up right below"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_before_page_short_of_the_oldest_row_is_truncated() {
+        let mut fake = channel(10);
+        fake.events.retain(|e| e.event_seq > 6); // the beginning expired by TTL
+        let page = page_before(&fake, 7, 12, 50).await.unwrap();
+        assert_eq!(
+            page.events.iter().map(|e| e.event_seq).collect::<Vec<_>>(),
+            [7, 8, 9, 10, 11]
+        );
+        assert!(!page.has_more);
+        assert!(page.truncated, "the true beginning is older than the log");
+    }
+
+    #[tokio::test]
+    async fn a_before_page_past_everything_is_empty_and_not_truncated_at_the_start() {
+        let fake = channel(3);
+        let page = page_before(&fake, 7, 1, 50).await.unwrap();
+        assert!(page.events.is_empty() && !page.has_more && !page.truncated);
     }
 }

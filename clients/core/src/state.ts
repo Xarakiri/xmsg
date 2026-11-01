@@ -47,6 +47,12 @@ export interface Channel {
    * channel has events this client hasn't fetched yet (a large channel that wasn't open).
    */
   headSeq?: number;
+  /** The oldest event_seq applied to this channel (the scroll-up paging anchor; 0: none). */
+  earliestSeq?: number;
+  /** False once the retained log's oldest event is loaded: nothing older can be paged in. */
+  hasEarlier?: boolean;
+  /** The true beginning is gone (30-day log): the top of the channel is a gap, not the start. */
+  earlierGap?: boolean;
   /** Members' roles, as far as this client has seen membership events. */
   roles?: Record<string, Role>;
   /** The call going on in it now (ADR-0025), if any. */
@@ -179,7 +185,17 @@ export type Action =
   /** The user read the channel up to here (shown at once; the server applies it shortly). */
   | { type: "markRead"; channelId: string; msgSeq: number }
   /** A contiguous page of a channel's events, ending at `through` (sync, lazy step). */
-  | { type: "history"; channelId: string; events: SequencedEvent[]; through: number; at: number }
+  | {
+      type: "history";
+      channelId: string;
+      events: SequencedEvent[];
+      through: number;
+      at: number;
+      /** From a backward page: whether older events may still exist above this one. */
+      hasEarlier?: boolean;
+      /** From a backward page: the retained log's beginning is gone (a gap at the top). */
+      earlierGap?: boolean;
+    }
   /** The server says we're no longer a member (history refused). */
   | { type: "lostAccess"; channelId: string }
   /** Another member read a DM up to `msgSeq` (a read receipt). */
@@ -339,10 +355,25 @@ export function reduce(state: ChatState, action: Action): ChatState {
     case "history": {
       let next = action.events.reduce((s, e) => applyEvent(s, e, action.at), state);
       const channel = next.channels[action.channelId];
-      if (channel && action.through > channel.syncedSeq) {
-        next = withChannel(next, { ...channel, syncedSeq: action.through, eventSeq: Math.max(channel.eventSeq, action.through) });
+      if (!channel) return next;
+      // Paging markers: `earliestSeq` anchors the next backward page, `hasEarlier` turns
+      // false (permanently) at the retained log's start, `earlierGap` notes a truncated start.
+      const first = action.events[0];
+      const earliest = first ? Number(first.eventSeq) : undefined;
+      let updated = channel;
+      if (earliest !== undefined && earliest > 0 && (channel.earliestSeq === undefined || earliest < channel.earliestSeq)) {
+        updated = { ...updated, earliestSeq: earliest };
       }
-      return next;
+      if (action.hasEarlier !== undefined && updated.hasEarlier !== false) {
+        updated = { ...updated, hasEarlier: action.hasEarlier };
+      }
+      if (action.earlierGap) {
+        updated = { ...updated, earlierGap: true };
+      }
+      if (action.through > updated.syncedSeq) {
+        updated = { ...updated, syncedSeq: action.through, eventSeq: Math.max(updated.eventSeq, action.through) };
+      }
+      return withChannel(next, updated);
     }
     case "bump": {
       // A large channel that isn't open moved on: the badge now, the events when opened.
@@ -668,11 +699,11 @@ function updateOwn(state: ChatState, clientMsgId: string, f: (m: Message) => Mes
 }
 
 /** Channels whose server head is past what we have, oldest gap first. */
-export function behind(state: ChatState, listed: ListedChannel[]): { id: string; after: number }[] {
+export function behind(state: ChatState, listed: ListedChannel[]): { id: string; after: number; head: number }[] {
   return listed
     .map((l) => ({ id: l.id, head: l.eventSeq, after: state.channels[l.id]?.syncedSeq ?? 0 }))
     .filter((c) => c.head > c.after)
-    .map(({ id, after }) => ({ id, after }));
+    .map(({ id, after, head }) => ({ id, after, head }));
 }
 
 function isStale(m: Message, me: string, now: number): boolean {

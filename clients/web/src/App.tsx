@@ -220,7 +220,7 @@ function useNarrow(): boolean {
 
 function ChatView({ me, initial, initialChannel, workspace, workspaces, fresh, theme, toggleTheme, onSignOut }: { me: string; initial: ChatState; initialChannel: string | null; workspace: Workspace | undefined; workspaces: Workspace[]; fresh: boolean; theme: Theme; toggleTheme: () => void; onSignOut: () => void }) {
   const notifyRef = useRef<(channel: Channel, msgSeq: number, mentioned: boolean) => void>(() => undefined);
-  const { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, presenceKnown, view, editMessage, preloadRecent } = useChat(me, initial, { onIncoming: (c, s, m) => notifyRef.current(c, s, m) });
+  const { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, presenceKnown, view, editMessage, preloadRecent, loadEarlier, loadingEarlier } = useChat(me, initial, { onIncoming: (c, s, m) => notifyRef.current(c, s, m) });
   const names = useNames(me);
   const [hits, setHits] = useState<SearchHit[] | null>(null); const [searchNote, setSearchNote] = useState("");
   const [threadOf, setThreadOf] = useState<number | null>(null); const [inCall, setInCall] = useState<string | null>(null); const [declined, setDeclined] = useState<Set<string>>(new Set());
@@ -453,6 +453,9 @@ function ChatView({ me, initial, initialChannel, workspace, workspaces, fresh, t
             onDelete={(m) => { if (confirm("Delete this message for everyone?")) void session.accessToken().then((token) => api.deleteMessage(token, current.id, m.msgSeq)).catch((e) => alert(errorText(e))); }}
             onRetry={retry}
             onCaughtUp={() => markRead(current.id)}
+            onLoadEarlier={() => loadEarlier(current.id)}
+            hasEarlier={current.hasEarlier}
+            loadingEarlier={loadingEarlier}
             editRequest={editReq}
             emptyExtra={<li className="start-of-channel"><span className="muted">this is the start of #{current.name || current.id.slice(-6)}</span>{isStaff && current.kind !== "dm" && <span className="start-actions"><button className="link" onClick={() => inviteTo(current)}>invite people → ^I</button><InviteLinkAction onCreate={createInviteLink} /></span>}</li>}
           />

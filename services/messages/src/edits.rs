@@ -245,6 +245,15 @@ mod tests {
         async fn events(&self, _: i64, _: i32, _: i64, _: usize) -> Result<Vec<EventRow>, String> {
             Ok(Vec::new())
         }
+        async fn events_before(
+            &self,
+            _: i64,
+            _: i32,
+            _: i64,
+            _: usize,
+        ) -> Result<Vec<EventRow>, String> {
+            Ok(Vec::new())
+        }
         async fn messages(
             &self,
             _: i64,
