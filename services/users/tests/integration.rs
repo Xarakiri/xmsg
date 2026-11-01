@@ -332,7 +332,16 @@ async fn workspace_setup_backfills_an_owner_and_onboarding() {
     let setup_sql = include_str!("../../../deploy/compose/init/postgres/006_workspace_setup.sql");
     let reapply = || {
         let pool = pool.clone();
-        async move { sqlx::raw_sql(setup_sql).execute(&pool).await.unwrap() }
+        async move {
+            // The file updates every member, so it can deadlock with tests running beside it.
+            for _ in 0..4 {
+                if sqlx::raw_sql(setup_sql).execute(&pool).await.is_ok() {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            sqlx::raw_sql(setup_sql).execute(&pool).await.unwrap();
+        }
     };
     reapply().await;
 

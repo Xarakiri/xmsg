@@ -6,6 +6,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import {
   BACKGROUND_SYNC_MS,
   Connection,
+  PAGE_SIZE,
   SyncScheduler,
   TypingTracker,
   inPartition,
@@ -181,6 +182,38 @@ export function useChat(me: string, initial: ChatState, hooks: { onIncoming?: (c
       .then(({ replies }) => dispatch({ type: "threadLoaded", channelId, root, replies }))
       .catch(() => undefined); // shown from what we have; the next open tries again
 
+  // Scrolling up: one earlier page at a time, anchored at the oldest event we have.
+  const loadingEarlier = useRef(false);
+  const [earlierTick, setEarlierTick] = useState(0);
+  const loadEarlier = (channelId: string) => {
+    if (loadingEarlier.current) return; // at most one request in flight
+    const channel = latest.current.channels[channelId];
+    if (!channel || channel.hasEarlier === false || !channel.earliestSeq) return;
+    const earliestSeq = channel.earliestSeq;
+    loadingEarlier.current = true;
+    setEarlierTick((n) => n + 1);
+    void session
+      .accessToken()
+      .then((token) => api.eventsBefore(token, channelId, earliestSeq, PAGE_SIZE))
+      .then((page) => {
+        const last = page.events.at(-1);
+        dispatch({
+          type: "history",
+          channelId,
+          events: page.events,
+          through: last ? Number(last.eventSeq) : 0,
+          at: Date.now(),
+          hasEarlier: page.hasMore,
+          ...(page.truncated && { earlierGap: true }),
+        });
+      })
+      .catch(() => undefined) // the scroll stays put; the next try loads the page
+      .finally(() => {
+        loadingEarlier.current = false;
+        setEarlierTick((n) => n + 1);
+      });
+  };
+
   const nameChannel = (channelId: string, name: string) => dispatch({ type: "channelNamed", channelId, name });
 
   // Read positions (ADR-0012): shown at once, applied by the user's readstate owner.
@@ -252,7 +285,7 @@ export function useChat(me: string, initial: ChatState, hooks: { onIncoming?: (c
     syncs.current?.request((id) => ids.includes(id));
   };
 
-  return { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, presenceKnown, view, editMessage, preloadRecent };
+  return { state, status, syncError, send, upload, nameChannel, markRead, setMuted, retry, typingIn, notifyTyping, react, openThread, watchPresence, presenceOf, presenceKnown, view, editMessage, preloadRecent, loadEarlier, loadingEarlier: earlierTick > 0 && loadingEarlier.current };
 }
 
 const fileIds = (m: Message) => (m.attachments ?? []).map((a) => a.fileId);

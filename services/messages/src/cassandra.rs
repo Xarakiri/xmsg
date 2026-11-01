@@ -15,6 +15,7 @@ pub struct Cassandra {
     member: PreparedStatement,
     head: PreparedStatement,
     events: PreparedStatement,
+    events_before: PreparedStatement,
     messages: PreparedStatement,
     thread: PreparedStatement,
     my_channels: PreparedStatement,
@@ -53,6 +54,11 @@ impl Cassandra {
             events: prepare(format!(
                 "SELECT event_seq, type, payload FROM {k}.channel_events \
                  WHERE channel_id = ? AND bucket = ? AND event_seq > ? ORDER BY event_seq ASC LIMIT ?"
+            ))
+            .await?,
+            events_before: prepare(format!(
+                "SELECT event_seq, type, payload FROM {k}.channel_events \
+                 WHERE channel_id = ? AND bucket = ? AND event_seq < ? ORDER BY event_seq DESC LIMIT ?"
             ))
             .await?,
             messages: prepare(format!(
@@ -159,6 +165,35 @@ impl Store for Cassandra {
     ) -> Result<Vec<EventRow>, String> {
         self.session
             .execute_unpaged(&self.events, (channel_id, bucket, after, limit as i32))
+            .await
+            .map_err(err)?
+            .into_rows_result()
+            .map_err(err)?
+            .rows::<(i64, Option<String>, Option<Vec<u8>>)>()
+            .map_err(err)?
+            .map(|r| {
+                r.map(|(event_seq, kind, payload)| EventRow {
+                    event_seq,
+                    kind: kind.unwrap_or_default(),
+                    payload: payload.unwrap_or_default(),
+                })
+                .map_err(err)
+            })
+            .collect()
+    }
+
+    async fn events_before(
+        &self,
+        channel_id: i64,
+        bucket: i32,
+        before: i64,
+        limit: usize,
+    ) -> Result<Vec<EventRow>, String> {
+        self.session
+            .execute_unpaged(
+                &self.events_before,
+                (channel_id, bucket, before, limit as i32),
+            )
             .await
             .map_err(err)?
             .into_rows_result()

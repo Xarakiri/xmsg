@@ -36,10 +36,21 @@ function fakeApi(calls: string[]): Api {
       const seqs = Array.from({ length: Math.min(limit, 450 - after) }, (_, i) => after + 1 + i);
       return create(EventPageSchema, { events: seqs.map(msg), hasMore: after + seqs.length < 450, headEventSeq: 450n });
     },
+    eventsBefore: async (_t: string, id: string, before: number, limit: number): Promise<EventPage> => {
+      calls.push(`${id}|${before}`);
+      if (id === "8") throw new ApiError(404, "unknown channel");
+      const seqs = Array.from({ length: Math.min(limit, before - 1) }, (_, i) => before - limit + i).filter((s) => s >= 1);
+      return create(EventPageSchema, {
+        events: seqs.map(msg),
+        hasMore: seqs.length > 0 && seqs[0]! > 1,
+        headEventSeq: 450n,
+        truncated: seqs.length < Math.min(limit, before - 1),
+      });
+    },
   } as unknown as Api;
 }
 
-test("sync pages through moved channels and marks refused ones as left", async () => {
+test("sync opens a long channel at the first unread page, not from sequence 0", async () => {
   let state: ChatState = initialState("101");
   const calls: string[] = [];
   const fetched = await sync({
@@ -48,19 +59,44 @@ test("sync pages through moved channels and marks refused ones as left", async (
     state: () => state,
     dispatch: (a: Action) => (state = reduce(state, a)),
   });
-  assert.equal(fetched, 450);
-  assert.deepEqual(calls.sort(), ["7@0", "7@200", "7@400", "8@0"]);
-  assert.equal(state.channels["7"]!.syncedSeq, 450);
-  assert.equal(state.messages["7"]!.length, 450);
+  assert.deepEqual(calls, ["7|451", "8|4"], "one backward page holding the first unread; the refused channel walks back too");
+  assert.equal(fetched, 200, "only the page around the first unread, not all 450 events");
+  const channel = state.channels["7"]!;
+  assert.equal(channel.syncedSeq, 450, "the backward page reaches the head, so sync is caught up");
+  assert.equal(channel.earliestSeq, 251);
+  assert.equal(channel.hasEarlier, true, "older pages come in on scroll-up");
+  assert.equal(state.messages["7"]!.length, 200);
+  assert.equal(state.messages["7"]![0]!.msgSeq, 251);
+  assert.equal(state.messages["7"]!.at(-1)!.msgSeq, 450);
   assert.equal(state.channels["8"]!.left, true);
-  assert.equal(state.channels["7"]!.readSeq, 400, "read positions come with the sync");
-  assert.equal(state.channels["7"]!.muted, true, "and personal settings");
-  assert.deepEqual(state.channels["7"]!.mentions, [420], "and unread mentions");
+  assert.equal(channel.readSeq, 400, "read positions come with the sync");
+  assert.equal(channel.muted, true, "and personal settings");
+  assert.deepEqual(channel.mentions, [420], "and unread mentions");
+  assert.equal(channel.msgSeq - channel.readSeq, 50, "unread count stays right with a partial load");
 
   // Nothing moved: a second sync fetches no events.
   calls.length = 0;
   await sync({ api: fakeApi(calls), token: async () => "t", state: () => state, dispatch: (a) => (state = reduce(state, a)) });
-  assert.deepEqual(calls, ["8@0"], "only the refused channel is retried");
+  assert.deepEqual(calls, ["8|4"], "only the refused channel is retried");
+});
+
+test("a caught-up channel opens at the newest page only", async () => {
+  const api = fakeApi([]);
+  api.readState = async () => [{ channelId: "7", msgSeq: 450 }];
+  const inner: string[] = [];
+  const realEvents: Api["events"] = api.events!.bind(api);
+  api.events = ((...args: [string, string, number, number?]) => (inner.push("events"), realEvents(...args))) as Api["events"];
+  let state: ChatState = initialState("101");
+  await sync({
+    api,
+    token: async () => "t",
+    state: () => state,
+    dispatch: (a: Action) => (state = reduce(state, a)),
+  });
+  assert.equal(state.messages["7"]!.length, 200);
+  assert.equal(state.channels["7"]!.hasEarlier, true);
+  assert.deepEqual(inner, [], "no forward catch-up after the newest page");
+  assert.equal(state.channels["7"]!.syncedSeq, 450);
 });
 
 test("a partition-scoped resync only fetches that partition's channels", async () => {
@@ -74,7 +110,7 @@ test("a partition-scoped resync only fetches that partition's channels", async (
     dispatch: (a: Action) => (state = reduce(state, a)),
     only: inPartition(p7, 16),
   });
-  const fetched = new Set(calls.map((c) => c.split("@")[0]));
+  const fetched = new Set(calls.map((c) => c.split(/[@|]/)[0]));
   assert.ok(fetched.has("7"));
   assert.equal(fetched.has("8"), partition(8n, 16) === p7, "channel 8 only if it shares the partition");
 });

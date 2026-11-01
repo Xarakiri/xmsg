@@ -256,6 +256,17 @@ export class Api {
     return fromBinary(EventPageSchema, new Uint8Array(await response.arrayBuffer()));
   }
 
+  /** A channel's events before `before` (older pages when scrolling up), oldest first. */
+  async eventsBefore(token: string, channelId: string, before: number, limit = 200): Promise<EventPage> {
+    const url = `${this.endpoints.messages}/v1/channels/${channelId}/events?before=${before}&limit=${limit}`;
+    const response = await activeFetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new ApiError(response.status, (body as { error?: string }).error ?? response.statusText);
+    }
+    return fromBinary(EventPageSchema, new Uint8Array(await response.arrayBuffer()));
+  }
+
   /**
    * Edit your own message. Accepted (202) means sequenced shortly; the change arrives as a
    * `messageEdited` event like everyone else's. Reuse `editId` when retrying the same edit.

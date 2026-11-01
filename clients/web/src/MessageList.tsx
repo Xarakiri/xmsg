@@ -10,6 +10,8 @@ import { MessageRow } from "./components.tsx";
 import { groupMessages } from "./chatlog.ts";
 
 const BOTTOM_EPS = 48;
+/** This close to the top, scrolling asks for the previous page. */
+const TOP_LOAD_EPS = 80;
 
 export interface MessageListProps {
   channel: Channel;
@@ -27,19 +29,27 @@ export interface MessageListProps {
   onRetry: (key: string) => void;
   /** The reader reached (or jumped to) the bottom: mark the channel read. */
   onCaughtUp: () => void;
+  /** More retained history may exist above the loaded window: load the previous page. */
+  onLoadEarlier?: () => void;
+  /** False once the retained log's oldest event is loaded (the start line shows). */
+  hasEarlier?: boolean;
+  /** An earlier page request is in flight. */
+  loadingEarlier?: boolean;
   /** Shown above the log when the channel has no messages (invite actions). */
   emptyExtra?: React.ReactNode;
   /** Request editing a message: nonce bump opens the editor for `seq`. */
   editRequest?: { seq: number; nonce: number };
 }
 
-export function MessageList({ channel, messages, me, names, newMarker, presenceOf, presenceKnown, onOpenThread, onReact, onEdit, onDelete, onRetry, onCaughtUp, emptyExtra, editRequest }: MessageListProps) {
+export function MessageList({ channel, messages, me, names, newMarker, presenceOf, presenceKnown, onOpenThread, onReact, onEdit, onDelete, onRetry, onCaughtUp, onLoadEarlier, hasEarlier, loadingEarlier, emptyExtra, editRequest }: MessageListProps) {
   const listRef = useRef<HTMLOListElement | null>(null);
   // scrollTop per channel; a channel without an entry opens at its first unread (or bottom).
   const positions = useRef(new Map<string, number>());
   const atBottom = useRef(true);
   const prev = useRef<{ channelId: string; count: number; msgSeq: number }>({ channelId: channel.id, count: 0, msgSeq: 0 });
   const [pill, setPill] = useState(0);
+  // Scroll-up paging: where to anchor after an earlier page prepends rows.
+  const anchor = useRef<{ height: number; top: number; firstKey: string | undefined } | null>(null);
   const grouped = groupMessages(messages, Date.now());
   const newIndex = newMarker > 0 ? messages.findIndex((m) => m.msgSeq > newMarker && !m.deleted) : -1;
 
@@ -56,6 +66,7 @@ export function MessageList({ channel, messages, me, names, newMarker, presenceO
     const el = listRef.current;
     if (!el) return;
     setPill(0);
+    anchor.current = null;
     const saved = positions.current.get(channel.id);
     if (saved !== undefined) {
       el.scrollTop = saved;
@@ -74,6 +85,20 @@ export function MessageList({ channel, messages, me, names, newMarker, presenceO
     atBottom.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel.id]);
+
+  // An earlier page merged in: keep the visible row exactly where it was by restoring the
+  // scroll offset plus the height the prepended rows added. A page that prepended nothing
+  // (empty or fully deduplicated) leaves the scroll untouched and clears the anchor.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    const pending = anchor.current;
+    if (!el || !pending || prev.current.channelId !== channel.id) return;
+    anchor.current = null;
+    if (messages[0]?.key === pending.firstKey) return;
+    el.scrollTop = pending.top + (el.scrollHeight - pending.height);
+    positions.current.set(channel.id, el.scrollTop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, channel.id]);
 
   // New messages: stick when at the bottom, count a pill otherwise.
   useEffect(() => {
@@ -95,6 +120,11 @@ export function MessageList({ channel, messages, me, names, newMarker, presenceO
     const el = listRef.current;
     if (!el) return;
     positions.current.set(channel.id, el.scrollTop);
+    if (el.scrollTop < TOP_LOAD_EPS && hasEarlier !== false && onLoadEarlier && !loadingEarlier) {
+      // Near the top: remember where the viewport is, then prepend the previous page.
+      anchor.current = { height: el.scrollHeight, top: el.scrollTop, firstKey: messages[0]?.key };
+      onLoadEarlier();
+    }
     const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_EPS;
     if (bottom && !atBottom.current) {
       setPill(0);
@@ -107,6 +137,10 @@ export function MessageList({ channel, messages, me, names, newMarker, presenceO
     <div className="message-log">
       <ol className="message-list" ref={listRef} onScroll={onScroll}>
         {messages.length === 0 && emptyExtra}
+        {hasEarlier === false && messages.length > 0 && (
+          <li className="date-divider" aria-hidden="true">── start of #{channel.name || channel.id.slice(-6)} ──</li>
+        )}
+        {loadingEarlier && <li className="date-divider" aria-hidden="true">…</li>}
         {grouped.map(({ message: m, start, dateSeparator }, i) => (
           <Fragment key={m.key}>
             {dateSeparator && <li className="date-divider" aria-hidden="true">── {dateSeparator} ──</li>}

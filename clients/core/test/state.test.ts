@@ -96,6 +96,53 @@ test("history arriving after newer live events still fills in the older messages
   assert.equal(s.messages["7"]![1]!.key, "c-2", "own message from history keeps its client_msg_id key");
 });
 
+test("earlier pages merge below the loaded window, in order, without touching sync state", () => {
+  let s = apply(initialState(ME), created);
+  // Opened at the newest page (events 10..13 = messages 9..12), synced up to its head.
+  const newest = [9, 10, 11, 12].map((n) => message(n, 102n, `b-${n}`, `m${n}`));
+  s = reduce(s, { type: "history", channelId: "7", events: newest, through: 13, at: 2, hasEarlier: true });
+  assert.equal(s.channels["7"]!.syncedSeq, 13);
+  assert.equal(s.channels["7"]!.earliestSeq, 10);
+  // Scrolling up loads the previous page.
+  const earlier = [5, 6, 7, 8].map((n) => message(n, 102n, `b-${n}`, `m${n}`));
+  s = reduce(s, { type: "history", channelId: "7", events: earlier, through: 8, at: 3, hasEarlier: true });
+  assert.deepEqual(s.messages["7"]!.map((m) => m.msgSeq), [5, 6, 7, 8, 9, 10, 11, 12], "older messages slot in below, in msg_seq order");
+  assert.equal(s.channels["7"]!.syncedSeq, 13, "merging an older page never moves the contiguous frontier");
+  assert.equal(s.channels["7"]!.eventSeq, 13);
+  assert.equal(s.channels["7"]!.earliestSeq, 6);
+  assert.equal(s.channels["7"]!.hasEarlier, true);
+  assert.equal(s.channels["7"]!.msgSeq, 12, "the head message is untouched");
+  assert.equal(unread(s.channels["7"]!), 12, "and so is the unread count");
+  // Reaching the retained log's start.
+  const first = message(1, 102n, "b-1", "m1");
+  s = reduce(s, { type: "history", channelId: "7", events: [first], through: 1, at: 4, hasEarlier: false });
+  assert.equal(s.channels["7"]!.hasEarlier, false, "the start is permanent");
+  assert.equal(s.channels["7"]!.syncedSeq, 13);
+  assert.deepEqual(s.messages["7"]!.map((m) => m.msgSeq), [1, 5, 6, 7, 8, 9, 10, 11, 12]);
+  // A repeat of an already-merged page deduplicates instead of duplicating rows.
+  const before = s.messages["7"]!.length;
+  s = reduce(s, { type: "history", channelId: "7", events: earlier, through: 8, at: 5, hasEarlier: true });
+  assert.equal(s.messages["7"]!.length, before, "overlapping pages change nothing");
+  assert.equal(s.channels["7"]!.hasEarlier, false, "and never resurrect older pages past the start");
+});
+
+test("a gap note sticks when the log's beginning is gone", () => {
+  let s = apply(initialState(ME), created);
+  s = reduce(s, {
+    type: "history",
+    channelId: "7",
+    events: [message(40, 102n, "b-40", "m40")],
+    through: 41,
+    at: 2,
+    hasEarlier: false,
+    earlierGap: true,
+  });
+  assert.equal(s.channels["7"]!.hasEarlier, false);
+  assert.equal(s.channels["7"]!.earlierGap, true, "the top of the channel is a gap, not the start");
+  s = reduce(s, { type: "history", channelId: "7", events: [message(41, 102n, "b-41", "m41")], through: 42, at: 3 });
+  assert.equal(s.channels["7"]!.earlierGap, true, "ordinary pages don't clear it");
+});
+
 test("an older membership event never undoes a newer one", () => {
   const leave = ev({ eventSeq: 5n, payload: { case: "memberLeft", value: { userId: 103n } } });
   const join = ev({ eventSeq: 3n, payload: { case: "memberJoined", value: { userId: 103n, role: MemberRole.MEMBER } } });
@@ -113,8 +160,8 @@ test("the channel list adds channels we missed, with names, and sync knows what'
   s = reduce(s, { type: "channelList", channels: listed });
   assert.equal(s.channels["9"]!.name, "general");
   assert.deepEqual(behind(s, listed), [
-    { id: "7", after: 1 },
-    { id: "9", after: 0 },
+    { id: "7", after: 1, head: 6 },
+    { id: "9", after: 0, head: 2 },
   ]);
   s = reduce(s, { type: "lostAccess", channelId: "9" });
   assert.equal(s.channels["9"]!.left, true);
